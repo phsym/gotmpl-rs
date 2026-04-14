@@ -66,7 +66,7 @@ pub struct Token {
     pub kind: TokenKind,
     /// The token's string value (literal text, identifier name, number, etc.).
     pub val: String,
-    /// Byte offset in the original source (character index in the `Vec<char>`).
+    /// Character index in the original source (index into the `Vec<char>`).
     pub pos: usize,
     /// 1-based line number tracked during scanning.
     pub line: usize,
@@ -224,92 +224,76 @@ impl Lexer {
         loop {
             if self.pos >= self.input.len() {
                 if self.pos > self.start {
-                    if trim_leading {
-                        let text: String = self.input[self.start..self.pos].iter().collect();
-                        let trimmed = text.trim_start().to_string();
-                        if !trimmed.is_empty() {
-                            self.emit_val(TokenKind::Text, trimmed);
-                        } else {
-                            self.ignore();
-                        }
-                    } else {
-                        self.emit(TokenKind::Text);
-                    }
+                    self.emit_pending_text(trim_leading, false);
                 }
                 return Ok(());
             }
 
-            // Check for left delimiter
+            // Check for left trim delimiter (e.g. "{{-")
             let left_trim = format!("{}-", self.left_delim);
             if self.starts_with(&left_trim) {
-                // Emit any accumulated text (with trimming as needed)
                 if self.pos > self.start {
-                    let text: String = self.input[self.start..self.pos].iter().collect();
-                    let mut text = if trim_leading {
-                        text.trim_start().to_string()
-                    } else {
-                        text
-                    };
-                    // {{- also trims trailing whitespace from preceding text
-                    text = text.trim_end().to_string();
-                    if !text.is_empty() {
-                        self.emit_val(TokenKind::Text, text);
-                    } else {
-                        self.ignore();
-                    }
+                    // {{- trims trailing whitespace from preceding text
+                    self.emit_pending_text(trim_leading, true);
                 }
                 self.skip(left_trim.len());
                 self.ignore();
                 self.emit(TokenKind::LeftTrimDelim);
-                // Check for comment: {{- /* ... */
-                if let Some(trims) = self.try_lex_comment()? {
-                    trim_leading = trims;
-                    continue;
-                }
-                self.lex_inside()?;
-                // Check if the action ended with a trim marker
-                trim_leading = self
-                    .tokens
-                    .last()
-                    .is_some_and(|t| t.kind == TokenKind::RightTrimDelim);
+                trim_leading = self.lex_action_body()?;
                 continue;
             }
 
+            // Check for regular left delimiter (e.g. "{{")
             let ld = self.left_delim.clone();
             if self.starts_with(&ld) {
                 if self.pos > self.start {
-                    if trim_leading {
-                        let text: String = self.input[self.start..self.pos].iter().collect();
-                        let trimmed = text.trim_start().to_string();
-                        if !trimmed.is_empty() {
-                            self.emit_val(TokenKind::Text, trimmed);
-                        } else {
-                            self.ignore();
-                        }
-                    } else {
-                        self.emit(TokenKind::Text);
-                    }
+                    self.emit_pending_text(trim_leading, false);
                 }
                 let ld_len = self.left_delim.len();
                 self.skip(ld_len);
                 self.ignore();
                 self.emit(TokenKind::LeftDelim);
-                // Check for comment: {{ /* ... */
-                if let Some(trims) = self.try_lex_comment()? {
-                    trim_leading = trims;
-                    continue;
-                }
-                self.lex_inside()?;
-                // Check if the action ended with a trim marker
-                trim_leading = self
-                    .tokens
-                    .last()
-                    .is_some_and(|t| t.kind == TokenKind::RightTrimDelim);
+                trim_leading = self.lex_action_body()?;
                 continue;
             }
 
             self.next_char();
         }
+    }
+
+    /// Emit accumulated text before a delimiter, applying trim as needed.
+    ///
+    /// `trim_leading` — trim whitespace from the start (previous action had `-}}`).
+    /// `trim_trailing` — trim whitespace from the end (current delimiter is `{{-`).
+    fn emit_pending_text(&mut self, trim_leading: bool, trim_trailing: bool) {
+        let text: String = self.input[self.start..self.pos].iter().collect();
+        let mut text = if trim_leading {
+            text.trim_start().to_string()
+        } else {
+            text
+        };
+        if trim_trailing {
+            text = text.trim_end().to_string();
+        }
+        if !text.is_empty() {
+            self.emit_val(TokenKind::Text, text);
+        } else {
+            self.ignore();
+        }
+    }
+
+    /// Lex the body of an action after the left delimiter has been emitted.
+    /// Handles comments and regular action content.
+    /// Returns whether the close delimiter was a trim marker (`-}}`).
+    fn lex_action_body(&mut self) -> Result<bool> {
+        if let Some(trims) = self.try_lex_comment()? {
+            return Ok(trims);
+        }
+        self.lex_inside()?;
+        Ok(self
+            .tokens
+            .last()
+            .is_some_and(|t| t.kind == TokenKind::RightTrimDelim))
     }
 
     /// Try to lex a comment after the left delimiter has been consumed.
@@ -585,7 +569,55 @@ impl Lexer {
                     return self.lex_base_number(2);
                 }
                 _ => {
-                    // Could be 0, 0.5, 0e1, etc. — continue as decimal
+                    // Check for legacy octal: 0 followed only by [0-7_]
+                    // (e.g., 0377 → 255). If a dot, 'e'/'E', or digit 8-9
+                    // follows, fall through to decimal instead.
+                    let mut look = self.pos;
+                    let mut has_octal_digits = false;
+                    let mut is_legacy_octal = true;
+                    while look < self.input.len() {
+                        let ch = self.input[look];
+                        if ('0'..='7').contains(&ch) {
+                            has_octal_digits = true;
+                            look += 1;
+                        } else if ch == '_' {
+                            look += 1;
+                        } else if ch == '.' || ch == 'e' || ch == 'E' || ch == '8' || ch == '9'
+                        {
+                            is_legacy_octal = false;
+                            break;
+                        } else {
+                            break;
+                        }
+                    }
+                    if is_legacy_octal && has_octal_digits {
+                        while self
+                            .peek()
+                            .is_some_and(|c| ('0'..='7').contains(&c) || c == '_')
+                        {
+                            self.next_char();
+                        }
+                        let raw: String = self.input[self.start..self.pos].iter().collect();
+                        let clean: String = raw.chars().filter(|c| *c != '_').collect();
+                        let (negative, digits) = if let Some(d) = clean.strip_prefix("-0") {
+                            (true, d)
+                        } else if let Some(d) = clean.strip_prefix("+0") {
+                            (false, d)
+                        } else if let Some(d) = clean.strip_prefix('0') {
+                            (false, d)
+                        } else {
+                            (false, clean.as_str())
+                        };
+                        match i64::from_str_radix(digits, 8) {
+                            Ok(n) => {
+                                let val = if negative { -n } else { n };
+                                self.emit_val(TokenKind::Number, val.to_string());
+                            }
+                            Err(_) => return Err(self.error("invalid octal number")),
+                        }
+                        return Ok(());
+                    }
+                    // Otherwise fall through to lex_decimal_number
                 }
             }
         }
@@ -667,7 +699,7 @@ impl Lexer {
         let raw: String = self.input[self.start..self.pos].iter().collect();
         let clean: String = raw.chars().filter(|c| *c != '_').collect();
         // Parse hex float manually: use the format 0xHEX.HEXpEXP
-        match parse_hex_float(&clean) {
+        match crate::go::parse_hex_float(&clean) {
             Some(f) => self.emit_val(TokenKind::Number, format!("{}", f)),
             None => return Err(self.error("invalid hex float")),
         }
@@ -917,42 +949,6 @@ fn unescape(s: &str) -> Result<String> {
         }
     }
     Ok(result)
-}
-
-/// Parse a hex float literal like 0x1.Fp10 or -0x1p-2
-fn parse_hex_float(s: &str) -> Option<f64> {
-    let negative = s.starts_with('-');
-    let s = s.trim_start_matches('+').trim_start_matches('-');
-    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
-
-    let (mantissa_str, exp_str) = if let Some(p) = s.find(['p', 'P']) {
-        (&s[..p], &s[p + 1..])
-    } else {
-        (s, "0")
-    };
-
-    let mantissa = if let Some(dot) = mantissa_str.find('.') {
-        let int_part = &mantissa_str[..dot];
-        let frac_part = &mantissa_str[dot + 1..];
-        let int_val = if int_part.is_empty() {
-            0u64
-        } else {
-            u64::from_str_radix(int_part, 16).ok()?
-        };
-        let frac_val = if frac_part.is_empty() {
-            0u64
-        } else {
-            u64::from_str_radix(frac_part, 16).ok()?
-        };
-        let frac_bits = frac_part.len() as u32 * 4;
-        int_val as f64 + frac_val as f64 / (1u64 << frac_bits) as f64
-    } else {
-        u64::from_str_radix(mantissa_str, 16).ok()? as f64
-    };
-
-    let exp: i32 = exp_str.parse().ok()?;
-    let result = mantissa * (2.0_f64).powi(exp);
-    Some(if negative { -result } else { result })
 }
 
 #[cfg(test)]

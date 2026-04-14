@@ -72,11 +72,6 @@ impl Parser {
         tok
     }
 
-    #[allow(dead_code)]
-    fn backup(&mut self) {
-        self.pos -= 1;
-    }
-
     fn expect(&mut self, kind: TokenKind) -> Result<()> {
         let idx = self.pos;
         self.pos += 1;
@@ -84,23 +79,7 @@ impl Parser {
         if tok.kind != kind {
             let tok_kind = tok.kind.clone();
             let tok_val = tok.val.clone();
-            let tok_pos = tok.pos;
-            let (line, col) = {
-                let mut line = 1;
-                let mut col = 1;
-                for (i, ch) in self.source.char_indices() {
-                    if i >= tok_pos {
-                        break;
-                    }
-                    if ch == '\n' {
-                        line += 1;
-                        col = 1;
-                    } else {
-                        col += 1;
-                    }
-                }
-                (line, col)
-            };
+            let (line, col) = tok.line_col(&self.source);
             return Err(TemplateError::Parse {
                 line,
                 col,
@@ -108,11 +87,6 @@ impl Parser {
             });
         }
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    fn at_end(&self) -> bool {
-        self.peek().kind == TokenKind::Eof
     }
 
     fn cur_pos(&self) -> Pos {

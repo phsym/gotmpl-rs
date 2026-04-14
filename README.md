@@ -191,10 +191,12 @@ Go-compatible number literal syntax is supported in templates:
 {{42}}          Decimal
 {{3.14}}        Float
 {{0xFF}}        Hexadecimal
-{{0o77}}        Octal
+{{0o77}}        Octal (explicit prefix)
+{{0377}}        Octal (legacy, leading zero)
 {{0b1010}}      Binary
 {{1_000_000}}   Underscore separators
 {{'a'}}         Character literal (emits code point: 97)
+{{0x1.ep+2}}    Hex float literal (7.5)
 ```
 
 ## Data model
@@ -227,6 +229,53 @@ let data = tmap! {
 };
 ```
 
+## Go interoperability
+
+All Go-specific formatting and escaping adaptations live in the [`go`](src/go.rs) module.
+This isolates the Rust↔Go translation layer from the template engine logic.
+
+### Implemented adaptations
+
+| Adaptation                                                                                  | Go equivalent               | Status |
+| ------------------------------------------------------------------------------------------- | --------------------------- | ------ |
+| `sprintf` — full `fmt.Sprintf` with verbs `%s %d %f %e %E %g %G %v %q %t %x %X %o %b %c %%` | `fmt.Sprintf`               | Done   |
+| `%#q` backtick quoting                                                                      | `fmt.Sprintf("%#q", ...)`   | Done   |
+| `%e`/`%E` exponent normalization (always `e+00` not `e0`)                                   | `fmt.Sprintf("%e", ...)`    | Done   |
+| `%g`/`%G` with precision, sci-notation threshold, trailing-zero stripping                   | `fmt.Sprintf("%g", ...)`    | Done   |
+| Printf flags: `-` `+` ` ` `#` `0`, width, `.precision`                                      | `fmt` flag grammar          | Done   |
+| `print` inter-arg spacing (spaces between non-string adjacent operands)                     | `fmt.Sprint`                | Done   |
+| `go_quote` — double-quoted string literal with Go escape sequences                          | `strconv.Quote`             | Done   |
+| Integer base formatting with sign-before-prefix convention (`-0xff`)                        | `fmt.Sprintf("%x", ...)`    | Done   |
+| HTML escaping (`&`, `<`, `>`, `"`, `'`, NUL → U+FFFD)                                       | `template.HTMLEscapeString` | Done   |
+| JS escaping (backslash, quotes, `<>`, `&`, `=`, control chars as `\uXXXX`)                  | `template.JSEscapeString`   | Done   |
+| URL percent-encoding (RFC 3986 unreserved passthrough)                                      | `template.URLQueryEscaper`  | Done   |
+| Hex float literal parsing (`0x1.Fp10`)                                                      | Go hex float syntax         | Done   |
+| Legacy octal number literals (`0377` → 255)                                                 | Go legacy octal             | Done   |
+| `nil` is not a command (bare `{{nil}}` errors)                                              | Go exec semantics           | Done   |
+| Truthiness semantics (nil, 0, "", empty collections are falsy)                              | `template.IsTrue`           | Done   |
+| `and`/`or` short-circuit evaluation returning the deciding value                            | Go template semantics       | Done   |
+| `break`/`continue` in `range` loops                                                         | Go 1.18+                    | Done   |
+| `range` over integer (`range 5`)                                                            | Go 1.22+                    | Done   |
+| `block` (define + invoke)                                                                   | Go template semantics       | Done   |
+| `else if` / `else with` chains                                                              | Go template semantics       | Done   |
+| Whitespace trimming (`{{-` / `-}}`)                                                         | Go template semantics       | Done   |
+| `$` rebinding inside `{{template}}` calls                                                   | Go template semantics       | Done   |
+| Deterministic map iteration (sorted keys via `BTreeMap`)                                    | Go sorted map range         | Done   |
+
+### Not yet implemented
+
+| Feature                                          | Go equivalent             | Reason                                                                                           |
+| ------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------ |
+| `<no value>` for missing map keys                | `reflect.Value{}` display | Rust uses `Value::Nil` → `<nil>` instead; Go's `<no value>` depends on `reflect.Value.IsValid()` |
+| `missingkey=zero` returning typed zero values    | `reflect.Zero(type)`      | Without reflection, zero-value depends on the map's value type; we return `Nil`                  |
+| `%T` format verb (type name)                     | `fmt.Sprintf("%T", ...)`  | Go-specific type name formatting                                                                 |
+| `%p` format verb (pointer)                       | `fmt.Sprintf("%p", ...)`  | No pointers in `Value`                                                                           |
+| `%w` format verb (error wrapping)                | `fmt.Errorf("%w", ...)`   | Not applicable to templates                                                                      |
+| `%#v` Go-syntax value representation             | `fmt.Sprintf("%#v", ...)` | Would need Go-style printing of `Value`                                                          |
+| `%U` Unicode format (`U+0041`)                   | `fmt.Sprintf("%U", ...)`  | Rarely used in templates                                                                         |
+| Function name validation (reject `"a-b"`, `"2"`) | Go template parser        | Names are validated syntactically but not with Go's exact character rules                        |
+| `{{range $i = .List}}` assignment form           | Go range assignment       | Only `:=` declaration form is supported                                                          |
+
 ## Differences from Go
 
 Since Rust has no runtime reflection, some Go features are not applicable:
@@ -236,7 +285,5 @@ Since Rust has no runtime reflection, some Go features are not applicable:
 - **No pointer/interface indirection** — `Value` is always concrete
 - **No complex numbers or channels** — not in the `Value` enum
 - **No `iter.Seq` / `iter.Seq2`** — use `Value::List` or `Value::Map`
-
-Everything else matches Go's behavior, including truthiness semantics, whitespace trimming,
-short-circuit `and`/`or`, `break`/`continue` in range, template composition, and all
-built-in functions.
+- **Missing map keys print `<nil>`** — Go prints `<no value>` for missing keys (via
+  `reflect.Value`); this library uses `Value::Nil` which displays as `<nil>`

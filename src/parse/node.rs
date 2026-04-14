@@ -13,7 +13,11 @@
 /// the originating source location.
 #[derive(Debug, Clone, Copy)]
 pub struct Pos {
-    /// Byte offset from the start of the template source.
+    /// Character offset from the start of the template source.
+    ///
+    /// This is a character index into the source string (not a byte offset),
+    /// matching the lexer's internal `Vec<char>` representation. For ASCII-only
+    /// templates, character offsets equal byte offsets.
     pub offset: usize,
     /// 1-based line number (tracked by the lexer).
     pub line: usize,

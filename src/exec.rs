@@ -65,13 +65,6 @@ enum ExecSignal {
     Continue,
 }
 
-impl ExecSignal {
-    /// Shorthand for wrapping a `TemplateError`.
-    fn err(e: TemplateError) -> Self {
-        ExecSignal::Err(Box::new(e))
-    }
-}
-
 impl From<TemplateError> for ExecSignal {
     fn from(e: TemplateError) -> Self {
         ExecSignal::Err(Box::new(e))
@@ -148,6 +141,22 @@ pub struct Executor<'a> {
     vars: VarScope,
     depth: usize,
     missing_key: MissingKey,
+}
+
+/// Returns a short human-readable name for an expression, used in error messages.
+fn expr_name(expr: &Expr) -> &'static str {
+    match expr {
+        Expr::Dot(_) => "<.>",
+        Expr::Field(_, _) => "<field>",
+        Expr::Variable(_, _, _) => "<variable>",
+        Expr::Identifier(_, _) => "<identifier>",
+        Expr::String(_, _) => "<string>",
+        Expr::Number(_, _) => "<number>",
+        Expr::Bool(_, _) => "<bool>",
+        Expr::Nil(_) => "<nil>",
+        Expr::Pipe(_, _) => "<pipeline>",
+        Expr::Chain(_, _, _) => "<chain>",
+    }
 }
 
 /// Execute a range loop body with break/continue handling.
@@ -299,7 +308,10 @@ impl<'a> Executor<'a> {
             self.vars.pop();
             result
         } else if let Some(ref else_body) = branch.else_body {
-            self.walk(w, else_body, dot)
+            self.vars.push();
+            let result = self.walk(w, else_body, dot);
+            self.vars.pop();
+            result
         } else {
             Ok(())
         }
@@ -398,7 +410,7 @@ impl<'a> Executor<'a> {
         let tree = self
             .templates
             .get(&tmpl.name)
-            .ok_or_else(|| ExecSignal::err(TemplateError::UndefinedTemplate(tmpl.name.clone())))?
+            .ok_or_else(|| TemplateError::UndefinedTemplate(tmpl.name.clone()))?
             .clone();
 
         self.vars.push();
@@ -470,15 +482,20 @@ impl<'a> Executor<'a> {
             return Ok(val);
         }
 
-        // Single expression: evaluate it
-        if cmd.args.len() == 1 && piped.is_none() {
-            return self.eval_expr(dot, first);
+        // Non-function command: cannot accept piped values or extra arguments.
+        // Go errors with "can't give argument to non-function".
+        if piped.is_some() || cmd.args.len() > 1 {
+            return Err(TemplateError::Exec(format!(
+                "can't give argument to non-function {}",
+                expr_name(first)
+            ))
+            .into());
         }
 
-        // If we have a piped value but a single non-function arg, that's an error
-        // unless it's a field access that acts like an identity
-        if piped.is_some() && cmd.args.len() == 1 {
-            return self.eval_expr(dot, first);
+        // Go: nil is not a valid command — it cannot be printed or used
+        // as a pipeline value. It may only appear as an argument to a function.
+        if matches!(first, Expr::Nil(_)) {
+            return Err(TemplateError::Exec("nil is not a command".into()).into());
         }
 
         self.eval_expr(dot, first)
@@ -545,7 +562,7 @@ impl<'a> Executor<'a> {
         let func = self
             .funcs
             .get(name)
-            .ok_or_else(|| ExecSignal::err(TemplateError::UndefinedFunction(name.to_string())))?;
+            .ok_or_else(|| TemplateError::UndefinedFunction(name.to_string()))?;
 
         let mut args: Vec<Value> = Vec::new();
         for expr in arg_exprs {
@@ -588,7 +605,7 @@ impl<'a> Executor<'a> {
 
             Expr::Variable(_, name, fields) => {
                 let val = self.vars.get(name).cloned().ok_or_else(|| {
-                    ExecSignal::err(TemplateError::UndefinedVariable(name.clone()))
+                    TemplateError::UndefinedVariable(name.clone())
                 })?;
                 let mut result = val;
                 for field in fields {
@@ -602,11 +619,11 @@ impl<'a> Executor<'a> {
             Expr::Number(_, s) => {
                 if s.contains('.') || s.contains('e') || s.contains('E') {
                     Ok(Value::Float(s.parse::<f64>().map_err(|_| {
-                        ExecSignal::err(TemplateError::Exec(format!("invalid float: {}", s)))
+                        TemplateError::Exec(format!("invalid float: {}", s))
                     })?))
                 } else {
                     Ok(Value::Int(s.parse::<i64>().map_err(|_| {
-                        ExecSignal::err(TemplateError::Exec(format!("invalid integer: {}", s)))
+                        TemplateError::Exec(format!("invalid integer: {}", s))
                     })?))
                 }
             }

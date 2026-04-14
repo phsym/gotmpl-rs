@@ -3,6 +3,7 @@
 pub(crate) mod error;
 pub(crate) mod exec;
 pub(crate) mod funcs;
+pub(crate) mod go;
 /// Parser, lexer, and AST node types for the Go template language.
 ///
 /// This module mirrors Go's `text/template/parse` package. Most users don't
@@ -16,7 +17,8 @@ pub(crate) mod value;
 
 pub use error::{Result, TemplateError};
 use funcs::builtins;
-pub use funcs::{Func, html_escape, js_escape, url_encode};
+pub use funcs::Func;
+pub use go::{html_escape, js_escape, url_encode};
 pub use value::{ToValue, Value, ValueFunc};
 
 use std::collections::HashMap;

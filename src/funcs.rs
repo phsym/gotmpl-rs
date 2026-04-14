@@ -18,6 +18,7 @@
 //! | Escaping | `html`, `js`, `urlquery` |
 
 use crate::error::{Result, TemplateError};
+use crate::go;
 use crate::value::Value;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -148,9 +149,9 @@ pub fn builtins() -> HashMap<String, Func> {
     m.insert(
         "print".into(),
         Arc::new(|args: &[Value]| {
-            let mut result = std::string::String::new();
+            let mut result = String::new();
             for (i, arg) in args.iter().enumerate() {
-                if i > 0 && needs_space(&args[i - 1], arg) {
+                if i > 0 && go::needs_space(&args[i - 1], arg) {
                     result.push(' ');
                 }
                 write!(result, "{}", arg).unwrap();
@@ -162,7 +163,7 @@ pub fn builtins() -> HashMap<String, Func> {
     m.insert(
         "println".into(),
         Arc::new(|args: &[Value]| {
-            let s: Vec<std::string::String> = args.iter().map(|a| format!("{}", a)).collect();
+            let s: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
             Ok(Value::String(format!("{}\n", s.join(" "))))
         }),
     );
@@ -180,7 +181,7 @@ pub fn builtins() -> HashMap<String, Func> {
                     )));
                 }
             };
-            let result = simple_sprintf(&fmt_str, &args[1..])?;
+            let result = go::sprintf(&fmt_str, &args[1..])?;
             Ok(Value::String(result))
         }),
     );
@@ -247,7 +248,7 @@ pub fn builtins() -> HashMap<String, Func> {
         Arc::new(|args: &[Value]| {
             check_args("html", args, 1)?;
             let s = format!("{}", args[0]);
-            Ok(Value::String(html_escape(&s)))
+            Ok(Value::String(go::html_escape(&s)))
         }),
     );
 
@@ -256,7 +257,7 @@ pub fn builtins() -> HashMap<String, Func> {
         Arc::new(|args: &[Value]| {
             check_args("js", args, 1)?;
             let s = format!("{}", args[0]);
-            Ok(Value::String(js_escape(&s)))
+            Ok(Value::String(go::js_escape(&s)))
         }),
     );
 
@@ -265,16 +266,11 @@ pub fn builtins() -> HashMap<String, Func> {
         Arc::new(|args: &[Value]| {
             check_args("urlquery", args, 1)?;
             let s = format!("{}", args[0]);
-            Ok(Value::String(url_encode(&s)))
+            Ok(Value::String(go::url_encode(&s)))
         }),
     );
 
     m
-}
-
-/// Go's fmt.Sprint adds spaces between adjacent non-string operands.
-fn needs_space(prev: &Value, next: &Value) -> bool {
-    !matches!(prev, Value::String(_)) && !matches!(next, Value::String(_))
 }
 
 // ─── Argument validation helpers ─────────────────────────────────────────
@@ -299,371 +295,4 @@ fn check_min_args(name: &str, args: &[Value], min: usize) -> Result<()> {
         });
     }
     Ok(())
-}
-
-// ─── sprintf implementation ─────────────────────────────────────────────
-// Go's templates use fmt.Sprintf. We implement the common format verbs
-// with full support for flags, width, and precision.
-
-/// Parsed printf format specifier (flags, width, precision).
-struct FmtSpec {
-    left_align: bool,
-    plus: bool,
-    space: bool,
-    hash: bool,
-    zero: bool,
-    width: Option<usize>,
-    precision: Option<usize>,
-}
-
-impl FmtSpec {
-    fn parse(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Self {
-        let mut spec = FmtSpec {
-            left_align: false,
-            plus: false,
-            space: false,
-            hash: false,
-            zero: false,
-            width: None,
-            precision: None,
-        };
-        // Flags
-        loop {
-            match chars.peek() {
-                Some('-') => {
-                    spec.left_align = true;
-                    chars.next();
-                }
-                Some('+') => {
-                    spec.plus = true;
-                    chars.next();
-                }
-                Some(' ') => {
-                    spec.space = true;
-                    chars.next();
-                }
-                Some('#') => {
-                    spec.hash = true;
-                    chars.next();
-                }
-                Some('0') => {
-                    spec.zero = true;
-                    chars.next();
-                }
-                _ => break,
-            }
-        }
-        // Width
-        let mut w = std::string::String::new();
-        while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
-            w.push(chars.next().unwrap());
-        }
-        if !w.is_empty() {
-            spec.width = w.parse().ok();
-        }
-        // Precision
-        if chars.peek() == Some(&'.') {
-            chars.next();
-            let mut p = std::string::String::new();
-            while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
-                p.push(chars.next().unwrap());
-            }
-            spec.precision = Some(if p.is_empty() {
-                0
-            } else {
-                p.parse().unwrap_or(0)
-            });
-        }
-        spec
-    }
-
-    /// Pad a formatted string to the configured width.
-    fn pad(&self, s: &str, is_numeric: bool) -> std::string::String {
-        let char_len = s.chars().count();
-        let width = match self.width {
-            Some(w) if char_len < w => w,
-            _ => return s.to_string(),
-        };
-        let padding = width - char_len;
-        if self.left_align {
-            format!("{}{}", s, " ".repeat(padding))
-        } else if self.zero && is_numeric {
-            // Put zeros after the sign character
-            if let Some(rest) = s.strip_prefix('-') {
-                format!("-{}{}", "0".repeat(padding), rest)
-            } else if let Some(rest) = s.strip_prefix('+') {
-                format!("+{}{}", "0".repeat(padding), rest)
-            } else {
-                format!("{}{}", "0".repeat(padding), s)
-            }
-        } else {
-            format!("{}{}", " ".repeat(padding), s)
-        }
-    }
-
-    /// Format a signed integer with sign flags applied.
-    fn format_signed(&self, n: i64) -> std::string::String {
-        if self.plus {
-            if n >= 0 {
-                format!("+{}", n)
-            } else {
-                format!("{}", n)
-            }
-        } else if self.space {
-            if n >= 0 {
-                format!(" {}", n)
-            } else {
-                format!("{}", n)
-            }
-        } else {
-            format!("{}", n)
-        }
-    }
-}
-
-/// Produce a Go-syntax double-quoted string literal (like `strconv.Quote`).
-fn go_quote(s: &str) -> std::string::String {
-    let mut out = std::string::String::with_capacity(s.len() + 2);
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            '\x07' => out.push_str("\\a"),
-            '\x08' => out.push_str("\\b"),
-            '\x0C' => out.push_str("\\f"),
-            '\x0B' => out.push_str("\\v"),
-            c if (c as u32) < 0x20 || c == '\x7F' => {
-                write!(out, "\\x{:02x}", c as u32).unwrap();
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-/// Format a signed integer in a non-decimal base, using Go's conventions
-/// (sign is separate from magnitude: -0xff, not two's complement).
-fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> std::string::String {
-    let abs = n.unsigned_abs();
-    let digits = match base {
-        "x" => format!("{:x}", abs),
-        "X" => format!("{:X}", abs),
-        "o" => format!("{:o}", abs),
-        "b" => format!("{:b}", abs),
-        _ => unreachable!(),
-    };
-    let prefix = if spec.hash {
-        match base {
-            "x" => "0x",
-            "X" => "0X",
-            "o" => "0o",
-            "b" => "0b",
-            _ => "",
-        }
-    } else {
-        ""
-    };
-    if n < 0 {
-        format!("-{}{}", prefix, digits)
-    } else {
-        format!("{}{}", prefix, digits)
-    }
-}
-
-fn simple_sprintf(fmt_str: &str, args: &[Value]) -> Result<std::string::String> {
-    let mut result = std::string::String::new();
-    let mut chars = fmt_str.chars().peekable();
-    let mut arg_idx = 0;
-
-    while let Some(ch) = chars.next() {
-        if ch != '%' {
-            result.push(ch);
-            continue;
-        }
-
-        let spec = FmtSpec::parse(&mut chars);
-
-        let verb = match chars.next() {
-            Some(v) => v,
-            None => {
-                result.push('%');
-                break;
-            }
-        };
-
-        if verb == '%' {
-            result.push('%');
-            continue;
-        }
-
-        // Consume the next argument, or emit MISSING.
-        let arg = if arg_idx < args.len() {
-            arg_idx += 1;
-            &args[arg_idx - 1]
-        } else {
-            write!(result, "%!{}(MISSING)", verb).unwrap();
-            continue;
-        };
-
-        match verb {
-            's' => {
-                let mut s = format!("{}", arg);
-                if let Some(prec) = spec.precision {
-                    s = s.chars().take(prec).collect();
-                }
-                result.push_str(&spec.pad(&s, false));
-            }
-            'd' => {
-                let n = arg.as_int().unwrap_or(0);
-                let s = spec.format_signed(n);
-                result.push_str(&spec.pad(&s, true));
-            }
-            'f' => {
-                let f = arg.as_float().unwrap_or(0.0);
-                let prec = spec.precision.unwrap_or(6);
-                let s = if spec.plus {
-                    if f >= 0.0 {
-                        format!("+{:.prec$}", f)
-                    } else {
-                        format!("{:.prec$}", f)
-                    }
-                } else if spec.space {
-                    if f >= 0.0 {
-                        format!(" {:.prec$}", f)
-                    } else {
-                        format!("{:.prec$}", f)
-                    }
-                } else {
-                    format!("{:.prec$}", f)
-                };
-                result.push_str(&spec.pad(&s, true));
-            }
-            'e' | 'E' => {
-                let f = arg.as_float().unwrap_or(0.0);
-                let prec = spec.precision.unwrap_or(6);
-                let s = if verb == 'e' {
-                    format!("{:.prec$e}", f)
-                } else {
-                    format!("{:.prec$E}", f)
-                };
-                result.push_str(&spec.pad(&s, true));
-            }
-            'g' | 'G' => {
-                let f = arg.as_float().unwrap_or(0.0);
-                let s = format!("{}", f);
-                result.push_str(&spec.pad(&s, true));
-            }
-            'v' => {
-                let s = format!("{}", arg);
-                result.push_str(&spec.pad(&s, false));
-            }
-            'q' => {
-                let s = match arg {
-                    Value::String(s) => go_quote(s),
-                    other => go_quote(&format!("{}", other)),
-                };
-                result.push_str(&spec.pad(&s, false));
-            }
-            't' => {
-                let s = match arg {
-                    Value::Bool(b) => format!("{}", b),
-                    other => format!("{}", other),
-                };
-                result.push_str(&spec.pad(&s, false));
-            }
-            'x' | 'X' | 'o' | 'b' => {
-                let n = arg.as_int().unwrap_or(0);
-                let s = format_int_base(n, &verb.to_string(), &spec);
-                result.push_str(&spec.pad(&s, true));
-            }
-            'c' => {
-                let n = arg.as_int().unwrap_or(0);
-                if let Some(c) = char::from_u32(n as u32) {
-                    result.push(c);
-                }
-            }
-            _ => {
-                result.push('%');
-                result.push(verb);
-            }
-        }
-    }
-
-    Ok(result)
-}
-
-// ─── Escaping functions ──────────────────────────────────────────────────
-
-/// HTML-escape a string, replacing `&`, `<`, `>`, `"`, `'`, and NUL bytes.
-///
-/// Matches Go's `template.HTMLEscapeString`. NUL bytes are replaced with the
-/// Unicode replacement character (U+FFFD). Quotes use numeric entities
-/// (`&#34;`, `&#39;`) for brevity, matching Go's choice.
-pub fn html_escape(s: &str) -> std::string::String {
-    let mut out = std::string::String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '\0' => out.push('\u{FFFD}'), // Go replaces NUL with Unicode replacement char
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&#34;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-/// JavaScript-escape a string for safe embedding in JS string literals.
-///
-/// Matches Go's `template.JSEscapeString`. Escapes backslash, quotes,
-/// newlines, tabs, angle brackets (`<`, `>`), ampersand, equals sign,
-/// and all control characters below U+0020 as `\uXXXX`.
-pub fn js_escape(s: &str) -> std::string::String {
-    let mut out = std::string::String::new();
-    for ch in s.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\'' => out.push_str("\\'"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '<' => out.push_str("\\u003c"),
-            '>' => out.push_str("\\u003e"),
-            '&' => out.push_str("\\u0026"),
-            '=' => out.push_str("\\u003d"),
-            _ if (ch as u32) < 0x20 => {
-                // Control characters
-                write!(out, "\\u{:04x}", ch as u32).unwrap();
-            }
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-/// Percent-encode a string for use in URL query parameters (RFC 3986).
-///
-/// Unreserved characters (`A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `~`) are
-/// passed through; everything else is encoded as `%XX`.
-pub fn url_encode(s: &str) -> std::string::String {
-    let mut out = std::string::String::new();
-    for byte in s.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            _ => {
-                write!(out, "%{:02X}", byte).unwrap();
-            }
-        }
-    }
-    out
 }
