@@ -12,8 +12,8 @@
 //
 // Everything else is faithfully ported.
 
-use go_template_rs::Value;
-use go_template_rs::{Template, tmap};
+use go_template::Value;
+use go_template::{Template, tmap};
 
 // ─── Helper ──────────────────────────────────────────────────────────────
 
@@ -28,7 +28,7 @@ fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
         })
         .func("oneArg", |args| match args.first() {
             Some(Value::String(s)) => Ok(Value::String(format!("oneArg={}", s))),
-            _ => Err(go_template_rs::TemplateError::Exec(
+            _ => Err(go_template::TemplateError::Exec(
                 "oneArg requires a string".into(),
             )),
         })
@@ -36,7 +36,7 @@ fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
             (Some(Value::String(a)), Some(Value::String(b))) => {
                 Ok(Value::String(format!("twoArgs={}{}", a, b)))
             }
-            _ => Err(go_template_rs::TemplateError::Exec(
+            _ => Err(go_template::TemplateError::Exec(
                 "twoArgs requires two strings".into(),
             )),
         })
@@ -2077,7 +2077,7 @@ fn test_message_for_unparsed_template() {
 
 #[test]
 fn test_block_override() {
-    use go_template_rs::parse::{ListNode, Node, Pos, TextNode};
+    use go_template::parse::{ListNode, Node, Pos, TextNode};
 
     let tmpl = Template::new("page")
         .parse(r#"{{block "content" .}}default content{{end}}"#)
@@ -2163,7 +2163,7 @@ fn test_defined_templates_string() {
 
 #[test]
 fn test_clone_independence() {
-    use go_template_rs::parse::{ListNode, Node, Pos, TextNode};
+    use go_template::parse::{ListNode, Node, Pos, TextNode};
 
     let original = Template::new("t")
         .parse(r#"{{define "x"}}orig{{end}}{{template "x"}}"#)
@@ -2265,7 +2265,7 @@ fn test_call_with_args() {
     let data = tmap! {};
     let result = Template::new("test")
         .func("getfn", |_| {
-            let f: go_template_rs::ValueFunc = Arc::new(|args| {
+            let f: go_template::ValueFunc = Arc::new(|args| {
                 let a = args[0].as_int().unwrap_or(0);
                 let b = args[1].as_int().unwrap_or(0);
                 Ok(Value::Int(a + b))

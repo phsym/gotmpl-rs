@@ -16,8 +16,8 @@ pub(crate) mod value;
 // All user-facing types are available at the crate root.
 
 pub use error::{Result, TemplateError};
-use funcs::builtins;
 pub use funcs::Func;
+use funcs::builtins;
 pub use go::{html_escape, js_escape, url_encode};
 pub use value::{ToValue, Value, ValueFunc};
 
@@ -37,7 +37,7 @@ use parse::{ListNode, Parser};
 ///
 /// ```
 /// use std::sync::Arc;
-/// use go_template_rs::{FuncMap, Value};
+/// use go_template::{FuncMap, Value};
 ///
 /// let mut fm = FuncMap::new();
 /// fm.insert("double".into(), Arc::new(|args: &[Value]| {
@@ -54,14 +54,14 @@ pub type FuncMap = HashMap<String, Func>;
 /// Use the builder-style API to configure, parse, and execute templates:
 ///
 /// ```
-/// use go_template_rs::{Template, tmap};
+/// use go_template::{Template, tmap};
 ///
 /// let output = Template::new("greet")
 ///     .delims("<<", ">>")                        // optional: custom delimiters
 ///     .option("missingkey=error")                 // optional: error on missing keys
 ///     .func("shout", |args| {                     // optional: custom functions
 ///         let s = format!("{}", args[0]).to_uppercase();
-///         Ok(go_template_rs::Value::String(s))
+///         Ok(go_template::Value::String(s))
 ///     })
 ///     .parse("Hello, << .Name | shout >>!")       // parse template source
 ///     .unwrap()
@@ -105,7 +105,7 @@ impl Template {
     /// # Examples
     ///
     /// ```
-    /// use go_template_rs::{Template, tmap};
+    /// use go_template::{Template, tmap};
     ///
     /// let result = Template::new("t")
     ///     .delims("<%", "%>")
@@ -155,7 +155,7 @@ impl Template {
     /// # Examples
     ///
     /// ```
-    /// use go_template_rs::{Template, tmap, Value};
+    /// use go_template::{Template, tmap, Value};
     ///
     /// let result = Template::new("t")
     ///     .func("double", |args| {
@@ -186,7 +186,7 @@ impl Template {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use go_template_rs::{Template, FuncMap, tmap, Value};
+    /// use go_template::{Template, FuncMap, tmap, Value};
     ///
     /// let mut fm = FuncMap::new();
     /// fm.insert("greet".into(), Arc::new(|args: &[Value]| {
@@ -263,7 +263,7 @@ impl Template {
     /// # Examples
     ///
     /// ```no_run
-    /// use go_template_rs::Template;
+    /// use go_template::Template;
     ///
     /// let tmpl = Template::new("site")
     ///     .parse_files(&["templates/header.html", "templates/footer.html"])
@@ -302,8 +302,8 @@ impl Template {
     /// # Examples
     ///
     /// ```
-    /// use go_template_rs::{Template, tmap};
-    /// use go_template_rs::parse::{ListNode, Node, TextNode, Pos};
+    /// use go_template::{Template, tmap};
+    /// use go_template::parse::{ListNode, Node, TextNode, Pos};
     ///
     /// // Build an AST node by hand
     /// let tree = ListNode {
@@ -363,7 +363,7 @@ impl Template {
     /// # Examples
     ///
     /// ```
-    /// use go_template_rs::{Template, tmap};
+    /// use go_template::{Template, tmap};
     ///
     /// let tmpl = Template::new("root")
     ///     .parse(r#"{{define "header"}}Header: {{.Title}}{{end}}body"#)
@@ -424,7 +424,7 @@ impl Template {
     /// # Examples
     ///
     /// ```
-    /// use go_template_rs::Template;
+    /// use go_template::Template;
     ///
     /// let tmpl = Template::new("t")
     ///     .parse(r#"{{define "header"}}...{{end}}"#)
@@ -448,7 +448,7 @@ impl Template {
     /// # Examples
     ///
     /// ```
-    /// use go_template_rs::Template;
+    /// use go_template::Template;
     ///
     /// let tmpl = Template::new("t")
     ///     .parse(r#"{{define "a"}}...{{end}}{{define "b"}}...{{end}}"#)
@@ -470,7 +470,7 @@ impl Template {
     /// # Examples
     ///
     /// ```
-    /// use go_template_rs::Template;
+    /// use go_template::Template;
     ///
     /// let tmpl = Template::new("t")
     ///     .parse(r#"{{define "header"}}...{{end}}{{define "footer"}}...{{end}}"#)
@@ -499,8 +499,8 @@ impl Template {
     /// # Examples
     ///
     /// ```
-    /// use go_template_rs::{Template, tmap};
-    /// use go_template_rs::parse::{ListNode, Node, TextNode, Pos};
+    /// use go_template::{Template, tmap};
+    /// use go_template::parse::{ListNode, Node, TextNode, Pos};
     ///
     /// let original = Template::new("t")
     ///     .parse(r#"{{define "x"}}original{{end}}{{template "x"}}"#)
@@ -543,7 +543,7 @@ impl Template {
 /// # Examples
 ///
 /// ```
-/// use go_template_rs::{execute, tmap};
+/// use go_template::{execute, tmap};
 ///
 /// let result = execute("Hello, {{.Name}}!", &tmap! { "Name" => "World" }).unwrap();
 /// assert_eq!(result, "Hello, World!");
@@ -568,7 +568,7 @@ pub fn execute(template_src: &str, data: &Value) -> Result<String> {
 /// # Examples
 ///
 /// ```
-/// use go_template_rs::{is_true, Value};
+/// use go_template::{is_true, Value};
 ///
 /// assert_eq!(is_true(&Value::Bool(true)), (true, true));
 /// assert_eq!(is_true(&Value::Int(0)), (false, true));
@@ -820,7 +820,7 @@ mod tests {
     #[test]
     fn test_parse_files() {
         use std::io::Write as _;
-        let dir = std::env::temp_dir().join("go_template_rs_test_parse_files");
+        let dir = std::env::temp_dir().join("go_template_test_parse_files");
         let _ = std::fs::create_dir_all(&dir);
 
         let header = dir.join("header.html");

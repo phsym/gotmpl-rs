@@ -9,7 +9,7 @@
 //! # Examples
 //!
 //! ```
-//! use go_template_rs::{tmap, ToValue};
+//! use go_template::{tmap, ToValue};
 //!
 //! let data = tmap! {
 //!     "Name" => "Alice",
@@ -32,7 +32,7 @@ use crate::error::Result;
 ///
 /// ```
 /// use std::sync::Arc;
-/// use go_template_rs::{Value, ValueFunc};
+/// use go_template::{Value, ValueFunc};
 ///
 /// let add: ValueFunc = Arc::new(|args| {
 ///     let sum: i64 = args.iter().filter_map(|a| a.as_int()).sum();
@@ -154,8 +154,8 @@ impl Value {
     /// # Examples
     ///
     /// ```
-    /// use go_template_rs::tmap;
-    /// use go_template_rs::Value;
+    /// use go_template::tmap;
+    /// use go_template::Value;
     ///
     /// let data = tmap! { "Name" => "Alice", "Empty" => Value::Nil };
     /// assert_eq!(data.field("Name"), Some(&Value::String("Alice".into())));
@@ -410,7 +410,7 @@ impl PartialOrd for Value {
 /// # Examples
 ///
 /// ```
-/// use go_template_rs::{Value, ToValue};
+/// use go_template::{Value, ToValue};
 ///
 /// assert_eq!(42i64.to_value(), Value::Int(42));
 /// assert_eq!("hello".to_value(), Value::String("hello".into()));
@@ -509,7 +509,7 @@ impl<T: ToValue> ToValue for Option<T> {
 ///
 /// ```
 /// use std::collections::HashMap;
-/// use go_template_rs::Value;
+/// use go_template::Value;
 ///
 /// let mut hm = HashMap::new();
 /// hm.insert("key".to_string(), Value::Int(42));
@@ -532,8 +532,8 @@ impl From<HashMap<String, Value>> for Value {
 /// # Examples
 ///
 /// ```
-/// use go_template_rs::{tmap, ToValue};
-/// use go_template_rs::Value;
+/// use go_template::{tmap, ToValue};
+/// use go_template::Value;
 ///
 /// let data = tmap! {
 ///     "name" => "Alice",

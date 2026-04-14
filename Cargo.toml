@@ -1,5 +1,5 @@
 [package]
-name = "go-template-rs"
+name = "go-template"
 version = "0.1.0"
 edition = "2024"
 description = "A Rust reimplementation of Go's text/template library"

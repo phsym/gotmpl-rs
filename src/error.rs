@@ -22,7 +22,7 @@ use thiserror::Error;
 /// # Examples
 ///
 /// ```
-/// use go_template_rs::Template;
+/// use go_template::Template;
 ///
 /// let result = Template::new("t").parse("{{.X");
 /// assert!(result.is_err());

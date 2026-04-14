@@ -6,15 +6,15 @@
 // These were originally in go_compat.rs but moved here to keep that file
 // exclusively for tests ported from Go's exec_test.go and multi_test.go.
 
-use go_template_rs::Value;
-use go_template_rs::{Template, tmap};
+use go_template::Value;
+use go_template::{Template, tmap};
 
 // ─── Value::Function variant and call builtin ─────────────────────────────
 
 #[test]
 fn test_call_function_value() {
     use std::sync::Arc;
-    let adder: go_template_rs::ValueFunc = Arc::new(|args: &[Value]| {
+    let adder: go_template::ValueFunc = Arc::new(|args: &[Value]| {
         let sum: i64 = args.iter().filter_map(|a| a.as_int()).sum();
         Ok(Value::Int(sum))
     });
@@ -31,7 +31,7 @@ fn test_call_function_value() {
 #[test]
 fn test_function_value_truthy() {
     use std::sync::Arc;
-    let f: go_template_rs::ValueFunc = Arc::new(|_| Ok(Value::Int(42)));
+    let f: go_template::ValueFunc = Arc::new(|_| Ok(Value::Int(42)));
     let data = Value::Function(f);
     assert!(data.is_truthy());
 }
@@ -160,7 +160,7 @@ fn test_clone_unparsed_template() {
 
 #[test]
 fn test_add_parse_tree_to_unparsed() {
-    use go_template_rs::parse::{ListNode, Node, Pos, TextNode};
+    use go_template::parse::{ListNode, Node, Pos, TextNode};
 
     // Should not panic
     let tmpl = Template::new("t").add_parse_tree(
