@@ -1,0 +1,242 @@
+# go-template-rs
+
+A faithful Rust reimplementation of Go's [`text/template`](https://pkg.go.dev/text/template) library.
+
+## Overview
+
+`go-template-rs` brings Go's powerful text templating language to Rust. It supports the full
+template syntax including pipelines, control flow, custom functions, template composition, and
+whitespace trimming — all with Go-compatible semantics.
+
+## Quick start
+
+```rust
+use go_template_rs::{Template, tmap};
+
+let data = tmap! { "Name" => "World" };
+let result = Template::new("hello")
+    .parse("Hello, {{.Name}}!")
+    .unwrap()
+    .execute_to_string(&data)
+    .unwrap();
+assert_eq!(result, "Hello, World!");
+```
+
+## Template syntax
+
+The template language follows Go's `text/template` specification. Actions are delimited by
+`{{` and `}}` (configurable via `.delims()`).
+
+### Data access
+
+```text
+{{.}}              Current context (dot)
+{{.Name}}          Field access on dot
+{{.User.Email}}    Nested field access
+{{$}}              Top-level data (root context)
+{{$x}}             Variable access
+{{$x.Name}}        Field access on variable
+```
+
+### Pipelines
+
+Commands can be chained with `|`, where each command's output becomes the last argument
+of the next:
+
+```text
+{{.Name | printf "%s!"}}
+{{"hello" | len | printf "%d chars"}}
+```
+
+### Control flow
+
+```text
+{{if .Condition}}...{{end}}
+{{if .Cond}}...{{else}}...{{end}}
+{{if eq .X 1}}...{{else if eq .X 2}}...{{else}}...{{end}}
+
+{{range .Items}}...{{end}}
+{{range .Items}}...{{else}}empty{{end}}
+{{range $i, $v := .Items}}{{$i}}: {{$v}}{{end}}
+{{range .Items}}{{if eq . 3}}{{break}}{{end}}{{.}}{{end}}
+{{range .Items}}{{if eq . 3}}{{continue}}{{end}}{{.}}{{end}}
+{{range 5}}{{.}} {{end}}
+
+{{with .Value}}...{{end}}
+{{with .Value}}...{{else}}fallback{{end}}
+```
+
+### Variables
+
+```text
+{{$x := .Name}}            Declare variable
+{{$x = "new value"}}       Assign to existing variable
+{{$i, $v := range .List}}  Range with index and value
+```
+
+### Template composition
+
+```text
+{{define "name"}}...{{end}}        Define a named template
+{{template "name" .}}              Invoke a named template
+{{block "name" .}}default{{end}}   Define and invoke (with default)
+```
+
+### Comments
+
+```text
+{{/* This is a comment */}}
+{{- /* Trimmed comment */ -}}
+```
+
+### Whitespace trimming
+
+Adding `-` inside a delimiter trims adjacent whitespace:
+
+```text
+{{- .X}}     Trim whitespace before
+{{.X -}}     Trim whitespace after
+{{- .X -}}   Trim both sides
+```
+
+## Built-in functions
+
+| Function                           | Description                                                                               |
+| ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| `print`                            | Concatenate args (spaces between non-string adjacent args)                                |
+| `printf`                           | Formatted output (`%s`, `%d`, `%f`, `%v`, `%q`, `%x`, `%o`, `%b`, `%e`, `%g`, `%t`, `%c`) |
+| `println`                          | Print with spaces between args, trailing newline                                          |
+| `len`                              | Length of string, list, or map                                                            |
+| `index`                            | Index into list or map: `index .List 0`, `index .Map "key"`                               |
+| `slice`                            | Slice a list or string: `slice .List 1 3`                                                 |
+| `call`                             | Call a function value: `call .Func arg1 arg2`                                             |
+| `eq`, `ne`, `lt`, `le`, `gt`, `ge` | Comparison operators. `eq` supports multi-arg: `eq .X 1 2 3`                              |
+| `and`                              | Short-circuit AND, returns first falsy arg or last arg                                    |
+| `or`                               | Short-circuit OR, returns first truthy arg or last arg                                    |
+| `not`                              | Boolean negation                                                                          |
+| `html`                             | HTML-escape a string                                                                      |
+| `js`                               | JavaScript-escape a string                                                                |
+| `urlquery`                         | URL query-escape a string                                                                 |
+
+## Custom functions
+
+Register functions before parsing:
+
+```rust
+use go_template_rs::{Template, tmap};
+use go_template_rs::Value;
+
+let result = Template::new("test")
+    .func("upper", |args| {
+        match args.first() {
+            Some(Value::String(s)) => Ok(Value::String(s.to_uppercase())),
+            _ => Ok(Value::Nil),
+        }
+    })
+    .parse("{{.Name | upper}}")
+    .unwrap()
+    .execute_to_string(&tmap! { "Name" => "hello" })
+    .unwrap();
+assert_eq!(result, "HELLO");
+```
+
+## Function values and `call`
+
+The `Value::Function` variant allows passing callable values through templates:
+
+```rust
+use std::sync::Arc;
+use go_template_rs::{Template, tmap};
+use go_template_rs::{Value, ValueFunc};
+
+let adder: ValueFunc = Arc::new(|args| {
+    let sum: i64 = args.iter().filter_map(|a| a.as_int()).sum();
+    Ok(Value::Int(sum))
+});
+
+let result = Template::new("test")
+    .func("getAdder", move |_| Ok(Value::Function(adder.clone())))
+    .parse("{{call (getAdder) 3 4}}")
+    .unwrap()
+    .execute_to_string(&tmap!{})
+    .unwrap();
+assert_eq!(result, "7");
+```
+
+## Options
+
+```rust
+use go_template_rs::Template;
+
+let tmpl = Template::new("t")
+    .option("missingkey=error")   // error on missing map keys
+    .delims("<<", ">>")           // custom delimiters
+    .parse("<< .Name >>")
+    .unwrap();
+```
+
+### Missing key behavior
+
+| Option               | Behavior                 |
+| -------------------- | ------------------------ |
+| `missingkey=invalid` | Return `<nil>` (default) |
+| `missingkey=zero`    | Return `<nil>`           |
+| `missingkey=error`   | Return an error          |
+
+## Number literals
+
+Go-compatible number literal syntax is supported in templates:
+
+```text
+{{42}}          Decimal
+{{3.14}}        Float
+{{0xFF}}        Hexadecimal
+{{0o77}}        Octal
+{{0b1010}}      Binary
+{{1_000_000}}   Underscore separators
+{{'a'}}         Character literal (emits code point: 97)
+```
+
+## Data model
+
+Template data uses the `Value` enum:
+
+| Variant                        | Rust type     | Go equivalent    |
+| ------------------------------ | ------------- | ---------------- |
+| `Nil`                          | —             | `nil`            |
+| `Bool(bool)`                   | `bool`        | `bool`           |
+| `Int(i64)`                     | `i64`         | `int`            |
+| `Float(f64)`                   | `f64`         | `float64`        |
+| `String(String)`               | `String`      | `string`         |
+| `List(Vec<Value>)`             | `Vec<Value>`  | `[]any`          |
+| `Map(BTreeMap<String, Value>)` | `BTreeMap`    | `map[string]any` |
+| `Function(ValueFunc)`          | `Arc<dyn Fn>` | `func(...)`      |
+
+The `tmap!` macro provides a convenient way to build data maps:
+
+```rust
+use go_template_rs::{tmap, ToValue};
+
+let data = tmap! {
+    "Name" => "Alice",
+    "Age" => 30i64,
+    "Scores" => vec![95i64, 87, 92],
+    "Address" => tmap! {
+        "City" => "Paris",
+    },
+};
+```
+
+## Differences from Go
+
+Since Rust has no runtime reflection, some Go features are not applicable:
+
+- **No struct field access** — use `Value::Map` instead of structs
+- **No method calls** — register functions via `.func()` instead
+- **No pointer/interface indirection** — `Value` is always concrete
+- **No complex numbers or channels** — not in the `Value` enum
+- **No `iter.Seq` / `iter.Seq2`** — use `Value::List` or `Value::Map`
+
+Everything else matches Go's behavior, including truthiness semantics, whitespace trimming,
+short-circuit `and`/`or`, `break`/`continue` in range, template composition, and all
+built-in functions.
