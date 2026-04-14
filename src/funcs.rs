@@ -17,11 +17,11 @@
 //! | Data | `len`, `index`, `slice`, `call` |
 //! | Escaping | `html`, `js`, `urlquery` |
 
+use crate::error::{Result, TemplateError};
+use crate::value::Value;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
-use crate::error::{TemplateError, Result};
-use crate::value::Value;
 
 /// The function type used by the template engine.
 ///
@@ -46,36 +46,58 @@ pub fn builtins() -> HashMap<String, Func> {
     // ─── Comparison operators ────────────────────────────────────────
     // Go's eq can take 2+ args: eq x y z means x==y || x==z
 
-    m.insert("eq".into(), Arc::new(|args: &[Value]| {
-        check_min_args("eq", args, 2)?;
-        let first = &args[0];
-        Ok(Value::Bool(args[1..].iter().any(|a| first == a)))
-    }));
+    m.insert(
+        "eq".into(),
+        Arc::new(|args: &[Value]| {
+            check_min_args("eq", args, 2)?;
+            let first = &args[0];
+            Ok(Value::Bool(args[1..].iter().any(|a| first == a)))
+        }),
+    );
 
-    m.insert("ne".into(), Arc::new(|args: &[Value]| {
-        check_args("ne", args, 2)?;
-        Ok(Value::Bool(args[0] != args[1]))
-    }));
+    m.insert(
+        "ne".into(),
+        Arc::new(|args: &[Value]| {
+            check_args("ne", args, 2)?;
+            Ok(Value::Bool(args[0] != args[1]))
+        }),
+    );
 
-    m.insert("lt".into(), Arc::new(|args: &[Value]| {
-        check_args("lt", args, 2)?;
-        Ok(Value::Bool(args[0].partial_cmp(&args[1]) == Some(std::cmp::Ordering::Less)))
-    }));
+    m.insert(
+        "lt".into(),
+        Arc::new(|args: &[Value]| {
+            check_args("lt", args, 2)?;
+            Ok(Value::Bool(
+                args[0].partial_cmp(&args[1]) == Some(std::cmp::Ordering::Less),
+            ))
+        }),
+    );
 
-    m.insert("le".into(), Arc::new(|args: &[Value]| {
-        check_args("le", args, 2)?;
-        Ok(Value::Bool(args[0] <= args[1]))
-    }));
+    m.insert(
+        "le".into(),
+        Arc::new(|args: &[Value]| {
+            check_args("le", args, 2)?;
+            Ok(Value::Bool(args[0] <= args[1]))
+        }),
+    );
 
-    m.insert("gt".into(), Arc::new(|args: &[Value]| {
-        check_args("gt", args, 2)?;
-        Ok(Value::Bool(args[0].partial_cmp(&args[1]) == Some(std::cmp::Ordering::Greater)))
-    }));
+    m.insert(
+        "gt".into(),
+        Arc::new(|args: &[Value]| {
+            check_args("gt", args, 2)?;
+            Ok(Value::Bool(
+                args[0].partial_cmp(&args[1]) == Some(std::cmp::Ordering::Greater),
+            ))
+        }),
+    );
 
-    m.insert("ge".into(), Arc::new(|args: &[Value]| {
-        check_args("ge", args, 2)?;
-        Ok(Value::Bool(args[0] >= args[1]))
-    }));
+    m.insert(
+        "ge".into(),
+        Arc::new(|args: &[Value]| {
+            check_args("ge", args, 2)?;
+            Ok(Value::Bool(args[0] >= args[1]))
+        }),
+    );
 
     // ─── Logic ───────────────────────────────────────────────────────
     // and: returns first falsy arg, or last arg if all truthy
@@ -86,204 +108,168 @@ pub fn builtins() -> HashMap<String, Func> {
     // executor calls them with pre-evaluated args only when not
     // short-circuiting (which shouldn't happen in normal flow).
 
-    m.insert("and".into(), Arc::new(|args: &[Value]| {
-        check_min_args("and", args, 1)?;
-        for arg in args {
-            if !arg.is_truthy() {
-                return Ok(arg.clone());
+    m.insert(
+        "and".into(),
+        Arc::new(|args: &[Value]| {
+            check_min_args("and", args, 1)?;
+            for arg in args {
+                if !arg.is_truthy() {
+                    return Ok(arg.clone());
+                }
             }
-        }
-        Ok(args.last().unwrap().clone())
-    }));
+            Ok(args.last().unwrap().clone())
+        }),
+    );
 
-    m.insert("or".into(), Arc::new(|args: &[Value]| {
-        check_min_args("or", args, 1)?;
-        for arg in args {
-            if arg.is_truthy() {
-                return Ok(arg.clone());
+    m.insert(
+        "or".into(),
+        Arc::new(|args: &[Value]| {
+            check_min_args("or", args, 1)?;
+            for arg in args {
+                if arg.is_truthy() {
+                    return Ok(arg.clone());
+                }
             }
-        }
-        Ok(args.last().unwrap().clone())
-    }));
+            Ok(args.last().unwrap().clone())
+        }),
+    );
 
-    m.insert("not".into(), Arc::new(|args: &[Value]| {
-        check_args("not", args, 1)?;
-        Ok(Value::Bool(!args[0].is_truthy()))
-    }));
+    m.insert(
+        "not".into(),
+        Arc::new(|args: &[Value]| {
+            check_args("not", args, 1)?;
+            Ok(Value::Bool(!args[0].is_truthy()))
+        }),
+    );
 
     // ─── Output formatting ──────────────────────────────────────────
     // Go's fmt.Sprint adds spaces between adjacent non-string operands.
 
-    m.insert("print".into(), Arc::new(|args: &[Value]| {
-        let mut result = std::string::String::new();
-        for (i, arg) in args.iter().enumerate() {
-            if i > 0 && needs_space(&args[i - 1], arg) {
-                result.push(' ');
+    m.insert(
+        "print".into(),
+        Arc::new(|args: &[Value]| {
+            let mut result = std::string::String::new();
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 && needs_space(&args[i - 1], arg) {
+                    result.push(' ');
+                }
+                write!(result, "{}", arg).unwrap();
             }
-            write!(result, "{}", arg).unwrap();
-        }
-        Ok(Value::String(result))
-    }));
+            Ok(Value::String(result))
+        }),
+    );
 
-    m.insert("println".into(), Arc::new(|args: &[Value]| {
-        let s: Vec<std::string::String> = args.iter().map(|a| format!("{}", a)).collect();
-        Ok(Value::String(format!("{}\n", s.join(" "))))
-    }));
+    m.insert(
+        "println".into(),
+        Arc::new(|args: &[Value]| {
+            let s: Vec<std::string::String> = args.iter().map(|a| format!("{}", a)).collect();
+            Ok(Value::String(format!("{}\n", s.join(" "))))
+        }),
+    );
 
-    m.insert("printf".into(), Arc::new(|args: &[Value]| {
-        check_min_args("printf", args, 1)?;
-        let fmt_str = match &args[0] {
-            Value::String(s) => s.clone(),
-            other => return Err(TemplateError::Exec(
-                format!("printf: first arg must be string, got {}", other)
-            )),
-        };
-        let result = simple_sprintf(&fmt_str, &args[1..])?;
-        Ok(Value::String(result))
-    }));
+    m.insert(
+        "printf".into(),
+        Arc::new(|args: &[Value]| {
+            check_min_args("printf", args, 1)?;
+            let fmt_str = match &args[0] {
+                Value::String(s) => s.clone(),
+                other => {
+                    return Err(TemplateError::Exec(format!(
+                        "printf: first arg must be string, got {}",
+                        other
+                    )));
+                }
+            };
+            let result = simple_sprintf(&fmt_str, &args[1..])?;
+            Ok(Value::String(result))
+        }),
+    );
 
     // ─── Data access ─────────────────────────────────────────────────
 
-    m.insert("len".into(), Arc::new(|args: &[Value]| {
-        check_args("len", args, 1)?;
-        match args[0].len() {
-            Some(n) => Ok(Value::Int(n as i64)),
-            None => Err(TemplateError::Exec(
-                format!("len: cannot take length of {}", args[0])
-            )),
-        }
-    }));
-
-    m.insert("index".into(), Arc::new(|args: &[Value]| {
-        check_min_args("index", args, 2)?;
-        let mut val = args[0].clone();
-        for idx in &args[1..] {
-            val = match (&val, idx) {
-                (Value::List(v), Value::Int(i)) => {
-                    let i = *i as usize;
-                    if i >= v.len() {
-                        return Err(TemplateError::Exec(
-                            format!("index out of range [{}] with length {}", i, v.len())
-                        ));
-                    }
-                    v[i].clone()
-                }
-                (Value::List(_), other) => {
-                    return Err(TemplateError::Exec(
-                        format!("cannot index list with type {}", type_name(other))
-                    ));
-                }
-                (Value::Map(m), Value::String(k)) => {
-                    m.get(k.as_str()).cloned().unwrap_or(Value::Nil)
-                }
-                (Value::Map(_), other) => {
-                    return Err(TemplateError::Exec(
-                        format!("cannot index map with type {}", type_name(other))
-                    ));
-                }
-                (Value::Nil, _) => Value::Nil,
-                (other, _) => {
-                    return Err(TemplateError::Exec(
-                        format!("cannot index type {}", type_name(other))
-                    ));
-                }
-            };
-        }
-        Ok(val)
-    }));
-
-    // slice: Go allows 1-4 args: slice x, slice x i, slice x i j, slice x i j k
-    m.insert("slice".into(), Arc::new(|args: &[Value]| {
-        check_min_args("slice", args, 1)?;
-        match &args[0] {
-            Value::List(v) => {
-                let start = args.get(1)
-                    .and_then(Value::as_int)
-                    .unwrap_or(0) as usize;
-                let end = args.get(2)
-                    .and_then(Value::as_int)
-                    .map(|n| n as usize)
-                    .unwrap_or(v.len());
-                if start > v.len() || end > v.len() || start > end {
-                    return Err(TemplateError::Exec(
-                        format!("slice: index out of range [{}:{}] with length {}", start, end, v.len())
-                    ));
-                }
-                Ok(Value::List(v[start..end].to_vec()))
+    m.insert(
+        "len".into(),
+        Arc::new(|args: &[Value]| {
+            check_args("len", args, 1)?;
+            match args[0].len() {
+                Some(n) => Ok(Value::Int(n as i64)),
+                None => Err(TemplateError::Exec(format!(
+                    "len: cannot take length of {}",
+                    args[0]
+                ))),
             }
-            Value::String(s) => {
-                let start = args.get(1)
-                    .and_then(Value::as_int)
-                    .unwrap_or(0) as usize;
-                let end = args.get(2)
-                    .and_then(Value::as_int)
-                    .map(|n| n as usize)
-                    .unwrap_or(s.len());
-                if start > s.len() || end > s.len() || start > end {
-                    return Err(TemplateError::Exec(
-                        format!("slice: index out of range [{}:{}] with length {}", start, end, s.len())
-                    ));
-                }
-                if !s.is_char_boundary(start) || !s.is_char_boundary(end) {
-                    return Err(TemplateError::Exec(
-                        "slice: index not on UTF-8 character boundary".to_string()
-                    ));
-                }
-                Ok(Value::String(s[start..end].to_string()))
+        }),
+    );
+
+    m.insert(
+        "index".into(),
+        Arc::new(|args: &[Value]| {
+            check_min_args("index", args, 2)?;
+            let mut val = args[0].clone();
+            for idx in &args[1..] {
+                val = val.index(idx)?;
             }
-            other => Err(TemplateError::Exec(
-                format!("slice: cannot slice {}", other)
-            )),
-        }
-    }));
+            Ok(val)
+        }),
+    );
+
+    // slice: Go allows 1-4 args: slice x, slice x i, slice x i j
+    m.insert(
+        "slice".into(),
+        Arc::new(|args: &[Value]| {
+            check_min_args("slice", args, 1)?;
+            let start = args.get(1).and_then(Value::as_int);
+            let end = args.get(2).and_then(Value::as_int);
+            args[0].slice(start, end)
+        }),
+    );
 
     // call: invoke a function-typed value
-    m.insert("call".into(), Arc::new(|args: &[Value]| {
-        check_min_args("call", args, 1)?;
-        match &args[0] {
-            Value::Function(f) => f(&args[1..]),
-            Value::Nil => Err(TemplateError::Exec("call of nil".into())),
-            other => Err(TemplateError::Exec(
-                format!("call: non-function value of type {}", type_name(other))
-            )),
-        }
-    }));
+    m.insert(
+        "call".into(),
+        Arc::new(|args: &[Value]| {
+            check_min_args("call", args, 1)?;
+            match &args[0] {
+                Value::Function(f) => f(&args[1..]),
+                Value::Nil => Err(TemplateError::Exec("call of nil".into())),
+                other => Err(TemplateError::Exec(format!(
+                    "call: non-function value of type {}",
+                    other.type_name()
+                ))),
+            }
+        }),
+    );
 
     // ─── HTML/JS/URL escaping ────────────────────────────────────────
 
-    m.insert("html".into(), Arc::new(|args: &[Value]| {
-        check_args("html", args, 1)?;
-        let s = format!("{}", args[0]);
-        Ok(Value::String(html_escape(&s)))
-    }));
+    m.insert(
+        "html".into(),
+        Arc::new(|args: &[Value]| {
+            check_args("html", args, 1)?;
+            let s = format!("{}", args[0]);
+            Ok(Value::String(html_escape(&s)))
+        }),
+    );
 
-    m.insert("js".into(), Arc::new(|args: &[Value]| {
-        check_args("js", args, 1)?;
-        let s = format!("{}", args[0]);
-        Ok(Value::String(js_escape(&s)))
-    }));
+    m.insert(
+        "js".into(),
+        Arc::new(|args: &[Value]| {
+            check_args("js", args, 1)?;
+            let s = format!("{}", args[0]);
+            Ok(Value::String(js_escape(&s)))
+        }),
+    );
 
-    m.insert("urlquery".into(), Arc::new(|args: &[Value]| {
-        check_args("urlquery", args, 1)?;
-        let s = format!("{}", args[0]);
-        Ok(Value::String(url_encode(&s)))
-    }));
+    m.insert(
+        "urlquery".into(),
+        Arc::new(|args: &[Value]| {
+            check_args("urlquery", args, 1)?;
+            let s = format!("{}", args[0]);
+            Ok(Value::String(url_encode(&s)))
+        }),
+    );
 
     m
-}
-
-/// Return a short type name for error messages.
-fn type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Nil => "nil",
-        Value::Bool(_) => "bool",
-        Value::Int(_) => "int",
-        Value::Float(_) => "float64",
-        Value::String(_) => "string",
-        Value::List(_) => "list",
-        Value::Map(_) => "map",
-        Value::Function(_) => "func",
-    }
 }
 
 /// Go's fmt.Sprint adds spaces between adjacent non-string operands.
@@ -333,17 +319,37 @@ struct FmtSpec {
 impl FmtSpec {
     fn parse(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Self {
         let mut spec = FmtSpec {
-            left_align: false, plus: false, space: false,
-            hash: false, zero: false, width: None, precision: None,
+            left_align: false,
+            plus: false,
+            space: false,
+            hash: false,
+            zero: false,
+            width: None,
+            precision: None,
         };
         // Flags
         loop {
             match chars.peek() {
-                Some('-') => { spec.left_align = true; chars.next(); }
-                Some('+') => { spec.plus = true; chars.next(); }
-                Some(' ') => { spec.space = true; chars.next(); }
-                Some('#') => { spec.hash = true; chars.next(); }
-                Some('0') => { spec.zero = true; chars.next(); }
+                Some('-') => {
+                    spec.left_align = true;
+                    chars.next();
+                }
+                Some('+') => {
+                    spec.plus = true;
+                    chars.next();
+                }
+                Some(' ') => {
+                    spec.space = true;
+                    chars.next();
+                }
+                Some('#') => {
+                    spec.hash = true;
+                    chars.next();
+                }
+                Some('0') => {
+                    spec.zero = true;
+                    chars.next();
+                }
                 _ => break,
             }
         }
@@ -352,7 +358,9 @@ impl FmtSpec {
         while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
             w.push(chars.next().unwrap());
         }
-        if !w.is_empty() { spec.width = w.parse().ok(); }
+        if !w.is_empty() {
+            spec.width = w.parse().ok();
+        }
         // Precision
         if chars.peek() == Some(&'.') {
             chars.next();
@@ -360,7 +368,11 @@ impl FmtSpec {
             while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
                 p.push(chars.next().unwrap());
             }
-            spec.precision = Some(if p.is_empty() { 0 } else { p.parse().unwrap_or(0) });
+            spec.precision = Some(if p.is_empty() {
+                0
+            } else {
+                p.parse().unwrap_or(0)
+            });
         }
         spec
     }
@@ -392,9 +404,17 @@ impl FmtSpec {
     /// Format a signed integer with sign flags applied.
     fn format_signed(&self, n: i64) -> std::string::String {
         if self.plus {
-            if n >= 0 { format!("+{}", n) } else { format!("{}", n) }
+            if n >= 0 {
+                format!("+{}", n)
+            } else {
+                format!("{}", n)
+            }
         } else if self.space {
-            if n >= 0 { format!(" {}", n) } else { format!("{}", n) }
+            if n >= 0 {
+                format!(" {}", n)
+            } else {
+                format!("{}", n)
+            }
         } else {
             format!("{}", n)
         }
@@ -438,7 +458,13 @@ fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> std::string::String {
         _ => unreachable!(),
     };
     let prefix = if spec.hash {
-        match base { "x" => "0x", "X" => "0X", "o" => "0o", "b" => "0b", _ => "" }
+        match base {
+            "x" => "0x",
+            "X" => "0X",
+            "o" => "0o",
+            "b" => "0b",
+            _ => "",
+        }
     } else {
         ""
     };
@@ -464,7 +490,10 @@ fn simple_sprintf(fmt_str: &str, args: &[Value]) -> Result<std::string::String> 
 
         let verb = match chars.next() {
             Some(v) => v,
-            None => { result.push('%'); break; }
+            None => {
+                result.push('%');
+                break;
+            }
         };
 
         if verb == '%' {
@@ -498,9 +527,17 @@ fn simple_sprintf(fmt_str: &str, args: &[Value]) -> Result<std::string::String> 
                 let f = arg.as_float().unwrap_or(0.0);
                 let prec = spec.precision.unwrap_or(6);
                 let s = if spec.plus {
-                    if f >= 0.0 { format!("+{:.prec$}", f) } else { format!("{:.prec$}", f) }
+                    if f >= 0.0 {
+                        format!("+{:.prec$}", f)
+                    } else {
+                        format!("{:.prec$}", f)
+                    }
                 } else if spec.space {
-                    if f >= 0.0 { format!(" {:.prec$}", f) } else { format!("{:.prec$}", f) }
+                    if f >= 0.0 {
+                        format!(" {:.prec$}", f)
+                    } else {
+                        format!("{:.prec$}", f)
+                    }
                 } else {
                     format!("{:.prec$}", f)
                 };

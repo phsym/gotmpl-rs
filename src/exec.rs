@@ -17,9 +17,9 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use crate::error::{TemplateError, Result};
+use crate::error::{Result, TemplateError};
 use crate::funcs::Func;
-use crate::parse::{ListNode, Node, BranchNode, TemplateNode, PipeNode, CommandNode, Expr};
+use crate::parse::{BranchNode, CommandNode, Expr, ListNode, Node, PipeNode, TemplateNode};
 use crate::value::Value;
 
 /// Maximum recursion depth for `{{template}}` calls.
@@ -32,8 +32,7 @@ const MAX_EXEC_DEPTH: usize = 1_000;
 ///
 /// Set via [`Template::option`](crate::Template::option) with
 /// `"missingkey=invalid"`, `"missingkey=zero"`, or `"missingkey=error"`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum MissingKey {
     /// Return [`Value::Nil`] for missing keys (the default).
     #[default]
@@ -44,26 +43,49 @@ pub enum MissingKey {
     Error,
 }
 
-/// Internal control-flow signal for `{{break}}` and `{{continue}}`.
+// ─── Internal control-flow signaling ────────────────────────────────────
+//
+// `{{break}}` and `{{continue}}` are not errors — they're control-flow
+// signals caught by the range walker. We keep them out of the public
+// `TemplateError` enum by using a private error type for the executor's
+// internal methods.
+
+/// Private error type that carries either a real [`TemplateError`] or an
+/// internal break/continue signal. Only the public [`Executor::execute`]
+/// method converts this into a [`TemplateError`] for the caller.
 ///
-/// Propagated as a [`TemplateError::ControlFlow`] and caught by the range walker.
-/// This type should never appear in errors returned to users.
-#[derive(Debug)]
-pub enum ControlFlow {
+/// The `TemplateError` is boxed to keep `ExecSignal` small (one word + tag)
+/// so that deeply recursive `walk` calls don't blow the stack.
+enum ExecSignal {
+    /// A real template error to propagate to the caller.
+    Err(Box<TemplateError>),
+    /// `{{break}}` — exit the innermost range loop.
     Break,
+    /// `{{continue}}` — skip to the next range iteration.
     Continue,
 }
 
-impl std::fmt::Display for ControlFlow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ControlFlow::Break => write!(f, "break"),
-            ControlFlow::Continue => write!(f, "continue"),
-        }
+impl ExecSignal {
+    /// Shorthand for wrapping a `TemplateError`.
+    fn err(e: TemplateError) -> Self {
+        ExecSignal::Err(Box::new(e))
     }
 }
 
-impl std::error::Error for ControlFlow {}
+impl From<TemplateError> for ExecSignal {
+    fn from(e: TemplateError) -> Self {
+        ExecSignal::Err(Box::new(e))
+    }
+}
+
+impl From<std::io::Error> for ExecSignal {
+    fn from(e: std::io::Error) -> Self {
+        ExecSignal::Err(Box::new(TemplateError::Io(e)))
+    }
+}
+
+/// Internal result alias used by the executor's private methods.
+type ExecResult<T> = std::result::Result<T, ExecSignal>;
 
 /// Variable scope: a stack of name→value mappings.
 /// New scopes are pushed for range/with blocks.
@@ -145,11 +167,11 @@ macro_rules! range_loop {
             }
             match $self.walk($w, &$branch.body, &item) {
                 Ok(()) => {}
-                Err(TemplateError::ControlFlow(ControlFlow::Break)) => {
+                Err(ExecSignal::Break) => {
                     $self.vars.pop();
                     break;
                 }
-                Err(TemplateError::ControlFlow(ControlFlow::Continue)) => {
+                Err(ExecSignal::Continue) => {
                     $self.vars.pop();
                     continue;
                 }
@@ -169,10 +191,7 @@ impl<'a> Executor<'a> {
     /// The `funcs` map should contain all [built-in](crate::funcs::builtins) and
     /// user-defined functions. The `templates` map holds named templates from
     /// `{{define}}` blocks.
-    pub fn new(
-        funcs: &'a HashMap<String, Func>,
-        templates: &'a HashMap<String, ListNode>,
-    ) -> Self {
+    pub fn new(funcs: &'a HashMap<String, Func>, templates: &'a HashMap<String, ListNode>) -> Self {
         Executor {
             funcs,
             templates,
@@ -201,31 +220,27 @@ impl<'a> Executor<'a> {
         tree: &ListNode,
         dot: &Value,
     ) -> Result<()> {
-        // Set $  to the initial dot value (Go does this)
+        // Set $ to the initial dot value (Go does this)
         self.vars.set("$", dot.clone());
-        self.walk(writer, tree, dot)
+        self.walk(writer, tree, dot).map_err(|sig| match sig {
+            ExecSignal::Err(e) => *e,
+            ExecSignal::Break => TemplateError::Exec("unexpected break outside of range".into()),
+            ExecSignal::Continue => {
+                TemplateError::Exec("unexpected continue outside of range".into())
+            }
+        })
     }
 
     // ─── AST walker ──────────────────────────────────────────────────
 
-    fn walk<W: Write>(
-        &mut self,
-        w: &mut W,
-        list: &ListNode,
-        dot: &Value,
-    ) -> Result<()> {
+    fn walk<W: Write>(&mut self, w: &mut W, list: &ListNode, dot: &Value) -> ExecResult<()> {
         for node in &list.nodes {
             self.walk_node(w, node, dot)?;
         }
         Ok(())
     }
 
-    fn walk_node<W: Write>(
-        &mut self,
-        w: &mut W,
-        node: &Node,
-        dot: &Value,
-    ) -> Result<()> {
+    fn walk_node<W: Write>(&mut self, w: &mut W, node: &Node, dot: &Value) -> ExecResult<()> {
         match node {
             Node::Text(text) => {
                 w.write_all(text.text.as_bytes())?;
@@ -246,19 +261,14 @@ impl<'a> Executor<'a> {
             Node::Template(tmpl) => self.walk_template(w, tmpl, dot),
             Node::Define(_) => Ok(()), // defines are collected at parse time
             Node::List(list) => self.walk(w, list, dot),
-            Node::Break(_) => Err(TemplateError::ControlFlow(ControlFlow::Break)),
-            Node::Continue(_) => Err(TemplateError::ControlFlow(ControlFlow::Continue)),
+            Node::Break(_) => Err(ExecSignal::Break),
+            Node::Continue(_) => Err(ExecSignal::Continue),
         }
     }
 
     // ─── Control flow ────────────────────────────────────────────────
 
-    fn walk_if<W: Write>(
-        &mut self,
-        w: &mut W,
-        branch: &BranchNode,
-        dot: &Value,
-    ) -> Result<()> {
+    fn walk_if<W: Write>(&mut self, w: &mut W, branch: &BranchNode, dot: &Value) -> ExecResult<()> {
         let val = self.eval_pipeline(dot, &branch.pipe)?;
         if val.is_truthy() {
             self.vars.push();
@@ -280,7 +290,7 @@ impl<'a> Executor<'a> {
         w: &mut W,
         branch: &BranchNode,
         dot: &Value,
-    ) -> Result<()> {
+    ) -> ExecResult<()> {
         let val = self.eval_pipeline(dot, &branch.pipe)?;
         if val.is_truthy() {
             // With sets dot to the pipeline value
@@ -300,7 +310,7 @@ impl<'a> Executor<'a> {
         w: &mut W,
         branch: &BranchNode,
         dot: &Value,
-    ) -> Result<()> {
+    ) -> ExecResult<()> {
         let val = self.eval_pipeline(dot, &branch.pipe)?;
 
         match &val {
@@ -310,8 +320,14 @@ impl<'a> Executor<'a> {
                 }
             }
             Value::List(items) => {
-                range_loop!(self, w, branch,
-                    items.iter().enumerate().map(|(i, v)| (Value::Int(i as i64), v.clone()))
+                range_loop!(
+                    self,
+                    w,
+                    branch,
+                    items
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| (Value::Int(i as i64), v.clone()))
                 );
             }
             Value::Map(map) if map.is_empty() => {
@@ -320,8 +336,12 @@ impl<'a> Executor<'a> {
                 }
             }
             Value::Map(map) => {
-                range_loop!(self, w, branch,
-                    map.iter().map(|(k, v)| (Value::String(k.clone()), v.clone()))
+                range_loop!(
+                    self,
+                    w,
+                    branch,
+                    map.iter()
+                        .map(|(k, v)| (Value::String(k.clone()), v.clone()))
                 );
             }
             Value::Int(n) => {
@@ -332,7 +352,10 @@ impl<'a> Executor<'a> {
                         self.walk(w, else_body, dot)?;
                     }
                 } else {
-                    range_loop!(self, w, branch,
+                    range_loop!(
+                        self,
+                        w,
+                        branch,
                         (0..count).map(|i| (Value::Int(i), Value::Int(i)))
                     );
                 }
@@ -344,7 +367,7 @@ impl<'a> Executor<'a> {
                 }
             }
             other => {
-                return Err(TemplateError::NotIterable(format!("{}", other)));
+                return Err(TemplateError::NotIterable(format!("{}", other)).into());
             }
         }
 
@@ -356,13 +379,14 @@ impl<'a> Executor<'a> {
         w: &mut W,
         tmpl: &TemplateNode,
         dot: &Value,
-    ) -> Result<()> {
+    ) -> ExecResult<()> {
         self.depth += 1;
         if self.depth > MAX_EXEC_DEPTH {
             return Err(TemplateError::Exec(format!(
                 "exceeded maximum template call depth ({})",
                 MAX_EXEC_DEPTH
-            )));
+            ))
+            .into());
         }
 
         let new_dot = if let Some(ref pipe) = tmpl.pipe {
@@ -374,7 +398,7 @@ impl<'a> Executor<'a> {
         let tree = self
             .templates
             .get(&tmpl.name)
-            .ok_or_else(|| TemplateError::UndefinedTemplate(tmpl.name.clone()))?
+            .ok_or_else(|| ExecSignal::err(TemplateError::UndefinedTemplate(tmpl.name.clone())))?
             .clone();
 
         self.vars.push();
@@ -387,7 +411,7 @@ impl<'a> Executor<'a> {
 
     // ─── Pipeline and expression evaluation ──────────────────────────
 
-    fn eval_pipeline(&mut self, dot: &Value, pipe: &PipeNode) -> Result<Value> {
+    fn eval_pipeline(&mut self, dot: &Value, pipe: &PipeNode) -> ExecResult<Value> {
         let mut val = Value::Nil;
 
         for (i, cmd) in pipe.commands.iter().enumerate() {
@@ -415,7 +439,7 @@ impl<'a> Executor<'a> {
         dot: &Value,
         cmd: &CommandNode,
         piped: Option<Value>,
-    ) -> Result<Value> {
+    ) -> ExecResult<Value> {
         let first = &cmd.args[0];
 
         // If the first arg is an identifier, it's a function call
@@ -430,20 +454,21 @@ impl<'a> Executor<'a> {
         // If the first arg is a Chain with an Identifier inside, it's a function call
         // with field access on the result (e.g., mapOfThree.three)
         if let Expr::Chain(_, inner, fields) = first
-            && let Expr::Identifier(_, name) = inner.as_ref() {
-                if name == "and" || name == "or" {
-                    let mut val = self.eval_short_circuit(dot, name, &cmd.args[1..], piped)?;
-                    for field in fields {
-                        val = self.field_access(&val, field)?;
-                    }
-                    return Ok(val);
-                }
-                let mut val = self.eval_function_call(dot, name, &cmd.args[1..], piped)?;
+            && let Expr::Identifier(_, name) = inner.as_ref()
+        {
+            if name == "and" || name == "or" {
+                let mut val = self.eval_short_circuit(dot, name, &cmd.args[1..], piped)?;
                 for field in fields {
                     val = self.field_access(&val, field)?;
                 }
                 return Ok(val);
             }
+            let mut val = self.eval_function_call(dot, name, &cmd.args[1..], piped)?;
+            for field in fields {
+                val = self.field_access(&val, field)?;
+            }
+            return Ok(val);
+        }
 
         // Single expression: evaluate it
         if cmd.args.len() == 1 && piped.is_none() {
@@ -467,7 +492,7 @@ impl<'a> Executor<'a> {
         name: &str,
         arg_exprs: &[Expr],
         piped: Option<Value>,
-    ) -> Result<Value> {
+    ) -> ExecResult<Value> {
         // Build the full list of expressions: explicit args + piped value
         // Piped value becomes the last argument
         let is_and = name == "and";
@@ -479,7 +504,8 @@ impl<'a> Executor<'a> {
                 name: name.to_string(),
                 expected: 1,
                 got: 0,
-            });
+            }
+            .into());
         }
 
         let mut last = Value::Nil;
@@ -515,11 +541,11 @@ impl<'a> Executor<'a> {
         name: &str,
         arg_exprs: &[Expr],
         piped: Option<Value>,
-    ) -> Result<Value> {
+    ) -> ExecResult<Value> {
         let func = self
             .funcs
             .get(name)
-            .ok_or_else(|| TemplateError::UndefinedFunction(name.to_string()))?;
+            .ok_or_else(|| ExecSignal::err(TemplateError::UndefinedFunction(name.to_string())))?;
 
         let mut args: Vec<Value> = Vec::new();
         for expr in arg_exprs {
@@ -531,28 +557,24 @@ impl<'a> Executor<'a> {
             args.push(piped_val);
         }
 
-        func(&args)
+        func(&args).map_err(ExecSignal::from)
     }
 
     /// Access a field on a value, respecting missingkey option.
-    fn field_access(&self, val: &Value, name: &str) -> Result<Value> {
-        match val {
-            Value::Map(m) => {
-                match m.get(name) {
-                    Some(v) => Ok(v.clone()),
-                    None => match self.missing_key {
-                        MissingKey::Error => Err(TemplateError::Exec(
-                            format!("map has no entry for key {:?}", name)
-                        )),
-                        _ => Ok(Value::Nil),
-                    },
+    fn field_access(&self, val: &Value, name: &str) -> ExecResult<Value> {
+        match val.field(name) {
+            Some(v) => Ok(v.clone()),
+            None if matches!(val, Value::Map(_)) => match self.missing_key {
+                MissingKey::Error => {
+                    Err(TemplateError::Exec(format!("map has no entry for key {:?}", name)).into())
                 }
-            }
-            _ => Ok(Value::Nil),
+                _ => Ok(Value::Nil),
+            },
+            None => Ok(Value::Nil),
         }
     }
 
-    fn eval_expr(&mut self, dot: &Value, expr: &Expr) -> Result<Value> {
+    fn eval_expr(&mut self, dot: &Value, expr: &Expr) -> ExecResult<Value> {
         match expr {
             Expr::Dot(_) => Ok(dot.clone()),
 
@@ -565,11 +587,9 @@ impl<'a> Executor<'a> {
             }
 
             Expr::Variable(_, name, fields) => {
-                let val = self
-                    .vars
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| TemplateError::UndefinedVariable(name.clone()))?;
+                let val = self.vars.get(name).cloned().ok_or_else(|| {
+                    ExecSignal::err(TemplateError::UndefinedVariable(name.clone()))
+                })?;
                 let mut result = val;
                 for field in fields {
                     result = self.field_access(&result, field)?;
@@ -582,11 +602,11 @@ impl<'a> Executor<'a> {
             Expr::Number(_, s) => {
                 if s.contains('.') || s.contains('e') || s.contains('E') {
                     Ok(Value::Float(s.parse::<f64>().map_err(|_| {
-                        TemplateError::Exec(format!("invalid float: {}", s))
+                        ExecSignal::err(TemplateError::Exec(format!("invalid float: {}", s)))
                     })?))
                 } else {
                     Ok(Value::Int(s.parse::<i64>().map_err(|_| {
-                        TemplateError::Exec(format!("invalid integer: {}", s))
+                        ExecSignal::err(TemplateError::Exec(format!("invalid integer: {}", s)))
                     })?))
                 }
             }
@@ -599,9 +619,9 @@ impl<'a> Executor<'a> {
             Expr::Identifier(_, name) => {
                 // Bare identifier — could be a zero-arg function call
                 if let Some(func) = self.funcs.get(name.as_str()) {
-                    return func(&[]);
+                    return func(&[]).map_err(ExecSignal::from);
                 }
-                Err(TemplateError::UndefinedFunction(name.clone()))
+                Err(TemplateError::UndefinedFunction(name.clone()).into())
             }
 
             Expr::Chain(_, inner, fields) => {
@@ -731,10 +751,7 @@ mod tests {
     #[test]
     fn test_variable() {
         let data = tmap! { "Name" => "Dave" };
-        assert_eq!(
-            exec("{{$x := .Name}}Hello, {{$x}}!", &data),
-            "Hello, Dave!"
-        );
+        assert_eq!(exec("{{$x := .Name}}Hello, {{$x}}!", &data), "Hello, Dave!");
     }
 
     #[test]
@@ -750,19 +767,13 @@ mod tests {
     #[test]
     fn test_nested_if() {
         let data = tmap! { "A" => true, "B" => true };
-        assert_eq!(
-            exec("{{if .A}}{{if .B}}both{{end}}{{end}}", &data),
-            "both"
-        );
+        assert_eq!(exec("{{if .A}}{{if .B}}both{{end}}{{end}}", &data), "both");
     }
 
     #[test]
     fn test_html_escape() {
         let data = tmap! { "X" => "<b>bold</b>" };
-        assert_eq!(
-            exec("{{html .X}}", &data),
-            "&lt;b&gt;bold&lt;/b&gt;"
-        );
+        assert_eq!(exec("{{html .X}}", &data), "&lt;b&gt;bold&lt;/b&gt;");
     }
 
     #[test]
@@ -788,41 +799,26 @@ mod tests {
         let data = tmap! {
             "Items" => vec!["a".to_string(), "b".to_string(), "c".to_string()],
         };
-        assert_eq!(
-            exec("{{range .Items}}[{{.}}]{{end}}", &data),
-            "[a][b][c]"
-        );
-        assert_eq!(
-            exec("{{range .Items -}} {{.}} {{- end}}", &data),
-            "abc"
-        );
+        assert_eq!(exec("{{range .Items}}[{{.}}]{{end}}", &data), "[a][b][c]");
+        assert_eq!(exec("{{range .Items -}} {{.}} {{- end}}", &data), "abc");
     }
 
     #[test]
     fn test_trim_newlines_right() {
         let data = tmap! { "X" => "hello" };
-        assert_eq!(
-            exec("{{.X -}}\n\n  world", &data),
-            "helloworld"
-        );
+        assert_eq!(exec("{{.X -}}\n\n  world", &data), "helloworld");
     }
 
     #[test]
     fn test_trim_newlines_left() {
         let data = tmap! { "X" => "hello" };
-        assert_eq!(
-            exec("world\n\n  {{- .X}}", &data),
-            "worldhello"
-        );
+        assert_eq!(exec("world\n\n  {{- .X}}", &data), "worldhello");
     }
 
     #[test]
     fn test_trim_newlines_both() {
         let data = tmap! { "X" => "hello" };
-        assert_eq!(
-            exec("A \n\t {{- .X -}} \n\t B", &data),
-            "AhelloB"
-        );
+        assert_eq!(exec("A \n\t {{- .X -}} \n\t B", &data), "AhelloB");
     }
 
     #[test]
@@ -842,14 +838,20 @@ mod tests {
 
     #[test]
     fn test_comment() {
-        assert_eq!(exec("hello{{/* this is a comment */}} world", &Value::Nil), "hello world");
+        assert_eq!(
+            exec("hello{{/* this is a comment */}} world", &Value::Nil),
+            "hello world"
+        );
     }
 
     #[test]
     fn test_break_in_range() {
         let data = tmap! { "Items" => vec![1i64, 2, 3, 4, 5] };
         assert_eq!(
-            exec("{{range .Items}}{{if eq . 3}}{{break}}{{end}}{{.}} {{end}}", &data),
+            exec(
+                "{{range .Items}}{{if eq . 3}}{{break}}{{end}}{{.}} {{end}}",
+                &data
+            ),
             "1 2 "
         );
     }
@@ -858,7 +860,10 @@ mod tests {
     fn test_continue_in_range() {
         let data = tmap! { "Items" => vec![1i64, 2, 3, 4, 5] };
         assert_eq!(
-            exec("{{range .Items}}{{if eq . 3}}{{continue}}{{end}}{{.}} {{end}}", &data),
+            exec(
+                "{{range .Items}}{{if eq . 3}}{{continue}}{{end}}{{.}} {{end}}",
+                &data
+            ),
             "1 2 4 5 "
         );
     }

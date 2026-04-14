@@ -14,10 +14,10 @@ pub(crate) mod value;
 // ─── Public re-exports ──────────────────────────────────────────────────
 // All user-facing types are available at the crate root.
 
-pub use error::{TemplateError, Result};
-pub use funcs::{Func, html_escape, js_escape, url_encode};
+pub use error::{Result, TemplateError};
 use funcs::builtins;
-pub use value::{Value, ToValue, ValueFunc};
+pub use funcs::{Func, html_escape, js_escape, url_encode};
+pub use value::{ToValue, Value, ValueFunc};
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -269,10 +269,9 @@ impl Template {
     /// ```
     pub fn parse_files(mut self, filenames: &[&str]) -> Result<Self> {
         for filename in filenames {
-            let content = std::fs::read_to_string(filename)
-                .map_err(|e| error::TemplateError::Exec(
-                    format!("parse_files: {}: {}", filename, e)
-                ))?;
+            let content = std::fs::read_to_string(filename).map_err(|e| {
+                error::TemplateError::Exec(format!("parse_files: {}: {}", filename, e))
+            })?;
 
             let parser = Parser::new(&content, &self.left_delim, &self.right_delim)?;
             let (tree, defines) = parser.parse()?;
@@ -339,12 +338,9 @@ impl Template {
     /// - An I/O error occurs writing to `writer`.
     /// - The recursive template call depth exceeds the safety limit.
     pub fn execute<W: Write>(&self, writer: &mut W, data: &Value) -> Result<()> {
-        let tree = self
-            .tree
-            .as_ref()
-            .ok_or_else(|| error::TemplateError::Exec(
-                format!("template {:?} has not been parsed", self.name)
-            ))?;
+        let tree = self.tree.as_ref().ok_or_else(|| {
+            error::TemplateError::Exec(format!("template {:?} has not been parsed", self.name))
+        })?;
 
         let mut executor = Executor::new(&self.funcs, &self.defines);
         executor.set_missing_key(self.missing_key);
@@ -409,8 +405,7 @@ impl Template {
     pub fn execute_to_string(&self, data: &Value) -> Result<String> {
         let mut buf = Vec::new();
         self.execute(&mut buf, data)?;
-        String::from_utf8(buf)
-            .map_err(|e| error::TemplateError::Exec(e.to_string()))
+        String::from_utf8(buf).map_err(|e| error::TemplateError::Exec(e.to_string()))
     }
 
     /// Returns the template name set in [`new`](Self::new).
@@ -557,7 +552,9 @@ impl Template {
 /// Returns a parse or execution error if the template is invalid or
 /// execution fails.
 pub fn execute(template_src: &str, data: &Value) -> Result<String> {
-    Template::new("").parse(template_src)?.execute_to_string(data)
+    Template::new("")
+        .parse(template_src)?
+        .execute_to_string(data)
 }
 
 /// Reports whether a [`Value`] is "true" according to Go's template truthiness rules.
@@ -659,11 +656,7 @@ mod tests {
     #[test]
     fn test_comparison() {
         let data = tmap! { "Score" => 85i64 };
-        let result = execute(
-            "{{if gt .Score 80}}pass{{else}}fail{{end}}",
-            &data,
-        )
-        .unwrap();
+        let result = execute("{{if gt .Score 80}}pass{{else}}fail{{end}}", &data).unwrap();
         assert_eq!(result, "pass");
     }
 
@@ -672,10 +665,7 @@ mod tests {
         let data = tmap! {
             "Items" => vec!["a".to_string(), "b".to_string()],
         };
-        let result = execute(
-            "{{range $i, $v := .Items}}{{$i}}:{{$v}} {{end}}",
-            &data,
-        );
+        let result = execute("{{range $i, $v := .Items}}{{$i}}:{{$v}} {{end}}", &data);
         assert!(result.is_ok());
     }
 
@@ -685,10 +675,7 @@ mod tests {
             "Name" => "outer",
             "Items" => vec!["inner".to_string()],
         };
-        let result = execute(
-            "{{range .Items}}{{$}} {{.}}{{end}}",
-            &data,
-        );
+        let result = execute("{{range .Items}}{{$}} {{.}}{{end}}", &data);
         assert!(result.is_ok());
     }
 
@@ -779,13 +766,16 @@ mod tests {
             .parse(r#"{{define "x"}}original{{end}}{{template "x"}}"#)
             .unwrap();
 
-        let cloned = original.clone_template().add_parse_tree("x", ListNode {
-            pos: parse::Pos::new(0, 1),
-            nodes: vec![parse::Node::Text(parse::TextNode {
+        let cloned = original.clone_template().add_parse_tree(
+            "x",
+            ListNode {
                 pos: parse::Pos::new(0, 1),
-                text: "cloned".into(),
-            })],
-        });
+                nodes: vec![parse::Node::Text(parse::TextNode {
+                    pos: parse::Pos::new(0, 1),
+                    text: "cloned".into(),
+                })],
+            },
+        );
 
         assert_eq!(original.execute_to_string(&Value::Nil).unwrap(), "original");
         assert_eq!(cloned.execute_to_string(&Value::Nil).unwrap(), "cloned");
@@ -796,27 +786,31 @@ mod tests {
         let tmpl = Template::new("t")
             .parse(r#"{{template "injected"}}"#)
             .unwrap()
-            .add_parse_tree("injected", ListNode {
-                pos: parse::Pos::new(0, 1),
-                nodes: vec![parse::Node::Text(parse::TextNode {
+            .add_parse_tree(
+                "injected",
+                ListNode {
                     pos: parse::Pos::new(0, 1),
-                    text: "works".into(),
-                })],
-            });
+                    nodes: vec![parse::Node::Text(parse::TextNode {
+                        pos: parse::Pos::new(0, 1),
+                        text: "works".into(),
+                    })],
+                },
+            );
         assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "works");
     }
 
     #[test]
     fn test_funcs_bulk() {
         let mut fm = FuncMap::new();
-        fm.insert("greet".into(), Arc::new(|args: &[Value]| {
-            Ok(Value::String(format!("Hi, {}!", args[0])))
-        }));
+        fm.insert(
+            "greet".into(),
+            Arc::new(|args: &[Value]| Ok(Value::String(format!("Hi, {}!", args[0])))),
+        );
         let result = Template::new("t")
             .funcs(fm)
             .parse(r#"{{greet "World"}}"#)
             .unwrap()
-            .execute_to_string(&tmap!{})
+            .execute_to_string(&tmap! {})
             .unwrap();
         assert_eq!(result, "Hi, World!");
     }
@@ -861,8 +855,7 @@ mod tests {
 
     #[test]
     fn test_parse_files_not_found() {
-        let result = Template::new("t")
-            .parse_files(&["/nonexistent/file.html"]);
+        let result = Template::new("t").parse_files(&["/nonexistent/file.html"]);
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert!(err.to_string().contains("parse_files"));

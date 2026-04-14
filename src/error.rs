@@ -90,15 +90,6 @@ pub enum TemplateError {
     /// An I/O error occurred while writing template output.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-
-    /// Internal control flow signal for `{{break}}` / `{{continue}}`.
-    ///
-    /// This variant is caught by the range walker and **never surfaces to users**.
-    /// If you see this in a returned error, it indicates a bug — `break`/`continue`
-    /// was used outside of a `{{range}}` block.
-    #[doc(hidden)]
-    #[error("unexpected {0} outside of range")]
-    ControlFlow(#[from] crate::exec::ControlFlow),
 }
 
 /// Alias for `std::result::Result<T, TemplateError>`.

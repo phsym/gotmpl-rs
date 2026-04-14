@@ -13,7 +13,7 @@
 // Everything else is faithfully ported.
 
 use go_template_rs::Value;
-use go_template_rs::{tmap, Template};
+use go_template_rs::{Template, tmap};
 
 // ─── Helper ──────────────────────────────────────────────────────────────
 
@@ -26,23 +26,21 @@ fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
         .func("echo", |args| {
             Ok(args.first().cloned().unwrap_or(Value::Nil))
         })
-        .func("oneArg", |args| {
-            match args.first() {
-                Some(Value::String(s)) => Ok(Value::String(format!("oneArg={}", s))),
-                _ => Err(go_template_rs::TemplateError::Exec("oneArg requires a string".into())),
+        .func("oneArg", |args| match args.first() {
+            Some(Value::String(s)) => Ok(Value::String(format!("oneArg={}", s))),
+            _ => Err(go_template_rs::TemplateError::Exec(
+                "oneArg requires a string".into(),
+            )),
+        })
+        .func("twoArgs", |args| match (args.get(0), args.get(1)) {
+            (Some(Value::String(a)), Some(Value::String(b))) => {
+                Ok(Value::String(format!("twoArgs={}{}", a, b)))
             }
+            _ => Err(go_template_rs::TemplateError::Exec(
+                "twoArgs requires two strings".into(),
+            )),
         })
-        .func("twoArgs", |args| {
-            match (args.get(0), args.get(1)) {
-                (Some(Value::String(a)), Some(Value::String(b))) => {
-                    Ok(Value::String(format!("twoArgs={}{}", a, b)))
-                }
-                _ => Err(go_template_rs::TemplateError::Exec("twoArgs requires two strings".into())),
-            }
-        })
-        .func("zeroArgs", |_args| {
-            Ok(Value::String("zeroArgs".into()))
-        })
+        .func("zeroArgs", |_args| Ok(Value::String("zeroArgs".into())))
         .func("count", |args| {
             let n = args.first().and_then(|a| a.as_int()).unwrap_or(0);
             let items: Vec<Value> = (0..n)
@@ -84,7 +82,10 @@ fn ok(input: &str, data: &Value, expected: &str) {
 #[allow(dead_code)]
 fn fail(input: &str, data: &Value) {
     match run(input, data) {
-        Ok(result) => panic!("template {:?} should have failed but got {:?}", input, result),
+        Ok(result) => panic!(
+            "template {:?} should have failed but got {:?}",
+            input, result
+        ),
         Err(_) => {} // expected
     }
 }
@@ -204,7 +205,11 @@ fn test_if_false() {
 
 #[test]
 fn test_if_1() {
-    ok("{{if 1}}NON-ZERO{{else}}ZERO{{end}}", &Value::Nil, "NON-ZERO");
+    ok(
+        "{{if 1}}NON-ZERO{{else}}ZERO{{end}}",
+        &Value::Nil,
+        "NON-ZERO",
+    );
 }
 
 #[test]
@@ -214,29 +219,49 @@ fn test_if_0() {
 
 #[test]
 fn test_if_1_5() {
-    ok("{{if 1.5}}NON-ZERO{{else}}ZERO{{end}}", &Value::Nil, "NON-ZERO");
+    ok(
+        "{{if 1.5}}NON-ZERO{{else}}ZERO{{end}}",
+        &Value::Nil,
+        "NON-ZERO",
+    );
 }
 
 #[test]
 fn test_if_empty_string() {
-    ok("{{if ``}}NON-EMPTY{{else}}EMPTY{{end}}", &Value::Nil, "EMPTY");
+    ok(
+        "{{if ``}}NON-EMPTY{{else}}EMPTY{{end}}",
+        &Value::Nil,
+        "EMPTY",
+    );
 }
 
 #[test]
 fn test_if_notempty_string() {
-    ok("{{if `notempty`}}NON-EMPTY{{else}}EMPTY{{end}}", &Value::Nil, "NON-EMPTY");
+    ok(
+        "{{if `notempty`}}NON-EMPTY{{else}}EMPTY{{end}}",
+        &Value::Nil,
+        "NON-EMPTY",
+    );
 }
 
 #[test]
 fn test_if_empty_slice() {
     let data = tmap! { "SIEmpty" => Vec::<i64>::new() };
-    ok("{{if .SIEmpty}}NON-EMPTY{{else}}EMPTY{{end}}", &data, "EMPTY");
+    ok(
+        "{{if .SIEmpty}}NON-EMPTY{{else}}EMPTY{{end}}",
+        &data,
+        "EMPTY",
+    );
 }
 
 #[test]
 fn test_if_slice() {
     let data = tmap! { "SI" => vec![3i64, 4, 5] };
-    ok("{{if .SI}}NON-EMPTY{{else}}EMPTY{{end}}", &data, "NON-EMPTY");
+    ok(
+        "{{if .SI}}NON-EMPTY{{else}}EMPTY{{end}}",
+        &data,
+        "NON-EMPTY",
+    );
 }
 
 #[test]
@@ -244,7 +269,11 @@ fn test_if_empty_map() {
     let data = tmap! {
         "MSIEmpty" => std::collections::BTreeMap::<String, i64>::new()
     };
-    ok("{{if .MSIEmpty}}NON-EMPTY{{else}}EMPTY{{end}}", &data, "EMPTY");
+    ok(
+        "{{if .MSIEmpty}}NON-EMPTY{{else}}EMPTY{{end}}",
+        &data,
+        "EMPTY",
+    );
 }
 
 #[test]
@@ -252,7 +281,11 @@ fn test_if_map() {
     let data = tmap! {
         "MSI" => tmap! { "one" => 1i64 }
     };
-    ok("{{if .MSI}}NON-EMPTY{{else}}EMPTY{{end}}", &data, "NON-EMPTY");
+    ok(
+        "{{if .MSI}}NON-EMPTY{{else}}EMPTY{{end}}",
+        &data,
+        "NON-EMPTY",
+    );
 }
 
 #[test]
@@ -315,11 +348,7 @@ fn test_printf_dot() {
 #[test]
 fn test_printf_var() {
     let data = tmap! { "I" => 17i64 };
-    ok(
-        r#"{{with $x := .I}}{{printf "%d" $x}}{{end}}"#,
-        &data,
-        "17",
-    );
+    ok(r#"{{with $x := .I}}{{printf "%d" $x}}{{end}}"#, &data, "17");
 }
 
 // ─── HTML ───────────────────────────────────────────────────────────────
@@ -530,11 +559,7 @@ fn test_with_1_5() {
 
 #[test]
 fn test_with_empty_string() {
-    ok(
-        "{{with ``}}{{.}}{{else}}EMPTY{{end}}",
-        &Value::Nil,
-        "EMPTY",
-    );
+    ok("{{with ``}}{{.}}{{else}}EMPTY{{end}}", &Value::Nil, "EMPTY");
 }
 
 #[test]
@@ -549,11 +574,7 @@ fn test_with_string() {
 #[test]
 fn test_with_empty_slice() {
     let data = tmap! { "SIEmpty" => Vec::<i64>::new() };
-    ok(
-        "{{with .SIEmpty}}{{.}}{{else}}EMPTY{{end}}",
-        &data,
-        "EMPTY",
-    );
+    ok("{{with .SIEmpty}}{{.}}{{else}}EMPTY{{end}}", &data, "EMPTY");
 }
 
 #[test]
@@ -571,11 +592,7 @@ fn test_with_dollar_x_int() {
 #[test]
 fn test_with_variable_and_action() {
     let data = tmap! { "U" => tmap! { "V" => "v" } };
-    ok(
-        "{{with $x := $}}{{$y := $.U.V}}{{$y}}{{end}}",
-        &data,
-        "v",
-    );
+    ok("{{with $x := $}}{{$y := $.U.V}}{{$y}}{{end}}", &data, "v");
 }
 
 #[test]
@@ -633,11 +650,7 @@ fn test_range_empty_else() {
 #[test]
 fn test_range_dollar_x() {
     let data = tmap! { "SI" => vec![3i64, 4, 5] };
-    ok(
-        "{{range $x := .SI}}<{{$x}}>{{end}}",
-        &data,
-        "<3><4><5>",
-    );
+    ok("{{range $x := .SI}}<{{$x}}>{{end}}", &data, "<3><4><5>");
 }
 
 #[test]
@@ -684,11 +697,7 @@ fn test_range_nil_count() {
 
 #[test]
 fn test_pipeline_printf() {
-    ok(
-        r#"{{"output" | printf "%s"}}"#,
-        &Value::Nil,
-        "output",
-    );
+    ok(r#"{{"output" | printf "%s"}}"#, &Value::Nil, "output");
 }
 
 #[test]
@@ -812,11 +821,7 @@ fn test_ge() {
 #[test]
 fn test_or_as_if_true() {
     let data = tmap! { "SI" => vec![3i64, 4, 5] };
-    ok(
-        r#"{{or .SI "slice is empty"}}"#,
-        &data,
-        "[3 4 5]",
-    );
+    ok(r#"{{or .SI "slice is empty"}}"#, &data, "[3 4 5]");
 }
 
 #[test]
@@ -922,11 +927,7 @@ fn test_trim_newlines() {
 fn test_bug4_nil_in_if() {
     // Nil interface values in if.
     let data = tmap! { "Empty0" => Value::Nil };
-    ok(
-        "{{if .Empty0}}non-nil{{else}}nil{{end}}",
-        &data,
-        "nil",
-    );
+    ok("{{if .Empty0}}non-nil{{else}}nil{{end}}", &data, "nil");
 }
 
 #[test]
@@ -956,11 +957,7 @@ fn test_twoargs_pipe() {
 
 #[test]
 fn test_onearg_pipe() {
-    ok(
-        r#"{{"aaa" | oneArg}}"#,
-        &Value::Nil,
-        "oneArg=aaa",
-    );
+    ok(r#"{{"aaa" | oneArg}}"#, &Value::Nil, "oneArg=aaa");
 }
 
 // ─── Makemap function ───────────────────────────────────────────────────
@@ -1000,11 +997,7 @@ fn test_range_map_values() {
     let data = tmap! {
         "MSIone" => tmap! { "one" => 1i64 }
     };
-    ok(
-        "{{range .MSIone}}-{{.}}-{{end}}",
-        &data,
-        "-1-",
-    );
+    ok("{{range .MSIone}}-{{.}}-{{end}}", &data, "-1-");
 }
 
 // ─── Pipeline chaining with len ─────────────────────────────────────────
@@ -1012,11 +1005,7 @@ fn test_range_map_values() {
 #[test]
 fn test_pipeline_len() {
     let data = tmap! { "Items" => vec!["a".to_string(), "bb".to_string(), "ccc".to_string()] };
-    ok(
-        r#"{{.Items | len | printf "%d items"}}"#,
-        &data,
-        "3 items",
-    );
+    ok(r#"{{.Items | len | printf "%d items"}}"#, &data, "3 items");
 }
 
 // ─── Nested if ──────────────────────────────────────────────────────────
@@ -1036,7 +1025,11 @@ fn test_dollar_in_range() {
         "Items" => vec!["inner".to_string()],
     };
     // $ refers to the top-level data
-    ok("{{range .Items}}{{$.Name}}:{{.}}{{end}}", &data, "outer:inner");
+    ok(
+        "{{range .Items}}{{$.Name}}:{{.}}{{end}}",
+        &data,
+        "outer:inner",
+    );
 }
 
 // ─── Deep nesting ───────────────────────────────────────────────────────
@@ -1135,9 +1128,7 @@ fn test_call_function_value() {
     });
     let data = tmap! {};
     let result = Template::new("test")
-        .func("getAdder", move |_args| {
-            Ok(Value::Function(adder.clone()))
-        })
+        .func("getAdder", move |_args| Ok(Value::Function(adder.clone())))
         .parse(r#"{{call (getAdder) 3 4}}"#)
         .unwrap()
         .execute_to_string(&data)
@@ -1225,7 +1216,12 @@ fn test_max_exec_depth() {
         .unwrap()
         .execute_to_string(&Value::Nil);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("maximum template call depth"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("maximum template call depth")
+    );
 }
 
 // ─── Fix #10: and/or short-circuit ────────────────────────────────────
@@ -1271,7 +1267,11 @@ fn test_comment_multiline() {
 
 #[test]
 fn test_comment_trim_left() {
-    ok("hello  {{- /* comment */ -}}  world", &Value::Nil, "helloworld");
+    ok(
+        "hello  {{- /* comment */ -}}  world",
+        &Value::Nil,
+        "helloworld",
+    );
 }
 
 #[test]
@@ -1332,7 +1332,8 @@ fn test_range_break_in_map() {
     let result = run(
         "{{range $k, $v := .M}}{{if eq $k \"b\"}}{{break}}{{end}}{{$k}}={{$v}} {{end}}",
         &data,
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(result, "a=1 ");
 }
 
@@ -1396,7 +1397,7 @@ fn test_char_literal_newline() {
 
 #[test]
 fn test_range_nil() {
-    ok("{{range .X}}{{.}}{{else}}empty{{end}}", &tmap!{}, "empty");
+    ok("{{range .X}}{{.}}{{else}}empty{{end}}", &tmap! {}, "empty");
 }
 
 // ─── Additional Go test coverage: range over integer ──────────────────
@@ -1457,7 +1458,11 @@ fn test_variable_scope_isolation() {
 
 #[test]
 fn test_println() {
-    ok(r#"{{println "hello" "world"}}"#, &Value::Nil, "hello world\n");
+    ok(
+        r#"{{println "hello" "world"}}"#,
+        &Value::Nil,
+        "hello world\n",
+    );
 }
 
 #[test]
@@ -1718,21 +1723,13 @@ fn test_if_0_0() {
 #[test]
 fn test_if_map_unset() {
     let data = tmap! { "MSI" => tmap! { "one" => 1i64 } };
-    ok(
-        "{{if .MSI.NO}}TRUE{{else}}FALSE{{end}}",
-        &data,
-        "FALSE",
-    );
+    ok("{{if .MSI.NO}}TRUE{{else}}FALSE{{end}}", &data, "FALSE");
 }
 
 #[test]
 fn test_if_map_not_unset() {
     let data = tmap! { "MSI" => tmap! { "one" => 1i64 } };
-    ok(
-        "{{if .MSI.one}}TRUE{{else}}FALSE{{end}}",
-        &data,
-        "TRUE",
-    );
+    ok("{{if .MSI.one}}TRUE{{else}}FALSE{{end}}", &data, "TRUE");
 }
 
 #[test]
@@ -1774,11 +1771,7 @@ fn test_printf_lots() {
 #[test]
 fn test_html_ps() {
     let data = tmap! { "PS" => "<p>hi</p>" };
-    ok(
-        "{{html .PS}}",
-        &data,
-        "&lt;p&gt;hi&lt;/p&gt;",
-    );
+    ok("{{html .PS}}", &data, "&lt;p&gt;hi&lt;/p&gt;");
 }
 
 // ─── Go exec_test.go: or / and short-circuit with pipes ─────────────
@@ -1831,11 +1824,7 @@ fn test_with_dollar_x_nested() {
 #[test]
 fn test_range_dollar_x_psi() {
     let data = tmap! { "PSI" => vec![21i64, 22, 23] };
-    ok(
-        "{{range $x := .PSI}}<{{$x}}>{{end}}",
-        &data,
-        "<21><22><23>",
-    );
+    ok("{{range $x := .PSI}}<{{$x}}>{{end}}", &data, "<21><22><23>");
 }
 
 // ─── Go exec_test.go: range bool ────────────────────────────────────
@@ -1877,7 +1866,11 @@ fn test_range_empty_map_else() {
     let data = tmap! {
         "MSIEmpty" => std::collections::BTreeMap::<String, i64>::new()
     };
-    ok("{{range .MSIEmpty}}-{{.}}-{{else}}empty{{end}}", &data, "empty");
+    ok(
+        "{{range .MSIEmpty}}-{{.}}-{{else}}empty{{end}}",
+        &data,
+        "empty",
+    );
 }
 
 // ─── Go exec_test.go: range int variants ────────────────────────────
@@ -1889,11 +1882,7 @@ fn test_range_int_5() {
 
 #[test]
 fn test_range_int_with_index() {
-    ok(
-        "{{range $i := 3}}[{{$i}}]{{end}}",
-        &Value::Nil,
-        "[0][1][2]",
-    );
+    ok("{{range $i := 3}}[{{$i}}]{{end}}", &Value::Nil, "[0][1][2]");
 }
 
 #[test]
@@ -1964,11 +1953,7 @@ fn test_ge_mixed_float_int() {
 
 #[test]
 fn test_eq_in_if() {
-    ok(
-        "{{if eq 1 1}}yes{{else}}no{{end}}",
-        &Value::Nil,
-        "yes",
-    );
+    ok("{{if eq 1 1}}yes{{else}}no{{end}}", &Value::Nil, "yes");
 }
 
 #[test]
@@ -1984,20 +1969,12 @@ fn test_ne_in_if() {
 
 #[test]
 fn test_or_as_if_true_inline() {
-    ok(
-        r#"{{or .X "default"}}"#,
-        &tmap! { "X" => "value" },
-        "value",
-    );
+    ok(r#"{{or .X "default"}}"#, &tmap! { "X" => "value" }, "value");
 }
 
 #[test]
 fn test_or_as_if_false_inline() {
-    ok(
-        r#"{{or .X "default"}}"#,
-        &tmap! { "X" => "" },
-        "default",
-    );
+    ok(r#"{{or .X "default"}}"#, &tmap! { "X" => "" }, "default");
 }
 
 // ─── Go exec_test.go: more with cases ───────────────────────────────
@@ -2019,11 +1996,7 @@ fn test_with_map() {
     let data = tmap! {
         "MSI" => tmap! { "one" => 1i64 }
     };
-    ok(
-        "{{with .MSI}}{{.one}}{{else}}empty{{end}}",
-        &data,
-        "1",
-    );
+    ok("{{with .MSI}}{{.one}}{{else}}empty{{end}}", &data, "1");
 }
 
 // ─── Go exec_test.go: numbers (literal formats) ────────────────────
@@ -2125,11 +2098,7 @@ fn test_invoke_no_args() {
 
 #[test]
 fn test_one_arg_literal() {
-    ok(
-        r#"{{oneArg "joe"}}"#,
-        &Value::Nil,
-        "oneArg=joe",
-    );
+    ok(r#"{{oneArg "joe"}}"#, &Value::Nil, "oneArg=joe");
 }
 
 #[test]
@@ -2168,14 +2137,20 @@ fn test_message_for_unparsed_template() {
     let tmpl = Template::new("unparsed");
     let result = tmpl.execute_to_string(&Value::Nil);
     assert!(result.is_err());
-    assert!(result.err().unwrap().to_string().contains("has not been parsed"));
+    assert!(
+        result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("has not been parsed")
+    );
 }
 
 // ─── Go exec_test.go: TestBlock with override ───────────────────────
 
 #[test]
 fn test_block_override() {
-    use go_template_rs::parse::{ListNode, Node, TextNode, Pos};
+    use go_template_rs::parse::{ListNode, Node, Pos, TextNode};
 
     let tmpl = Template::new("page")
         .parse(r#"{{block "content" .}}default content{{end}}"#)
@@ -2188,13 +2163,16 @@ fn test_block_override() {
     );
 
     // Override via clone + add_parse_tree
-    let overridden = tmpl.clone_template().add_parse_tree("content", ListNode {
-        pos: Pos::new(0, 1),
-        nodes: vec![Node::Text(TextNode {
+    let overridden = tmpl.clone_template().add_parse_tree(
+        "content",
+        ListNode {
             pos: Pos::new(0, 1),
-            text: "custom content".into(),
-        })],
-    });
+            nodes: vec![Node::Text(TextNode {
+                pos: Pos::new(0, 1),
+                text: "custom content".into(),
+            })],
+        },
+    );
     assert_eq!(
         overridden.execute_to_string(&Value::Nil).unwrap(),
         "custom content",
@@ -2258,21 +2236,33 @@ fn test_defined_templates_string() {
 
 #[test]
 fn test_clone_independence() {
-    use go_template_rs::parse::{ListNode, Node, TextNode, Pos};
+    use go_template_rs::parse::{ListNode, Node, Pos, TextNode};
 
     let original = Template::new("t")
         .parse(r#"{{define "x"}}orig{{end}}{{template "x"}}"#)
         .unwrap();
 
-    let clone1 = original.clone_template().add_parse_tree("x", ListNode {
-        pos: Pos::new(0, 1),
-        nodes: vec![Node::Text(TextNode { pos: Pos::new(0, 1), text: "clone1".into() })],
-    });
+    let clone1 = original.clone_template().add_parse_tree(
+        "x",
+        ListNode {
+            pos: Pos::new(0, 1),
+            nodes: vec![Node::Text(TextNode {
+                pos: Pos::new(0, 1),
+                text: "clone1".into(),
+            })],
+        },
+    );
 
-    let clone2 = original.clone_template().add_parse_tree("x", ListNode {
-        pos: Pos::new(0, 1),
-        nodes: vec![Node::Text(TextNode { pos: Pos::new(0, 1), text: "clone2".into() })],
-    });
+    let clone2 = original.clone_template().add_parse_tree(
+        "x",
+        ListNode {
+            pos: Pos::new(0, 1),
+            nodes: vec![Node::Text(TextNode {
+                pos: Pos::new(0, 1),
+                text: "clone2".into(),
+            })],
+        },
+    );
 
     assert_eq!(original.execute_to_string(&Value::Nil).unwrap(), "orig");
     assert_eq!(clone1.execute_to_string(&Value::Nil).unwrap(), "clone1");
@@ -2298,21 +2288,13 @@ fn test_comment_after_action() {
 
 #[test]
 fn test_comment_in_if() {
-    ok(
-        "{{if true}}{{/* c */}}yes{{end}}",
-        &Value::Nil,
-        "yes",
-    );
+    ok("{{if true}}{{/* c */}}yes{{end}}", &Value::Nil, "yes");
 }
 
 #[test]
 fn test_comment_trim_surrounding_whitespace() {
     // Comment with both trim markers should eat surrounding whitespace
-    ok(
-        "a  {{- /* comment */ -}}  b",
-        &Value::Nil,
-        "ab",
-    );
+    ok("a  {{- /* comment */ -}}  b", &Value::Nil, "ab");
 }
 
 // ─── Go exec_test.go: parenthesized expressions (extended) ─────────
@@ -2325,11 +2307,7 @@ fn test_parens_dollar_in_paren() {
 
 #[test]
 fn test_parens_spaces_and_args() {
-    ok(
-        r#"{{printf "%d %d" ( 1 ) ( 2 )}}"#,
-        &Value::Nil,
-        "1 2",
-    );
+    ok(r#"{{printf "%d %d" ( 1 ) ( 2 )}}"#, &Value::Nil, "1 2");
 }
 
 // ─── Go exec_test.go: break/continue with else ─────────────────────
@@ -2430,11 +2408,7 @@ fn test_index_map_with_variable_key() {
     let data = tmap! {
         "M" => tmap! { "k" => "found" }
     };
-    ok(
-        r#"{{$key := "k"}}{{index .M $key}}"#,
-        &data,
-        "found",
-    );
+    ok(r#"{{$key := "k"}}{{index .M $key}}"#, &data, "found");
 }
 
 // ─── Go exec_test.go: $ in range points to root data ───────────────

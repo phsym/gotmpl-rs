@@ -142,8 +142,12 @@ impl Value {
         }
     }
 
-    /// Access a field by name on a [`Value::Map`]. Returns [`Value::Nil`] if the
-    /// key is missing or the value is not a map.
+    /// Look up a field by name on a [`Value::Map`].
+    ///
+    /// Returns `Some(&value)` when the key exists (the value may itself be
+    /// [`Value::Nil`]), and `None` when the key is absent or the receiver is
+    /// not a map. This lets callers distinguish "key set to nil" from
+    /// "key missing" — important for the `missingkey=error` option.
     ///
     /// In Go, this would use reflection to access struct fields or map keys.
     ///
@@ -153,29 +157,74 @@ impl Value {
     /// use go_template_rs::tmap;
     /// use go_template_rs::Value;
     ///
-    /// let data = tmap! { "Name" => "Alice" };
-    /// assert_eq!(data.field("Name"), Value::String("Alice".into()));
-    /// assert_eq!(data.field("Missing"), Value::Nil);
+    /// let data = tmap! { "Name" => "Alice", "Empty" => Value::Nil };
+    /// assert_eq!(data.field("Name"), Some(&Value::String("Alice".into())));
+    /// assert_eq!(data.field("Empty"), Some(&Value::Nil));   // key exists
+    /// assert_eq!(data.field("Missing"), None);               // key absent
+    /// assert_eq!(Value::Int(1).field("x"), None);            // not a map
     /// ```
-    pub fn field(&self, name: &str) -> Value {
+    pub fn field(&self, name: &str) -> Option<&Value> {
         match self {
-            Value::Map(m) => m.get(name).cloned().unwrap_or(Value::Nil),
-            _ => Value::Nil,
+            Value::Map(m) => m.get(name),
+            _ => None,
         }
     }
 
     /// Index into a [`Value::List`] (by integer) or [`Value::Map`] (by string).
     ///
-    /// Returns [`Value::Nil`] if the index is out of bounds, the key is missing,
-    /// or the types don't match. Mirrors Go's `index` builtin.
-    pub fn index(&self, idx: &Value) -> Value {
+    /// Mirrors Go's `index` builtin semantics:
+    /// - **List + Int**: returns the element, or an error if out of bounds.
+    /// - **Map + String**: returns the value, or [`Value::Nil`] for missing keys.
+    /// - **Nil + anything**: returns [`Value::Nil`].
+    /// - **Other combinations**: returns an error (type mismatch).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on out-of-bounds list access, indexing with an
+    /// incompatible key type, or indexing a non-indexable value.
+    pub fn index(&self, idx: &Value) -> Result<Value> {
         match (self, idx) {
             (Value::List(v), Value::Int(i)) => {
                 let i = *i as usize;
-                v.get(i).cloned().unwrap_or(Value::Nil)
+                if i >= v.len() {
+                    return Err(crate::error::TemplateError::Exec(format!(
+                        "index out of range [{}] with length {}",
+                        i,
+                        v.len()
+                    )));
+                }
+                Ok(v[i].clone())
             }
-            (Value::Map(m), Value::String(k)) => m.get(k.as_str()).cloned().unwrap_or(Value::Nil),
-            _ => Value::Nil,
+            (Value::List(_), _) => Err(crate::error::TemplateError::Exec(format!(
+                "cannot index list with type {}",
+                idx.type_name()
+            ))),
+            (Value::Map(m), Value::String(k)) => {
+                Ok(m.get(k.as_str()).cloned().unwrap_or(Value::Nil))
+            }
+            (Value::Map(_), _) => Err(crate::error::TemplateError::Exec(format!(
+                "cannot index map with type {}",
+                idx.type_name()
+            ))),
+            (Value::Nil, _) => Ok(Value::Nil),
+            _ => Err(crate::error::TemplateError::Exec(format!(
+                "cannot index type {}",
+                self.type_name()
+            ))),
+        }
+    }
+
+    /// Returns a short type name for use in error messages.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Nil => "nil",
+            Value::Bool(_) => "bool",
+            Value::Int(_) => "int",
+            Value::Float(_) => "float64",
+            Value::String(_) => "string",
+            Value::List(_) => "list",
+            Value::Map(_) => "map",
+            Value::Function(_) => "func",
         }
     }
 
@@ -197,6 +246,55 @@ impl Value {
     /// Returns `None` for types that have no concept of length.
     pub fn is_empty(&self) -> Option<bool> {
         self.len().map(|n| n == 0)
+    }
+
+    /// Slice a [`Value::List`] or [`Value::String`] by byte range.
+    ///
+    /// Mirrors Go's `slice` builtin: `slice x`, `slice x i`, `slice x i j`.
+    /// Omitted bounds default to `0` (start) and `len` (end).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the indices are out of range, inverted, on a
+    /// non-UTF-8-char boundary (strings), or the value is not sliceable.
+    pub fn slice(&self, start: Option<i64>, end: Option<i64>) -> Result<Value> {
+        match self {
+            Value::List(v) => {
+                let start = start.unwrap_or(0) as usize;
+                let end = end.map(|n| n as usize).unwrap_or(v.len());
+                if start > v.len() || end > v.len() || start > end {
+                    return Err(crate::error::TemplateError::Exec(format!(
+                        "slice: index out of range [{}:{}] with length {}",
+                        start,
+                        end,
+                        v.len()
+                    )));
+                }
+                Ok(Value::List(v[start..end].to_vec()))
+            }
+            Value::String(s) => {
+                let start = start.unwrap_or(0) as usize;
+                let end = end.map(|n| n as usize).unwrap_or(s.len());
+                if start > s.len() || end > s.len() || start > end {
+                    return Err(crate::error::TemplateError::Exec(format!(
+                        "slice: index out of range [{}:{}] with length {}",
+                        start,
+                        end,
+                        s.len()
+                    )));
+                }
+                if !s.is_char_boundary(start) || !s.is_char_boundary(end) {
+                    return Err(crate::error::TemplateError::Exec(
+                        "slice: index not on UTF-8 character boundary".to_string(),
+                    ));
+                }
+                Ok(Value::String(s[start..end].to_string()))
+            }
+            _ => Err(crate::error::TemplateError::Exec(format!(
+                "slice: cannot slice type {}",
+                self.type_name()
+            ))),
+        }
     }
 
     /// Extracts a string slice if this is a [`Value::String`].

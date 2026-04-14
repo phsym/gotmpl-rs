@@ -1,8 +1,8 @@
 //! Recursive-descent parser that converts a token stream into an AST.
 
-use crate::error::{TemplateError, Result};
-use super::lexer::{Token, TokenKind, Lexer};
+use super::lexer::{Lexer, Token, TokenKind};
 use super::node::*;
+use crate::error::{Result, TemplateError};
 
 /// Recursive-descent parser for Go template source.
 ///
@@ -201,10 +201,7 @@ impl Parser {
                     }
                 }
                 _ => {
-                    return Err(self.error(format!(
-                        "unexpected token: {:?}",
-                        self.peek().kind
-                    )));
+                    return Err(self.error(format!("unexpected token: {:?}", self.peek().kind)));
                 }
             }
         }
@@ -223,9 +220,7 @@ impl Parser {
 
         let body = self.parse_list(defines)?;
 
-        let else_body = if self.pos < self.tokens.len()
-            && self.peek().kind == TokenKind::Else
-        {
+        let else_body = if self.pos < self.tokens.len() && self.peek().kind == TokenKind::Else {
             self.next();
 
             if self.peek().kind == TokenKind::If {
@@ -251,7 +246,12 @@ impl Parser {
             None
         };
 
-        Ok(BranchNode { pos, pipe, body, else_body })
+        Ok(BranchNode {
+            pos,
+            pipe,
+            body,
+            else_body,
+        })
     }
 
     fn parse_if(&mut self, defines: &mut Vec<DefineNode>) -> Result<Node> {
@@ -278,7 +278,11 @@ impl Parser {
 
         let body = self.parse_list(defines)?;
 
-        Ok(DefineNode { pos, name: name_tok.val, body })
+        Ok(DefineNode {
+            pos,
+            name: name_tok.val,
+            body,
+        })
     }
 
     fn parse_template_call(&mut self) -> Result<Node> {
@@ -300,7 +304,11 @@ impl Parser {
 
         self.expect_close_delim()?;
 
-        Ok(Node::Template(TemplateNode { pos, name: name_tok.val, pipe }))
+        Ok(Node::Template(TemplateNode {
+            pos,
+            name: name_tok.val,
+            pipe,
+        }))
     }
 
     fn parse_block(&mut self, defines: &mut Vec<DefineNode>) -> Result<(Node, DefineNode)> {
@@ -329,7 +337,11 @@ impl Parser {
             body: body.clone(),
         };
 
-        let tmpl = Node::Template(TemplateNode { pos, name: name_tok.val, pipe });
+        let tmpl = Node::Template(TemplateNode {
+            pos,
+            name: name_tok.val,
+            pipe,
+        });
 
         Ok((tmpl, define))
     }
@@ -375,7 +387,12 @@ impl Parser {
             commands.push(self.parse_command()?);
         }
 
-        Ok(PipeNode { pos, decl, commands, is_assign })
+        Ok(PipeNode {
+            pos,
+            decl,
+            commands,
+            is_assign,
+        })
     }
 
     fn parse_command(&mut self) -> Result<CommandNode> {
@@ -404,7 +421,11 @@ impl Parser {
                     if fields.is_empty() {
                         args.push(Expr::Pipe(paren_pos, pipe));
                     } else {
-                        args.push(Expr::Chain(paren_pos, Box::new(Expr::Pipe(paren_pos, pipe)), fields));
+                        args.push(Expr::Chain(
+                            paren_pos,
+                            Box::new(Expr::Pipe(paren_pos, pipe)),
+                            fields,
+                        ));
                     }
                 }
 
@@ -451,9 +472,7 @@ impl Parser {
                     let tok = self.next().clone();
                     let mut fields = Vec::new();
                     let mut chain_end = tok.pos + tok.val.chars().count();
-                    while self.peek().kind == TokenKind::Field
-                        && self.peek().pos == chain_end
-                    {
+                    while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
                         let ftok = self.next().clone();
                         chain_end = ftok.pos + ftok.val.chars().count();
                         fields.extend(self.parse_field_chain(&ftok.val));
@@ -479,10 +498,7 @@ impl Parser {
                 }
                 TokenKind::Bool => {
                     let tok = self.next().clone();
-                    args.push(Expr::Bool(
-                        Pos::new(tok.pos, tok.line),
-                        tok.val == "true",
-                    ));
+                    args.push(Expr::Bool(Pos::new(tok.pos, tok.line), tok.val == "true"));
                 }
                 TokenKind::Nil => {
                     let tok = self.next().clone();
@@ -490,10 +506,7 @@ impl Parser {
                 }
                 TokenKind::Char => {
                     let tok = self.next().clone();
-                    args.push(Expr::Number(
-                        Pos::new(tok.pos, tok.line),
-                        tok.val,
-                    ));
+                    args.push(Expr::Number(Pos::new(tok.pos, tok.line), tok.val));
                 }
 
                 _ => break,
@@ -545,10 +558,7 @@ impl Parser {
             TokenKind::RightDelim | TokenKind::RightTrimDelim => {
                 self.next();
             }
-            TokenKind::Eof
-            | TokenKind::LeftDelim
-            | TokenKind::LeftTrimDelim
-            | TokenKind::Text => {
+            TokenKind::Eof | TokenKind::LeftDelim | TokenKind::LeftTrimDelim | TokenKind::Text => {
                 // Valid: we're past the end of the control block.
             }
             _ => {
@@ -567,10 +577,7 @@ mod tests {
     use super::*;
 
     fn parse(input: &str) -> (ListNode, Vec<DefineNode>) {
-        Parser::new(input, "{{", "}}")
-            .unwrap()
-            .parse()
-            .unwrap()
+        Parser::new(input, "{{", "}}").unwrap().parse().unwrap()
     }
 
     #[test]

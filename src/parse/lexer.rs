@@ -10,7 +10,7 @@
 //!
 //! This module is primarily used internally by the [`Parser`](crate::parse::Parser).
 
-use crate::error::{TemplateError, Result};
+use crate::error::{Result, TemplateError};
 
 // ─── Token types ─────────────────────────────────────────────────────────
 
@@ -25,23 +25,23 @@ pub enum TokenKind {
     RightTrimDelim, // -}} (trim whitespace after)
 
     // Values
-    Dot,            // .
-    Field,          // .FieldName
-    Variable,       // $var
-    Identifier,     // function name or keyword
-    String,         // "quoted string" or `raw string`
-    Number,         // integer or float literal
-    Bool,           // true / false
-    Nil,            // nil
-    Char,           // character literal
+    Dot,        // .
+    Field,      // .FieldName
+    Variable,   // $var
+    Identifier, // function name or keyword
+    String,     // "quoted string" or `raw string`
+    Number,     // integer or float literal
+    Bool,       // true / false
+    Nil,        // nil
+    Char,       // character literal
 
     // Operators
-    Pipe,           // |
-    Comma,          // ,
-    Assign,         // =
-    Declare,        // :=
-    LeftParen,      // (
-    RightParen,     // )
+    Pipe,       // |
+    Comma,      // ,
+    Assign,     // =
+    Declare,    // :=
+    LeftParen,  // (
+    RightParen, // )
 
     // Keywords (distinguished from Identifier after lexing)
     If,
@@ -268,7 +268,9 @@ impl Lexer {
                 }
                 self.lex_inside()?;
                 // Check if the action ended with a trim marker
-                trim_leading = self.tokens.last()
+                trim_leading = self
+                    .tokens
+                    .last()
                     .is_some_and(|t| t.kind == TokenKind::RightTrimDelim);
                 continue;
             }
@@ -299,7 +301,9 @@ impl Lexer {
                 }
                 self.lex_inside()?;
                 // Check if the action ended with a trim marker
-                trim_leading = self.tokens.last()
+                trim_leading = self
+                    .tokens
+                    .last()
                     .is_some_and(|t| t.kind == TokenKind::RightTrimDelim);
                 continue;
             }
@@ -374,7 +378,9 @@ impl Lexer {
 
         // Remove the LeftDelim/LeftTrimDelim token that was already emitted.
         // Check if the open was a trim delimiter.
-        let open_was_trim = self.tokens.last()
+        let open_was_trim = self
+            .tokens
+            .last()
             .is_some_and(|t| t.kind == TokenKind::LeftTrimDelim);
         self.tokens.pop();
 
@@ -463,7 +469,10 @@ impl Lexer {
                 '$' => self.lex_variable()?,
                 '-' | '+' => {
                     // Could be a sign for a number, or just a minus/plus
-                    if self.peek_ahead(1).is_some_and(|c| c.is_ascii_digit() || c == '.') {
+                    if self
+                        .peek_ahead(1)
+                        .is_some_and(|c| c.is_ascii_digit() || c == '.')
+                    {
                         self.lex_number()?;
                     } else {
                         return Err(self.error(format!("unexpected character: {:?}", ch)));
@@ -494,7 +503,9 @@ impl Lexer {
         loop {
             match self.next_char() {
                 None => return Err(self.error("unterminated string")),
-                Some('\\') => { self.next_char(); } // skip escaped char
+                Some('\\') => {
+                    self.next_char();
+                } // skip escaped char
                 Some('"') => {
                     let raw: String = self.input[self.start..self.pos].iter().collect();
                     // Strip surrounding quotes for the value
@@ -606,9 +617,16 @@ impl Lexer {
         // Parse hex int
         let negative = clean.starts_with('-');
         let hex_str = if negative {
-            clean.trim_start_matches('-').trim_start_matches('+').trim_start_matches("0x").trim_start_matches("0X")
+            clean
+                .trim_start_matches('-')
+                .trim_start_matches('+')
+                .trim_start_matches("0x")
+                .trim_start_matches("0X")
         } else {
-            clean.trim_start_matches('+').trim_start_matches("0x").trim_start_matches("0X")
+            clean
+                .trim_start_matches('+')
+                .trim_start_matches("0x")
+                .trim_start_matches("0X")
         };
         match i64::from_str_radix(hex_str, 16) {
             Ok(n) => {
@@ -694,7 +712,9 @@ impl Lexer {
     fn lex_decimal_number(&mut self) -> Result<()> {
         let mut has_dot = false;
         let mut has_exp = false;
-        let mut has_digits = self.input.get(self.pos.saturating_sub(1))
+        let mut has_digits = self
+            .input
+            .get(self.pos.saturating_sub(1))
             .is_some_and(char::is_ascii_digit);
 
         while let Some(ch) = self.peek() {
@@ -762,7 +782,9 @@ impl Lexer {
                         for _ in 0..4 {
                             match self.next_char() {
                                 Some(c) if c.is_ascii_hexdigit() => hex.push(c),
-                                _ => return Err(self.error("invalid unicode escape in char literal")),
+                                _ => {
+                                    return Err(self.error("invalid unicode escape in char literal"));
+                                }
                             }
                         }
                         char::from_u32(u32::from_str_radix(&hex, 16).unwrap()).unwrap_or('\0')
@@ -773,7 +795,9 @@ impl Lexer {
                         for _ in 0..8 {
                             match self.next_char() {
                                 Some(c) if c.is_ascii_hexdigit() => hex.push(c),
-                                _ => return Err(self.error("invalid unicode escape in char literal")),
+                                _ => {
+                                    return Err(self.error("invalid unicode escape in char literal"));
+                                }
                             }
                         }
                         char::from_u32(u32::from_str_radix(&hex, 16).unwrap()).unwrap_or('\0')
@@ -861,23 +885,26 @@ fn unescape(s: &str) -> Result<String> {
                 Some('x') => {
                     let hex: String = chars.by_ref().take(2).collect();
                     if let Ok(n) = u32::from_str_radix(&hex, 16)
-                        && let Some(c) = char::from_u32(n) {
-                            result.push(c);
-                        }
+                        && let Some(c) = char::from_u32(n)
+                    {
+                        result.push(c);
+                    }
                 }
                 Some('u') => {
                     let hex: String = chars.by_ref().take(4).collect();
                     if let Ok(n) = u32::from_str_radix(&hex, 16)
-                        && let Some(c) = char::from_u32(n) {
-                            result.push(c);
-                        }
+                        && let Some(c) = char::from_u32(n)
+                    {
+                        result.push(c);
+                    }
                 }
                 Some('U') => {
                     let hex: String = chars.by_ref().take(8).collect();
                     if let Ok(n) = u32::from_str_radix(&hex, 16)
-                        && let Some(c) = char::from_u32(n) {
-                            result.push(c);
-                        }
+                        && let Some(c) = char::from_u32(n)
+                    {
+                        result.push(c);
+                    }
                 }
                 Some(c) => {
                     result.push('\\');
@@ -907,10 +934,14 @@ fn parse_hex_float(s: &str) -> Option<f64> {
     let mantissa = if let Some(dot) = mantissa_str.find('.') {
         let int_part = &mantissa_str[..dot];
         let frac_part = &mantissa_str[dot + 1..];
-        let int_val = if int_part.is_empty() { 0u64 } else {
+        let int_val = if int_part.is_empty() {
+            0u64
+        } else {
             u64::from_str_radix(int_part, 16).ok()?
         };
-        let frac_val = if frac_part.is_empty() { 0u64 } else {
+        let frac_val = if frac_part.is_empty() {
+            0u64
+        } else {
             u64::from_str_radix(frac_part, 16).ok()?
         };
         let frac_bits = frac_part.len() as u32 * 4;
@@ -1029,20 +1060,26 @@ mod tests {
     fn test_left_trim_only() {
         let tokens = lex("  hello  {{- .X }}  ");
         // "  hello" should have trailing whitespace trimmed to "  hello"
-        let text_tokens: Vec<&Token> = tokens.iter().filter(|t| t.kind == TokenKind::Text).collect();
+        let text_tokens: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Text)
+            .collect();
         assert_eq!(text_tokens.len(), 2);
-        assert_eq!(text_tokens[0].val, "  hello");  // trailing spaces trimmed
-        assert_eq!(text_tokens[1].val, "  ");        // following text NOT trimmed
+        assert_eq!(text_tokens[0].val, "  hello"); // trailing spaces trimmed
+        assert_eq!(text_tokens[1].val, "  "); // following text NOT trimmed
     }
 
     #[test]
     fn test_right_trim_only() {
         let tokens = lex("  {{.X -}}  hello  ");
         // Following "  hello  " should have leading whitespace trimmed
-        let text_tokens: Vec<&Token> = tokens.iter().filter(|t| t.kind == TokenKind::Text).collect();
+        let text_tokens: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Text)
+            .collect();
         assert_eq!(text_tokens.len(), 2);
-        assert_eq!(text_tokens[0].val, "  ");         // preceding text NOT trimmed
-        assert_eq!(text_tokens[1].val, "hello  ");    // leading spaces trimmed
+        assert_eq!(text_tokens[0].val, "  "); // preceding text NOT trimmed
+        assert_eq!(text_tokens[1].val, "hello  "); // leading spaces trimmed
     }
 
     #[test]
@@ -1105,7 +1142,10 @@ mod tests {
     fn test_comment() {
         let tokens = lex("hello{{/* a comment */}}world");
         // Comment should be completely removed; only text remains
-        let text_tokens: Vec<&Token> = tokens.iter().filter(|t| t.kind == TokenKind::Text).collect();
+        let text_tokens: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Text)
+            .collect();
         assert_eq!(text_tokens.len(), 2);
         assert_eq!(text_tokens[0].val, "hello");
         assert_eq!(text_tokens[1].val, "world");
@@ -1114,7 +1154,10 @@ mod tests {
     #[test]
     fn test_comment_with_trim() {
         let tokens = lex("hello  {{- /* a comment */ -}}  world");
-        let text_tokens: Vec<&Token> = tokens.iter().filter(|t| t.kind == TokenKind::Text).collect();
+        let text_tokens: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Text)
+            .collect();
         assert_eq!(text_tokens.len(), 2);
         assert_eq!(text_tokens[0].val, "hello");
         assert_eq!(text_tokens[1].val, "world");
