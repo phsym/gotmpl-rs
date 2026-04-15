@@ -65,7 +65,8 @@ The syntax follows Go's `text/template` spec.
 ```text
 {{$x := .Name}}            Declare variable
 {{$x = "new value"}}       Assign to existing variable
-{{$i, $v := range .List}}  Range with index and value
+{{$i, $v := range .List}}  Range with index and value (declaration)
+{{$i, $v = range .List}}   Range with index and value (assignment)
 ```
 
 ### Template composition

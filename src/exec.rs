@@ -185,11 +185,24 @@ macro_rules! range_loop {
     ($self:expr, $w:expr, $branch:expr, $iter:expr) => {
         for (idx_val, item) in $iter {
             $self.vars.push();
-            if $branch.pipe.decl.len() == 1 {
-                $self.vars.set(&$branch.pipe.decl[0], item.clone());
-            } else if $branch.pipe.decl.len() >= 2 {
-                $self.vars.set(&$branch.pipe.decl[0], idx_val);
-                $self.vars.set(&$branch.pipe.decl[1], item.clone());
+            if $branch.pipe.is_assign {
+                // Assignment form ($v = range ...): modify existing variables
+                // in their original (outer) scope so they persist after the loop.
+                if $branch.pipe.decl.len() == 1 {
+                    $self.vars.assign(&$branch.pipe.decl[0], item.clone());
+                } else if $branch.pipe.decl.len() >= 2 {
+                    $self.vars.assign(&$branch.pipe.decl[0], idx_val);
+                    $self.vars.assign(&$branch.pipe.decl[1], item.clone());
+                }
+            } else {
+                // Declaration form ($v := range ...): create variables in the
+                // per-iteration scope (pushed above).
+                if $branch.pipe.decl.len() == 1 {
+                    $self.vars.set(&$branch.pipe.decl[0], item.clone());
+                } else if $branch.pipe.decl.len() >= 2 {
+                    $self.vars.set(&$branch.pipe.decl[0], idx_val);
+                    $self.vars.set(&$branch.pipe.decl[1], item.clone());
+                }
             }
             match $self.walk($w, &$branch.body, &item) {
                 Ok(()) => {}

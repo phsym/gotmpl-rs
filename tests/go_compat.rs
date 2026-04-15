@@ -1616,6 +1616,56 @@ fn test_nested_assignment_in_range() {
     );
 }
 
+// ─── Range assignment form ($v = range ...) ─────────────────────────
+
+#[test]
+fn test_range_assign_single_var() {
+    // $v is declared before the range; the range assignment form modifies it
+    // in the outer scope. After the loop, $v holds the last element's value.
+    let data = tmap! { "SI" => vec![3i64, 4, 5] };
+    ok(
+        "{{$v := 0}}{{range $v = .SI}}{{$v}}{{end}} {{$v}}",
+        &data,
+        "345 5",
+    );
+}
+
+#[test]
+fn test_range_assign_two_vars() {
+    // Both $i and $v are declared before the range; the assignment form
+    // modifies them in the outer scope. After the loop they hold the last
+    // iteration's index and value.
+    let data = tmap! { "SI" => vec![3i64, 4, 5] };
+    ok(
+        "{{$i := 0}}{{$v := 0}}{{range $i, $v = .SI}}{{$i}}:{{$v}} {{end}}{{$i}} {{$v}}",
+        &data,
+        "0:3 1:4 2:5 2 5",
+    );
+}
+
+#[test]
+fn test_range_assign_map() {
+    // Assignment form over a map: $k and $v are modified in the outer scope.
+    let data = tmap! { "MSI" => tmap! { "one" => 1i64, "two" => 2i64 } };
+    ok(
+        r#"{{$k := ""}}{{$v := 0}}{{range $k, $v = .MSI}}{{$k}}={{$v}} {{end}}{{$k}} {{$v}}"#,
+        &data,
+        // BTreeMap iteration is sorted: "one" < "two"
+        "one=1 two=2 two 2",
+    );
+}
+
+#[test]
+fn test_range_assign_single_var_in_body() {
+    // The assigned variable is readable both in the body and after the range.
+    let data = tmap! { "SI" => vec![10i64, 20] };
+    ok(
+        "{{$x := 0}}{{range $x = .SI}}<{{$x}}>{{end}}after={{$x}}",
+        &data,
+        "<10><20>after=20",
+    );
+}
+
 // ─── Additional Go test coverage: else if with variable ───────────────
 
 #[test]

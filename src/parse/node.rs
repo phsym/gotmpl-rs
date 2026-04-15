@@ -114,6 +114,7 @@ pub struct ActionNode {
 /// - `$x := pipeline`: declare with `:=`
 /// - `$x = pipeline`: assign with `=`
 /// - `$i, $v := range .Items`: multiple declarations in range
+/// - `$i, $v = range .Items`: multiple assignments in range
 ///
 /// When piped, each command's result becomes the **last** argument of the
 /// next command (matching Go's convention).
@@ -244,7 +245,8 @@ pub type WithNode = BranchNode;
 /// Type alias for a `{{range}}` node. See [`BranchNode`] for fields.
 ///
 /// The pipeline's [`decl`](PipeNode::decl) may contain one or two variable names
-/// for the loop index and value (e.g., `$i, $v := range .Items`).
+/// for the loop index and value (e.g., `$i, $v := range .Items` or
+/// `$i, $v = range .Items` for assignment to existing variables).
 pub type RangeNode = BranchNode;
 
 /// A `{{template "name" pipeline}}` invocation node.
