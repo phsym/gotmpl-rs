@@ -473,7 +473,7 @@ fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> String {
         match base {
             "x" => "0x",
             "X" => "0X",
-            "o" => "0o",
+            "o" => "0",
             "b" => "0b",
             _ => "",
         }
@@ -522,15 +522,14 @@ pub fn js_escape(s: &str) -> String {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
             '\'' => out.push_str("\\'"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '<' => out.push_str("\\u003c"),
-            '>' => out.push_str("\\u003e"),
+            // Go's JSEscape uses \uXXXX (uppercase hex) for all control
+            // characters, including \t, \n, \r — no shorthand escapes.
+            '<' => out.push_str("\\u003C"),
+            '>' => out.push_str("\\u003E"),
             '&' => out.push_str("\\u0026"),
-            '=' => out.push_str("\\u003d"),
+            '=' => out.push_str("\\u003D"),
             _ if (ch as u32) < 0x20 => {
-                write!(out, "\\u{:04x}", ch as u32).unwrap();
+                write!(out, "\\u{:04X}", ch as u32).unwrap();
             }
             _ => out.push(ch),
         }
@@ -924,7 +923,7 @@ mod tests {
         };
         assert_eq!(format_int_base(255, "x", &spec), "0xff");
         assert_eq!(format_int_base(255, "X", &spec), "0XFF");
-        assert_eq!(format_int_base(8, "o", &spec), "0o10");
+        assert_eq!(format_int_base(8, "o", &spec), "010");
         assert_eq!(format_int_base(10, "b", &spec), "0b1010");
         assert_eq!(format_int_base(-255, "x", &spec), "-0xff");
     }
@@ -975,22 +974,22 @@ mod tests {
 
     #[test]
     fn js_newline_tab() {
-        assert_eq!(js_escape("a\nb\tc"), "a\\nb\\tc");
+        assert_eq!(js_escape("a\nb\tc"), "a\\u000Ab\\u0009c");
     }
 
     #[test]
     fn js_angle_brackets_ampersand_equals() {
-        assert_eq!(js_escape("<b>&="), "\\u003cb\\u003e\\u0026\\u003d");
+        assert_eq!(js_escape("<b>&="), "\\u003Cb\\u003E\\u0026\\u003D");
     }
 
     #[test]
     fn js_control_char() {
-        assert_eq!(js_escape("\x01"), "\\u0001");
+        assert_eq!(js_escape("\x01"), "\\u0001"); // already uppercase (single digit)
     }
 
     #[test]
     fn js_carriage_return() {
-        assert_eq!(js_escape("\r"), "\\r");
+        assert_eq!(js_escape("\r"), "\\u000D");
     }
 
     #[test]
@@ -1331,7 +1330,7 @@ mod tests {
     #[test]
     fn sprintf_o() {
         assert_eq!(sf("%o", &[Value::Int(8)]), "10");
-        assert_eq!(sf("%#o", &[Value::Int(8)]), "0o10");
+        assert_eq!(sf("%#o", &[Value::Int(8)]), "010");
     }
 
     #[test]

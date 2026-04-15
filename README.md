@@ -177,11 +177,11 @@ let tmpl = Template::new("t")
 
 ### Missing key behavior
 
-| Option               | Behavior                 |
-| -------------------- | ------------------------ |
-| `missingkey=invalid` | Return `<nil>` (default) |
-| `missingkey=zero`    | Return `<nil>`           |
-| `missingkey=error`   | Return an error          |
+| Option               | Behavior                        |
+| -------------------- | ------------------------------- |
+| `missingkey=invalid` | Return `<no value>` (default)   |
+| `missingkey=zero`    | Return `<no value>`             |
+| `missingkey=error`   | Return an error                 |
 
 ## Number literals
 
@@ -266,9 +266,8 @@ This isolates the Rust↔Go translation layer from the template engine logic.
 
 | Feature                                          | Go equivalent             | Reason                                                                                           |
 | ------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| `<no value>` for missing map keys                | `reflect.Value{}` display | Rust uses `Value::Nil` → `<nil>` instead; Go's `<no value>` depends on `reflect.Value.IsValid()` |
 | `missingkey=zero` returning typed zero values    | `reflect.Zero(type)`      | Without reflection, zero-value depends on the map's value type; we return `Nil`                  |
-| `index` on missing map key returns typed zero    | `index .Map "k"`          | `Value::Map` is dynamically typed, so missing keys return `Nil` (`<nil>`) instead of typed zero  |
+| `index` on missing map key returns typed zero    | `index .Map "k"`          | `Value::Map` is dynamically typed, so missing keys return `Nil` instead of typed zero            |
 | `%T` format verb (type name)                     | `fmt.Sprintf("%T", ...)`  | Go-specific type name formatting                                                                 |
 | `%p` format verb (pointer)                       | `fmt.Sprintf("%p", ...)`  | No pointers in `Value`                                                                           |
 | `%w` format verb (error wrapping)                | `fmt.Errorf("%w", ...)`   | Not applicable to templates                                                                      |
@@ -286,9 +285,20 @@ Since Rust has no runtime reflection, some Go features are not applicable:
 - **No pointer/interface indirection** — `Value` is always concrete
 - **No complex numbers or channels** — not in the `Value` enum
 - **No `iter.Seq` / `iter.Seq2`** — use `Value::List` or `Value::Map`
-- **Missing map keys print `<nil>`** — Go prints `<no value>` for missing keys (via
-  `reflect.Value`); this library uses `Value::Nil` which displays as `<nil>`
 - **NaN comparisons error instead of returning wrong results** — Go's `gt`/`ge`
   are implemented as `!le`/`!lt`, so `gt NaN NaN` returns `true` (an IEEE 754
   violation). This library returns an error for unorderable float comparisons,
   which is strictly more correct
+
+## Go cross-check
+
+The test suite can optionally execute every template through Go's `text/template` and
+assert output parity. This requires Go on `PATH`.
+
+```sh
+cargo test --features go-crosscheck
+```
+
+A small Go helper program in `testdata/go_crosscheck/` is compiled once per test run
+and reused for all 346 compatibility tests. It receives the template and typed data as
+JSON on stdin, executes the template, and prints the result to stdout.

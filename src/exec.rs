@@ -261,8 +261,14 @@ impl<'a> Executor<'a> {
                 let val = self.eval_pipeline(dot, &action.pipe)?;
                 // Only print if there are no declarations (side-effect-only)
                 if action.pipe.decl.is_empty() {
-                    let s = format!("{}", val);
-                    w.write_all(s.as_bytes())?;
+                    // Go's template engine prints "<no value>" for nil/missing
+                    // values, distinct from fmt.Sprint(nil) which prints "<nil>".
+                    if matches!(val, Value::Nil) {
+                        w.write_all(b"<no value>")?;
+                    } else {
+                        let s = format!("{}", val);
+                        w.write_all(s.as_bytes())?;
+                    }
                 }
                 Ok(())
             }

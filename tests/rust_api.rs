@@ -59,7 +59,7 @@ fn test_missingkey_zero() {
         .unwrap()
         .execute_to_string(&data)
         .unwrap();
-    assert_eq!(result, "<nil>");
+    assert_eq!(result, "<no value>");
 }
 
 // ─── Max execution depth (Rust safety guard) ──────────────────────────────

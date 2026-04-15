@@ -16,6 +16,148 @@
 use go_template::Value;
 use go_template::{Template, tmap};
 
+// ─── Go cross-check ─────────────────────────────────────────────────────
+//
+// When the `go-crosscheck` feature is enabled, every call to `ok()` also
+// executes the same template through Go's text/template and asserts that
+// both implementations produce the same output.
+//
+// Usage:  cargo test --features go-crosscheck
+
+#[cfg(feature = "go-crosscheck")]
+mod go_crosscheck {
+    use super::Value;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::process::{Command, Stdio};
+    use std::sync::LazyLock;
+
+    /// Path to the compiled Go helper binary. Built exactly once per test run.
+    static GO_BINARY: LazyLock<PathBuf> = LazyLock::new(|| {
+        let src_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/go_crosscheck");
+        let bin = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("go-crosscheck");
+        let output = Command::new("go")
+            .args(["build", "-o", bin.to_str().unwrap(), "main.go"])
+            .current_dir(&src_dir)
+            .output()
+            .expect("failed to run `go build` — is Go installed?");
+        assert!(
+            output.status.success(),
+            "go build failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        bin
+    });
+
+    /// Escape a string for embedding in JSON.
+    fn json_escape(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if c < '\x20' => {
+                    out.push_str(&format!("\\u{:04x}", c as u32));
+                }
+                c => out.push(c),
+            }
+        }
+        out
+    }
+
+    /// Encode a `Value` as our typed-JSON protocol.
+    /// Returns `None` for `Value::Function` (cannot be serialized).
+    fn value_to_json(v: &Value) -> Option<String> {
+        Some(match v {
+            Value::Nil => r#"{"type":"nil"}"#.to_string(),
+            Value::Bool(b) => format!(r#"{{"type":"bool","value":{b}}}"#),
+            Value::Int(n) => format!(r#"{{"type":"int","value":{n}}}"#),
+            Value::Float(f) => {
+                // JSON doesn't support inf/nan; bail out.
+                if f.is_infinite() || f.is_nan() {
+                    return None;
+                }
+                // Ensure there's always a decimal point so Go reads float64.
+                let s = if f.fract() == 0.0 && !f.is_nan() {
+                    format!("{f:.1}")
+                } else {
+                    format!("{f}")
+                };
+                format!(r#"{{"type":"float","value":{s}}}"#)
+            }
+            Value::String(s) => {
+                format!(r#"{{"type":"string","value":"{}"}}"#, json_escape(s))
+            }
+            Value::List(items) => {
+                let encoded: Option<Vec<String>> = items.iter().map(value_to_json).collect();
+                let encoded = encoded?;
+                format!(r#"{{"type":"list","items":[{}]}}"#, encoded.join(","))
+            }
+            Value::Map(m) => {
+                let mut entries = Vec::new();
+                for (k, v) in m {
+                    let v_json = value_to_json(v)?;
+                    entries.push(format!(r#""{}":{}"#, json_escape(k), v_json));
+                }
+                format!(r#"{{"type":"map","map":{{{}}}}}"#, entries.join(","))
+            }
+            Value::Function(_) => return None,
+        })
+    }
+
+    /// Run the same template+data through Go's text/template and assert the
+    /// output matches `rust_result`.
+    pub fn check(template_str: &str, data: &Value, rust_result: &str) {
+        let data_json = match value_to_json(data) {
+            Some(j) => j,
+            None => return, // skip un-serializable data (e.g. Function values)
+        };
+        let payload = format!(
+            r#"{{"template":"{}","data":{}}}"#,
+            json_escape(template_str),
+            data_json,
+        );
+
+        let mut child = Command::new(GO_BINARY.as_path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn go-crosscheck binary");
+
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .expect("failed to write to go-crosscheck stdin");
+
+        let output = child.wait_with_output().expect("go-crosscheck failed");
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            panic!(
+                "Go crosscheck failed for template {:?}:\n{}",
+                template_str, stderr
+            );
+        }
+
+        let go_result = String::from_utf8(output.stdout)
+            .expect("go-crosscheck produced non-UTF-8 output");
+
+        assert_eq!(
+            rust_result, &go_result,
+            "Rust/Go output mismatch for template: {:?}\n  Rust: {:?}\n  Go:   {:?}",
+            template_str, rust_result, go_result,
+        );
+    }
+}
+
 // ─── Helper ──────────────────────────────────────────────────────────────
 
 fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
@@ -75,7 +217,11 @@ fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
 
 fn ok(input: &str, data: &Value, expected: &str) {
     match run(input, data) {
-        Ok(result) => assert_eq!(result, expected, "template: {}", input),
+        Ok(result) => {
+            assert_eq!(result, expected, "template: {}", input);
+            #[cfg(feature = "go-crosscheck")]
+            go_crosscheck::check(input, data, &result);
+        }
         Err(e) => panic!("template {:?} failed: {}", input, e),
     }
 }
@@ -1155,12 +1301,12 @@ fn test_call_nil_errors() {
 
 #[test]
 fn test_js_escape_equals() {
-    ok(r#"{{js "a=b"}}"#, &Value::Nil, r"a\u003db");
+    ok(r#"{{js "a=b"}}"#, &Value::Nil, r"a\u003Db");
 }
 
 #[test]
 fn test_js_escape_control_chars() {
-    ok(r#"{{js "\t\n"}}"#, &Value::Nil, r"\t\n");
+    ok(r#"{{js "\t\n"}}"#, &Value::Nil, r"\u0009\u000A");
 }
 
 // ─── Fix #6: HTML escape NUL byte ─────────────────────────────────────
@@ -1176,7 +1322,7 @@ fn test_html_nul_byte() {
 #[test]
 fn test_missingkey_default_returns_nil() {
     let data = tmap! { "X" => 1i64 };
-    ok("{{.Y}}", &data, "<nil>");
+    ok("{{.Y}}", &data, "<no value>");
 }
 
 // ─── Fix #10: and/or short-circuit ────────────────────────────────────
@@ -1372,7 +1518,7 @@ fn test_range_int_zero() {
 #[test]
 fn test_nil_pipeline() {
     let data = tmap! {};
-    ok("{{$x := .Missing}}{{$x}}", &data, "<nil>");
+    ok("{{$x := .Missing}}{{$x}}", &data, "<no value>");
 }
 
 // ─── Additional Go test coverage: template with no args ───────────────
@@ -1529,7 +1675,7 @@ fn test_js_escape_quotes() {
 
 #[test]
 fn test_js_escape_angle_brackets() {
-    ok(r#"{{js "<b>"}}"#, &Value::Nil, r"\u003cb\u003e");
+    ok(r#"{{js "<b>"}}"#, &Value::Nil, r"\u003Cb\u003E");
 }
 
 #[test]
@@ -1663,14 +1809,14 @@ fn test_ideal_exp_float() {
 fn test_map_no_key() {
     // Accessing a missing key returns nil (default missingkey behavior)
     let data = tmap! { "MSI" => tmap! { "one" => 1i64 } };
-    ok("{{.MSI.NO}}", &data, "<nil>");
+    ok("{{.MSI.NO}}", &data, "<no value>");
 }
 
 // ─── Go exec_test.go: dot of various types (extended) ─────────────────
 
 #[test]
 fn test_dot_nil() {
-    ok("<{{.}}>", &Value::Nil, "<<nil>>");
+    ok("<{{.}}>", &Value::Nil, "<<no value>>");
 }
 
 #[test]
@@ -2555,7 +2701,7 @@ fn test_printf_hash_hex() {
 
 #[test]
 fn test_printf_hash_octal() {
-    ok(r#"{{printf "%#o" 8}}"#, &Value::Nil, "0o10");
+    ok(r#"{{printf "%#o" 8}}"#, &Value::Nil, "010");
 }
 
 #[test]
@@ -2847,7 +2993,7 @@ fn test_nil_as_eq_arg() {
 #[test]
 fn test_nil_field_access() {
     // Accessing a field on nil returns nil (not an error in our model)
-    ok("{{$x := .Missing}}{{$x}}", &tmap! {}, "<nil>");
+    ok("{{$x := .Missing}}{{$x}}", &tmap! {}, "<no value>");
 }
 
 // ─── Go bug10: mapOfThree in parenthesized form ─────────────────────

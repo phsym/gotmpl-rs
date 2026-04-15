@@ -700,7 +700,7 @@ mod tests {
             .unwrap()
             .execute_to_string(&data)
             .unwrap();
-        assert_eq!(result, "<nil>");
+        assert_eq!(result, "<no value>");
     }
 
     #[test]
