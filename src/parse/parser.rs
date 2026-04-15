@@ -12,7 +12,7 @@ use crate::error::{Result, TemplateError};
 /// # Examples
 ///
 /// ```
-/// use go_template::parse::{Parser, Node};
+/// use gotmpl::parse::{Parser, Node};
 ///
 /// let parser = Parser::new("Hello, {{.Name}}!", "{{", "}}").unwrap();
 /// let (tree, defines) = parser.parse().unwrap();

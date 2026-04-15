@@ -1,4 +1,4 @@
-use go_template::{Template, ToValue};
+use gotmpl::{Template, ToValue};
 
 fn main() {
     let tmpl = Template::new("").parse("Hello, {{.}}!").unwrap();

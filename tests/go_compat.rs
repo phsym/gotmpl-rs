@@ -13,8 +13,8 @@
 // Additional Rust-only edge-case tests may appear here when needed to guard
 // behavior parity with upstream Go tests.
 
-use go_template::Value;
-use go_template::{Template, tmap};
+use gotmpl::Value;
+use gotmpl::{Template, tmap};
 
 // ─── Go cross-check ─────────────────────────────────────────────────────
 //
@@ -171,7 +171,7 @@ fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
         })
         .func("oneArg", |args| match args.first() {
             Some(Value::String(s)) => Ok(Value::String(format!("oneArg={}", s))),
-            _ => Err(go_template::TemplateError::Exec(
+            _ => Err(gotmpl::TemplateError::Exec(
                 "oneArg requires a string".into(),
             )),
         })
@@ -179,7 +179,7 @@ fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
             (Some(Value::String(a)), Some(Value::String(b))) => {
                 Ok(Value::String(format!("twoArgs={}{}", a, b)))
             }
-            _ => Err(go_template::TemplateError::Exec(
+            _ => Err(gotmpl::TemplateError::Exec(
                 "twoArgs requires two strings".into(),
             )),
         })
@@ -2277,7 +2277,7 @@ fn test_message_for_unparsed_template() {
 
 #[test]
 fn test_block_override() {
-    use go_template::parse::{ListNode, Node, Pos, TextNode};
+    use gotmpl::parse::{ListNode, Node, Pos, TextNode};
 
     let tmpl = Template::new("page")
         .parse(r#"{{block "content" .}}default content{{end}}"#)
@@ -2363,7 +2363,7 @@ fn test_defined_templates_string() {
 
 #[test]
 fn test_clone_independence() {
-    use go_template::parse::{ListNode, Node, Pos, TextNode};
+    use gotmpl::parse::{ListNode, Node, Pos, TextNode};
 
     let original = Template::new("t")
         .parse(r#"{{define "x"}}orig{{end}}{{template "x"}}"#)
@@ -2465,7 +2465,7 @@ fn test_call_with_args() {
     let data = tmap! {};
     let result = Template::new("test")
         .func("getfn", |_| {
-            let f: go_template::ValueFunc = Arc::new(|args| {
+            let f: gotmpl::ValueFunc = Arc::new(|args| {
                 let a = args[0].as_int().unwrap_or(0);
                 let b = args[1].as_int().unwrap_or(0);
                 Ok(Value::Int(a + b))

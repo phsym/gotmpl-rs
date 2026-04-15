@@ -1,17 +1,17 @@
-# go-template
+# gotmpl
 
 A faithful Rust reimplementation of Go's [`text/template`](https://pkg.go.dev/text/template) library.
 
 ## Overview
 
-`go-template` brings Go's powerful text templating language to Rust. It supports the full
+`gotmpl` brings Go's powerful text templating language to Rust. It supports the full
 template syntax including pipelines, control flow, custom functions, template composition, and
 whitespace trimming — all with Go-compatible semantics.
 
 ## Quick start
 
 ```rust
-use go_template::{Template, tmap};
+use gotmpl::{Template, tmap};
 
 let data = tmap! { "Name" => "World" };
 let result = Template::new("hello")
@@ -123,8 +123,8 @@ Adding `-` inside a delimiter trims adjacent whitespace:
 Register functions before parsing:
 
 ```rust
-use go_template::{Template, tmap};
-use go_template::Value;
+use gotmpl::{Template, tmap};
+use gotmpl::Value;
 
 let result = Template::new("test")
     .func("upper", |args| {
@@ -146,8 +146,8 @@ The `Value::Function` variant allows passing callable values through templates:
 
 ```rust
 use std::sync::Arc;
-use go_template::{Template, tmap};
-use go_template::{Value, ValueFunc};
+use gotmpl::{Template, tmap};
+use gotmpl::{Value, ValueFunc};
 
 let adder: ValueFunc = Arc::new(|args| {
     let sum: i64 = args.iter().filter_map(|a| a.as_int()).sum();
@@ -166,7 +166,7 @@ assert_eq!(result, "7");
 ## Options
 
 ```rust
-use go_template::Template;
+use gotmpl::Template;
 
 let tmpl = Template::new("t")
     .option("missingkey=error")   // error on missing map keys
@@ -217,7 +217,7 @@ Template data uses the `Value` enum:
 The `tmap!` macro provides a convenient way to build data maps:
 
 ```rust
-use go_template::{tmap, ToValue};
+use gotmpl::{tmap, ToValue};
 
 let data = tmap! {
     "Name" => "Alice",

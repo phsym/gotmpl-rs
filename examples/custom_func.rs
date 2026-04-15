@@ -1,4 +1,4 @@
-use go_template::{Result, Template, Value};
+use gotmpl::{Result, Template, Value};
 
 fn title(s: &[Value]) -> Result<Value> {
     let Some(Value::String(s)) = s.into_iter().next() else {
