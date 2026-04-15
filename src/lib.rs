@@ -10,7 +10,7 @@ pub(crate) mod go;
 /// Parser, lexer, and AST node types for the Go template language.
 ///
 /// This module mirrors Go's `text/template/parse` package. Most users don't
-/// need it directly — use [`Template::parse`] instead. The AST types are public
+/// need it directly; use [`Template::parse`] instead. The AST types are public
 /// for advanced use cases like [`Template::add_parse_tree`].
 pub mod parse;
 pub(crate) mod value;
@@ -576,7 +576,7 @@ impl Template {
     ///
     /// Equivalent to Go's `template.Clone()`. The cloned template has its
     /// own copy of all defined templates and shares the same function map
-    /// (via `Arc`-wrapped closures) — modifications to one do not affect the other.
+    /// (via `Arc`-wrapped closures). Modifications to one do not affect the other.
     ///
     /// # Examples
     ///

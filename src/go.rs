@@ -525,7 +525,7 @@ pub fn js_escape(s: &str) -> String {
             '"' => out.push_str("\\\""),
             '\'' => out.push_str("\\'"),
             // Go's JSEscape uses \uXXXX (uppercase hex) for all control
-            // characters, including \t, \n, \r — no shorthand escapes.
+            // characters, including \t, \n, \r (no shorthand escapes).
             '<' => out.push_str("\\u003C"),
             '>' => out.push_str("\\u003E"),
             '&' => out.push_str("\\u0026"),
@@ -1489,7 +1489,7 @@ mod tests {
             width: Some(2),
             precision: None,
         };
-        // String already wider — no padding
+        // String already wider, no padding needed
         assert_eq!(spec.pad("hello", false), "hello");
     }
 

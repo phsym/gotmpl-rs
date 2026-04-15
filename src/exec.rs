@@ -1,4 +1,4 @@
-//! Template execution engine — walks the AST and writes output.
+//! Template execution engine. Walks the AST and writes output.
 //!
 //! The [`Executor`] evaluates a parsed template tree against a [`Value`] data
 //! context, writing results to any [`core::fmt::Write`] destination.
@@ -9,10 +9,10 @@
 //! # Execution model
 //!
 //! The executor maintains:
-//! - **dot** — the current context value (changes inside `range`/`with`)
-//! - **`$`** — always refers to the root data passed to [`execute`](Executor::execute)
-//! - **variable scopes** — a stack of name→[`Value`] frames, pushed/popped for control blocks
-//! - **recursion depth** — prevents stack overflow from recursive `{{template}}` calls
+//! - **dot**: the current context value (changes inside `range`/`with`)
+//! - **`$`**: always refers to the root data passed to [`execute`](Executor::execute)
+//! - **variable scopes**: a stack of name-to-[`Value`] frames, pushed/popped for control blocks
+//! - **recursion depth**: prevents stack overflow from recursive `{{template}}` calls
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -55,7 +55,7 @@ pub enum MissingKey {
 
 // ─── Internal control-flow signaling ────────────────────────────────────
 //
-// `{{break}}` and `{{continue}}` are not errors — they're control-flow
+// `{{break}}` and `{{continue}}` are not errors, they're control-flow
 // signals caught by the range walker. We keep them out of the public
 // `TemplateError` enum by using a private error type for the executor's
 // internal methods.
@@ -69,9 +69,9 @@ pub enum MissingKey {
 enum ExecSignal {
     /// A real template error to propagate to the caller.
     Err(Box<TemplateError>),
-    /// `{{break}}` — exit the innermost range loop.
+    /// `{{break}}`: exit the innermost range loop.
     Break,
-    /// `{{continue}}` — skip to the next range iteration.
+    /// `{{continue}}`: skip to the next range iteration.
     Continue,
 }
 
@@ -515,7 +515,7 @@ impl<'a> Executor<'a> {
             .into());
         }
 
-        // Go: nil is not a valid command — it cannot be printed or used
+        // Go: nil is not a valid command. It cannot be printed or used
         // as a pipeline value. It may only appear as an argument to a function.
         if matches!(first, Expr::Nil(_)) {
             return Err(TemplateError::Exec("nil is not a command".into()).into());
@@ -683,7 +683,7 @@ impl<'a> Executor<'a> {
             Expr::Pipe(_, pipe) => self.eval_pipeline(dot, pipe),
 
             Expr::Identifier(_, name) => {
-                // Bare identifier — could be a zero-arg function call
+                // Bare identifier, could be a zero-arg function call
                 if let Some(func) = self.funcs.get(name.as_str()) {
                     return self.invoke_func(name, func, &[]);
                 }

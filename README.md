@@ -1,12 +1,9 @@
 # gotmpl
 
-A faithful Rust reimplementation of Go's [`text/template`](https://pkg.go.dev/text/template) library.
+A Rust port of Go's [`text/template`](https://pkg.go.dev/text/template).
 
-## Overview
-
-`gotmpl` brings Go's powerful text templating language to Rust. It supports the full
-template syntax including pipelines, control flow, custom functions, template composition, and
-whitespace trimming — all with Go-compatible semantics.
+Supports the full template syntax (pipelines, control flow, custom functions, template
+composition, whitespace trimming) with Go compatible output. `no_std` compatible.
 
 ## Quick start
 
@@ -24,8 +21,8 @@ assert_eq!(result, "Hello, World!");
 
 ## Template syntax
 
-The template language follows Go's `text/template` specification. Actions are delimited by
-`{{` and `}}` (configurable via `.delims()`).
+Actions are delimited by `{{` and `}}` (configurable via `.delims()`).
+The syntax follows Go's `text/template` spec.
 
 ### Data access
 
@@ -39,9 +36,6 @@ The template language follows Go's `text/template` specification. Actions are de
 ```
 
 ### Pipelines
-
-Commands can be chained with `|`, where each command's output becomes the last argument
-of the next:
 
 ```text
 {{.Name | printf "%s!"}}
@@ -82,18 +76,10 @@ of the next:
 {{block "name" .}}default{{end}}   Define and invoke (with default)
 ```
 
-### Comments
+### Comments and whitespace trimming
 
 ```text
 {{/* This is a comment */}}
-{{- /* Trimmed comment */ -}}
-```
-
-### Whitespace trimming
-
-Adding `-` inside a delimiter trims adjacent whitespace:
-
-```text
 {{- .X}}     Trim whitespace before
 {{.X -}}     Trim whitespace after
 {{- .X -}}   Trim both sides
@@ -101,22 +87,19 @@ Adding `-` inside a delimiter trims adjacent whitespace:
 
 ## Built-in functions
 
-| Function                           | Description                                                                               |
-| ---------------------------------- | ----------------------------------------------------------------------------------------- |
-| `print`                            | Concatenate args (spaces between non-string adjacent args)                                |
-| `printf`                           | Formatted output (`%s`, `%d`, `%f`, `%v`, `%q`, `%x`, `%o`, `%b`, `%e`, `%g`, `%t`, `%c`) |
-| `println`                          | Print with spaces between args, trailing newline                                          |
-| `len`                              | Length of string, list, or map                                                            |
-| `index`                            | Index into list or map: `index .List 0`, `index .Map "key"`                               |
-| `slice`                            | Slice a list or string: `slice .List 1 3`                                                 |
-| `call`                             | Call a function value: `call .Func arg1 arg2`                                             |
-| `eq`, `ne`, `lt`, `le`, `gt`, `ge` | Comparison operators. `eq` supports multi-arg: `eq .X 1 2 3`                              |
-| `and`                              | Short-circuit AND, returns first falsy arg or last arg                                    |
-| `or`                               | Short-circuit OR, returns first truthy arg or last arg                                    |
-| `not`                              | Boolean negation                                                                          |
-| `html`                             | HTML-escape a string                                                                      |
-| `js`                               | JavaScript-escape a string                                                                |
-| `urlquery`                         | URL query-escape a string                                                                 |
+| Function | Description |
+|----------|-------------|
+| `print` | Concatenate args (spaces between non-string adjacent args) |
+| `printf` | Formatted output (`%s`, `%d`, `%f`, `%v`, `%q`, `%x`, `%o`, `%b`, `%e`, `%g`, `%t`, `%c`) |
+| `println` | Print with spaces between args, trailing newline |
+| `len` | Length of string, list, or map |
+| `index` | Index into list or map: `index .List 0`, `index .Map "key"` |
+| `slice` | Slice a list or string: `slice .List 1 3` |
+| `call` | Call a function value: `call .Func arg1 arg2` |
+| `eq`, `ne`, `lt`, `le`, `gt`, `ge` | Comparison operators. `eq` supports multi-arg: `eq .X 1 2 3` |
+| `and`, `or` | Short-circuit logic, return the deciding value |
+| `not` | Boolean negation |
+| `html`, `js`, `urlquery` | Escape for HTML, JavaScript, URL query |
 
 ## Custom functions
 
@@ -142,7 +125,7 @@ assert_eq!(result, "HELLO");
 
 ## Function values and `call`
 
-The `Value::Function` variant allows passing callable values through templates:
+`Value::Function` allows passing callable values through templates:
 
 ```rust
 extern crate alloc;
@@ -176,46 +159,44 @@ let tmpl = Template::new("t")
     .unwrap();
 ```
 
-### Missing key behavior
-
-| Option               | Behavior                      |
-| -------------------- | ----------------------------- |
+| Option | Behavior |
+|--------|----------|
 | `missingkey=invalid` | Return `<no value>` (default) |
-| `missingkey=zero`    | Return `<no value>`           |
-| `missingkey=error`   | Return an error               |
+| `missingkey=zero` | Return `<no value>` |
+| `missingkey=error` | Return an error |
 
 ## Number literals
 
-Go-compatible number literal syntax is supported in templates:
+Go-compatible number literal syntax:
 
 ```text
 {{42}}          Decimal
 {{3.14}}        Float
 {{0xFF}}        Hexadecimal
-{{0o77}}        Octal (explicit prefix)
-{{0377}}        Octal (legacy, leading zero)
+{{0o77}}        Octal
+{{0377}}        Octal (legacy leading zero)
 {{0b1010}}      Binary
 {{1_000_000}}   Underscore separators
-{{'a'}}         Character literal (emits code point: 97)
-{{0x1.ep+2}}    Hex float literal (7.5)
+{{'a'}}         Character literal (97)
+{{0x1.ep+2}}    Hex float (7.5)
 ```
 
 ## Data model
 
 Template data uses the `Value` enum:
 
-| Variant                        | Rust type     | Go equivalent    |
-| ------------------------------ | ------------- | ---------------- |
-| `Nil`                          | —             | `nil`            |
-| `Bool(bool)`                   | `bool`        | `bool`           |
-| `Int(i64)`                     | `i64`         | `int`            |
-| `Float(f64)`                   | `f64`         | `float64`        |
-| `String(String)`               | `String`      | `string`         |
-| `List(Vec<Value>)`             | `Vec<Value>`  | `[]any`          |
-| `Map(BTreeMap<String, Value>)` | `BTreeMap`    | `map[string]any` |
-| `Function(ValueFunc)`          | `Arc<dyn Fn>` | `func(...)`      |
+| Variant | Rust type | Go equivalent |
+|---------|-----------|---------------|
+| `Nil` | n/a | `nil` |
+| `Bool(bool)` | `bool` | `bool` |
+| `Int(i64)` | `i64` | `int` |
+| `Float(f64)` | `f64` | `float64` |
+| `String(String)` | `String` | `string` |
+| `List(Vec<Value>)` | `Vec<Value>` | `[]any` |
+| `Map(BTreeMap<String, Value>)` | `BTreeMap` | `map[string]any` |
+| `Function(ValueFunc)` | `Arc<dyn Fn>` | `func(...)` |
 
-The `tmap!` macro provides a convenient way to build data maps:
+The `tmap!` macro builds data maps:
 
 ```rust
 use gotmpl::{tmap, ToValue};
@@ -230,105 +211,39 @@ let data = tmap! {
 };
 ```
 
-## Go interoperability
-
-All Go-specific formatting and escaping adaptations live in the [`go`](src/go.rs) module.
-This isolates the Rust↔Go translation layer from the template engine logic.
-
-### Implemented adaptations
-
-| Adaptation                                                                                  | Go equivalent               | Status |
-| ------------------------------------------------------------------------------------------- | --------------------------- | ------ |
-| `sprintf` — full `fmt.Sprintf` with verbs `%s %d %f %e %E %g %G %v %q %t %x %X %o %b %c %%` | `fmt.Sprintf`               | Done   |
-| `%#q` backtick quoting                                                                      | `fmt.Sprintf("%#q", ...)`   | Done   |
-| `%e`/`%E` exponent normalization (always `e+00` not `e0`)                                   | `fmt.Sprintf("%e", ...)`    | Done   |
-| `%g`/`%G` with precision, sci-notation threshold, trailing-zero stripping                   | `fmt.Sprintf("%g", ...)`    | Done   |
-| Printf flags: `-` `+` ` ` `#` `0`, width, `.precision`                                      | `fmt` flag grammar          | Done   |
-| `print` inter-arg spacing (spaces between non-string adjacent operands)                     | `fmt.Sprint`                | Done   |
-| `go_quote` — double-quoted string literal with Go escape sequences                          | `strconv.Quote`             | Done   |
-| Integer base formatting with sign-before-prefix convention (`-0xff`)                        | `fmt.Sprintf("%x", ...)`    | Done   |
-| HTML escaping (`&`, `<`, `>`, `"`, `'`, NUL → U+FFFD)                                       | `template.HTMLEscapeString` | Done   |
-| JS escaping (backslash, quotes, `<>`, `&`, `=`, control chars as `\uXXXX`)                  | `template.JSEscapeString`   | Done   |
-| URL percent-encoding (RFC 3986 unreserved passthrough)                                      | `template.URLQueryEscaper`  | Done   |
-| Hex float literal parsing (`0x1.Fp10`)                                                      | Go hex float syntax         | Done   |
-| Legacy octal number literals (`0377` → 255)                                                 | Go legacy octal             | Done   |
-| `nil` is not a command (bare `{{nil}}` errors)                                              | Go exec semantics           | Done   |
-| Truthiness semantics (nil, 0, "", empty collections are falsy)                              | `template.IsTrue`           | Done   |
-| `and`/`or` short-circuit evaluation returning the deciding value                            | Go template semantics       | Done   |
-| `break`/`continue` in `range` loops                                                         | Go 1.18+                    | Done   |
-| `range` over integer (`range 5`)                                                            | Go 1.22+                    | Done   |
-| `block` (define + invoke)                                                                   | Go template semantics       | Done   |
-| `else if` / `else with` chains                                                              | Go template semantics       | Done   |
-| Whitespace trimming (`{{-` / `-}}`)                                                         | Go template semantics       | Done   |
-| `$` rebinding inside `{{template}}` calls                                                   | Go template semantics       | Done   |
-| Deterministic map iteration (sorted keys via `BTreeMap`)                                    | Go sorted map range         | Done   |
-
-### Not yet implemented
-
-| Feature                                          | Go equivalent             | Reason                                                                                |
-| ------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------- |
-| `missingkey=zero` returning typed zero values    | `reflect.Zero(type)`      | Without reflection, zero-value depends on the map's value type; we return `Nil`       |
-| `index` on missing map key returns typed zero    | `index .Map "k"`          | `Value::Map` is dynamically typed, so missing keys return `Nil` instead of typed zero |
-| `%T` format verb (type name)                     | `fmt.Sprintf("%T", ...)`  | Go-specific type name formatting                                                      |
-| `%p` format verb (pointer)                       | `fmt.Sprintf("%p", ...)`  | No pointers in `Value`                                                                |
-| `%w` format verb (error wrapping)                | `fmt.Errorf("%w", ...)`   | Not applicable to templates                                                           |
-| `%#v` Go-syntax value representation             | `fmt.Sprintf("%#v", ...)` | Would need Go-style printing of `Value`                                               |
-| `%U` Unicode format (`U+0041`)                   | `fmt.Sprintf("%U", ...)`  | Rarely used in templates                                                              |
-| Function name validation (reject `"a-b"`, `"2"`) | Go template parser        | Names are validated syntactically but not with Go's exact character rules             |
-| `{{range $i = .List}}` assignment form           | Go range assignment       | Only `:=` declaration form is supported                                               |
-
-## Differences from Go
-
-Since Rust has no runtime reflection, some Go features are not applicable:
-
-- **No struct field access** — use `Value::Map` instead of structs
-- **No method calls** — register functions via `.func()` instead
-- **No pointer/interface indirection** — `Value` is always concrete
-- **No complex numbers or channels** — not in the `Value` enum
-- **No `iter.Seq` / `iter.Seq2`** — use `Value::List` or `Value::Map`
-- **NaN comparisons error instead of returning wrong results** — Go's `gt`/`ge`
-  are implemented as `!le`/`!lt`, so `gt NaN NaN` returns `true` (an IEEE 754
-  violation). This library returns an error for unorderable float comparisons,
-  which is strictly more correct
-
 ## `no_std` support
 
-`gotmpl` supports `no_std` environments (with `alloc`). The `std` feature is enabled by
-default; disable it with:
+The crate works in `no_std` environments (requires `alloc`). Disable the default `std`
+feature:
 
 ```toml
 [dependencies]
 gotmpl = { version = "0.1", default-features = false }
 ```
 
-### What changes without `std`
+Without `std`, `execute_fmt` and `execute_to_string` are available. The `io::Write`-based
+`execute`/`execute_template` methods and `parse_files` require the `std` feature.
+User-defined functions that panic will propagate instead of being caught.
 
-| Feature                                   | `std` (default) | `no_std`              |
-| ----------------------------------------- | --------------- | --------------------- |
-| Parse & execute templates                 | yes             | yes                   |
-| `execute_fmt` (write to `fmt::Write`)     | yes             | yes                   |
-| `execute_to_string`                       | yes             | yes                   |
-| `execute` (write to `io::Write`)          | yes             | no                    |
-| `execute_template` (write to `io::Write`) | yes             | no                    |
-| `parse_files` (load from filesystem)      | yes             | no                    |
-| Panic catching in user functions          | yes             | no — panics propagate |
+## Differences from Go
 
-In `no_std` mode, use `execute_fmt` with any `core::fmt::Write` target (e.g. `String`)
-or `execute_to_string`. The `execute` and `execute_template` methods that accept
-`std::io::Write` targets (`Vec<u8>`, `File`, etc.) require the `std` feature.
+Rust has no runtime reflection, so:
 
-User-defined functions that panic will abort in `no_std` instead of being caught and
-converted to a `TemplateError::Exec`.
+- **No struct field access**: use `Value::Map` instead
+- **No method calls**: register functions via `.func()`
+- **No pointer/interface indirection**: `Value` is always concrete
+- **No complex numbers, channels, or `iter.Seq`**
+- **NaN comparisons** return an error instead of Go's silently wrong results
 
 ## Go cross-check
 
-The test suite can optionally execute every template through Go's `text/template` and
-assert output parity. This requires Go on `PATH`.
+The test suite can optionally run every template through Go's `text/template` and assert
+output parity:
 
 ```sh
 cargo test --features go-crosscheck
 ```
 
-A small Go helper program in `testdata/go_crosscheck/` is compiled once per test run
-and reused for all 346 compatibility tests. It receives the template and typed data as
-JSON on stdin, executes the template, and prints the result to stdout.
+A Go helper (`tests/testdata/go_crosscheck.go`) is compiled once per test run. It
+receives templates and typed data as JSON on stdin, executes via Go's `text/template`, and
+prints the result.

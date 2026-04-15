@@ -53,8 +53,8 @@ impl Parser {
     /// Parse the entire template into an AST.
     ///
     /// Returns a tuple of:
-    /// - [`ListNode`] — the top-level node sequence (the template body)
-    /// - [`Vec<DefineNode>`] — any `{{define "name"}}...{{end}}` blocks found
+    /// - [`ListNode`]: the top-level node sequence (the template body)
+    /// - [`Vec<DefineNode>`]: any `{{define "name"}}...{{end}}` blocks found
     ///
     /// # Errors
     ///

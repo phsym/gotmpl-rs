@@ -1,7 +1,7 @@
 //! Dynamic value system for template data.
 //!
 //! Go's template engine inspects arbitrary types at runtime via reflection.
-//! In Rust, we use the [`Value`] enum — an approach similar to `serde_json::Value`.
+//! In Rust, we use the [`Value`] enum, similar to `serde_json::Value`.
 //!
 //! The [`ToValue`](crate::ToValue) trait allows converting Rust types into [`Value`]s, and the
 //! [`tmap!`](crate::tmap) macro provides a convenient way to build data maps.
@@ -49,8 +49,8 @@ pub type ValueFunc = Arc<dyn Fn(&[Value]) -> Result<Value> + Send + Sync>;
 
 /// The core dynamic type for template data.
 ///
-/// Every piece of data flowing through the template engine — dot, variables,
-/// function arguments, pipeline results — is a `Value`. This plays the role
+/// Every piece of data flowing through the template engine (dot, variables,
+/// function arguments, pipeline results) is a `Value`. This plays the role
 /// that `reflect.Value` plays in Go's template engine.
 ///
 /// # Truthiness
@@ -75,7 +75,7 @@ pub type ValueFunc = Arc<dyn Fn(&[Value]) -> Result<Value> + Send + Sync>;
 /// - `Map` → `map[k1:v1 k2:v2]`
 /// - `Function` → `<func>`
 pub enum Value {
-    /// The nil value — represents absence of data.
+    /// The nil value, represents absence of data.
     Nil,
     /// A boolean value.
     Bool(bool),
@@ -150,7 +150,7 @@ impl Value {
     /// Returns `Some(&value)` when the key exists (the value may itself be
     /// [`Value::Nil`]), and `None` when the key is absent or the receiver is
     /// not a map. This lets callers distinguish "key set to nil" from
-    /// "key missing" — important for the `missingkey=error` option.
+    /// "key missing", which matters for the `missingkey=error` option.
     ///
     /// In Go, this would use reflection to access struct fields or map keys.
     ///

@@ -2,8 +2,8 @@
 //!
 //! This module mirrors Go's `text/template/parse` package, grouping together:
 //!
-//! - [`Parser`](crate::parse::Parser) — recursive-descent parser that converts template source into an AST
-//! - [`Node`](crate::parse::Node), [`Expr`](crate::parse::Expr), and supporting structs — the AST types
+//! - [`Parser`](crate::parse::Parser): recursive-descent parser that converts template source into an AST
+//! - [`Node`](crate::parse::Node), [`Expr`](crate::parse::Expr), and supporting structs: the AST types
 //!
 //! Most users interact with [`Template::parse`](crate::Template::parse) rather than
 //! using these types directly. The AST types are public for advanced use cases

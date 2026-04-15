@@ -31,7 +31,7 @@ use crate::value::Value;
 
 /// The function type used by the template engine.
 ///
-/// All template functions — both built-in and user-defined — share
+/// All template functions, both built-in and user-defined, share
 /// this signature: they receive arguments as a [`Value`] slice and return a
 /// [`Result<Value>`](crate::error::Result).
 ///

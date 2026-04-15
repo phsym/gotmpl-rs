@@ -2,7 +2,7 @@
 //!
 //! The AST is produced by the [`Parser`](super::Parser) and consumed by
 //! the executor. In Go's implementation, nodes use an interface with a tree
-//! of concrete types. In Rust, we use enums — the natural way to represent
+//! of concrete types. In Rust, we use enums, the natural way to represent
 //! sum types.
 //!
 //! The top-level enum is [`Node`], with expression-level atoms in [`Expr`].
@@ -40,7 +40,7 @@ impl Pos {
 /// The executor walks a tree of these nodes to produce output.
 #[derive(Debug, Clone)]
 pub enum Node {
-    /// A sequence of nodes — the body of a template or control-flow branch.
+    /// A sequence of nodes (the body of a template or control-flow branch).
     ///
     /// Corresponds to Go's `parse.ListNode`.
     List(ListNode),
@@ -54,31 +54,31 @@ pub enum Node {
     /// is assigned instead of printed.
     Action(ActionNode),
 
-    /// `{{if pipeline}}...{{end}}` — conditional execution.
+    /// `{{if pipeline}}...{{end}}`: conditional execution.
     If(IfNode),
 
-    /// `{{range pipeline}}...{{end}}` — iteration over a list, map, or integer.
+    /// `{{range pipeline}}...{{end}}`: iteration over a list, map, or integer.
     Range(RangeNode),
 
-    /// `{{with pipeline}}...{{end}}` — sets dot to the pipeline value if truthy.
+    /// `{{with pipeline}}...{{end}}`: sets dot to the pipeline value if truthy.
     With(WithNode),
 
-    /// `{{template "name" pipeline}}` — invokes a named template.
+    /// `{{template "name" pipeline}}`: invokes a named template.
     Template(TemplateNode),
 
-    /// `{{define "name"}}...{{end}}` — defines a named template.
+    /// `{{define "name"}}...{{end}}`: defines a named template.
     ///
     /// Collected at parse time and stored separately from the main AST.
     Define(DefineNode),
 
-    /// `{{break}}` — exits the innermost `{{range}}` loop.
+    /// `{{break}}`: exits the innermost `{{range}}` loop.
     Break(Pos),
 
-    /// `{{continue}}` — skips to the next iteration of the innermost `{{range}}` loop.
+    /// `{{continue}}`: skips to the next iteration of the innermost `{{range}}` loop.
     Continue(Pos),
 }
 
-/// A sequence of [`Node`]s — the body of a template or a branch.
+/// A sequence of [`Node`]s, the body of a template or a branch.
 #[derive(Debug, Clone)]
 pub struct ListNode {
     /// Source position of the first node in the list.
@@ -111,9 +111,9 @@ pub struct ActionNode {
 /// A pipeline: one or more [`CommandNode`]s separated by `|`.
 ///
 /// Optionally declares or assigns variables:
-/// - `$x := pipeline` — declare with `:=`
-/// - `$x = pipeline` — assign with `=`
-/// - `$i, $v := range .Items` — multiple declarations in range
+/// - `$x := pipeline`: declare with `:=`
+/// - `$x = pipeline`: assign with `=`
+/// - `$i, $v := range .Items`: multiple declarations in range
 ///
 /// When piped, each command's result becomes the **last** argument of the
 /// next command (matching Go's convention).
@@ -133,11 +133,11 @@ pub struct PipeNode {
     pub is_assign: bool,
 }
 
-/// A single command in a pipeline — a function call or a bare value.
+/// A single command in a pipeline, either a function call or a bare value.
 ///
 /// The first element of [`args`](Self::args) determines the command type:
-/// - [`Expr::Identifier`] — a function call; remaining args are its arguments.
-/// - Any other [`Expr`] — a bare value (only valid as the first or sole command).
+/// - [`Expr::Identifier`]: a function call; remaining args are its arguments.
+/// - Any other [`Expr`]: a bare value (only valid as the first or sole command).
 #[derive(Debug, Clone)]
 pub struct CommandNode {
     /// Source position.
@@ -146,12 +146,12 @@ pub struct CommandNode {
     pub args: Vec<Expr>,
 }
 
-/// An expression — the atomic building blocks of commands.
+/// An expression, the atomic building blocks of commands.
 ///
 /// Each variant carries a [`Pos`] for error reporting.
 #[derive(Debug, Clone)]
 pub enum Expr {
-    /// The dot cursor (`.`) — refers to the current context value.
+    /// The dot cursor (`.`), refers to the current context value.
     Dot(Pos),
 
     /// Field access on dot: `.Name`, `.User.Email`.

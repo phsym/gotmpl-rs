@@ -3,7 +3,7 @@
 //! All fallible operations in this crate return [`Result<T>`], which is an alias
 //! for `std::result::Result<T, TemplateError>`.
 //!
-//! Errors are split into phases — lexing, parsing, and execution — so callers
+//! Errors are split into phases (lexing, parsing, and execution) so callers
 //! can match on the variant to provide targeted diagnostics.
 
 use alloc::string::String;

@@ -1,8 +1,8 @@
 //! Lexer (scanner) that tokenizes template source text into a stream of tokens.
 //!
 //! The lexer recognizes two "worlds":
-//! - **Outside delimiters** — everything is raw text (`TokenKind::Text`)
-//! - **Inside delimiters** — keywords, identifiers, operators, and literals
+//! - **Outside delimiters**: everything is raw text (`TokenKind::Text`)
+//! - **Inside delimiters**: keywords, identifiers, operators, and literals
 //!
 //! Supports configurable delimiters (default `{{` / `}}`), trim markers
 //! (`{{-` / `-}}`), comments (`{{/* ... */}}`), and Go-compatible number
@@ -267,8 +267,8 @@ impl Lexer {
 
     /// Emit accumulated text before a delimiter, applying trim as needed.
     ///
-    /// `trim_leading` — trim whitespace from the start (previous action had `-}}`).
-    /// `trim_trailing` — trim whitespace from the end (current delimiter is `{{-`).
+    /// `trim_leading`: trim whitespace from the start (previous action had `-}}`).
+    /// `trim_trailing`: trim whitespace from the end (current delimiter is `{{-`).
     fn emit_pending_text(&mut self, trim_leading: bool, trim_trailing: bool) {
         let text: String = self.input[self.start..self.pos].iter().collect();
         let mut text = if trim_leading {
@@ -319,7 +319,7 @@ impl Lexer {
         }
 
         if !self.starts_with("/*") {
-            // Not a comment — restore
+            // Not a comment, restore
             self.pos = saved_pos;
             self.start = saved_start;
             self.line = saved_line;
@@ -525,7 +525,7 @@ impl Lexer {
     }
 
     fn lex_field(&mut self) -> Result<()> {
-        // We've already consumed the '.' — now consume the identifier part
+        // We've already consumed the '.', now consume the identifier part
         while let Some(ch) = self.peek() {
             if ch.is_alphanumeric() || ch == '_' {
                 self.next_char();
@@ -698,7 +698,7 @@ impl Lexer {
                 }
             }
         }
-        // For hex floats, just emit the raw value — Rust can parse them with special handling
+        // For hex floats, just emit the raw value. Rust can parse them with special handling
         let raw: String = self.input[self.start..self.pos].iter().collect();
         let clean: String = raw.chars().filter(|c| *c != '_').collect();
         // Parse hex float manually: use the format 0xHEX.HEXpEXP

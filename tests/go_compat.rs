@@ -35,13 +35,12 @@ mod go_crosscheck {
 
     /// Path to the compiled Go helper binary. Built exactly once per test run.
     static GO_BINARY: LazyLock<PathBuf> = LazyLock::new(|| {
-        let src_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/go_crosscheck");
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/testdata/go_crosscheck.go");
         let bin = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("go-crosscheck");
         let output = Command::new("go")
-            .args(["build", "-o", bin.to_str().unwrap(), "main.go"])
-            .current_dir(&src_dir)
+            .args(["build", "-o", bin.to_str().unwrap(), src.to_str().unwrap()])
             .output()
             .expect("failed to run `go build` — is Go installed?");
         assert!(
