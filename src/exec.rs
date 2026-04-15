@@ -40,8 +40,17 @@ const MAX_EXEC_DEPTH: usize = 1_000;
 
 /// Controls behavior when accessing a missing key on a [`Value::Map`].
 ///
-/// Set via [`Template::option`](crate::Template::option) with
-/// `"missingkey=invalid"`, `"missingkey=zero"`, or `"missingkey=error"`.
+/// Set via [`Template::missing_key`](crate::Template::missing_key).
+///
+/// Supports parsing from strings via [`FromStr`](core::str::FromStr):
+/// `"invalid"`, `"default"`, `"zero"`, and `"error"`.
+///
+/// ```
+/// use gotmpl::MissingKey;
+///
+/// let mk: MissingKey = "error".parse().unwrap();
+/// assert_eq!(mk, MissingKey::Error);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum MissingKey {
     /// Return [`Value::Nil`] for missing keys (the default).
@@ -51,6 +60,31 @@ pub enum MissingKey {
     ZeroValue,
     /// Return a [`TemplateError::Exec`] for missing keys.
     Error,
+}
+
+impl core::fmt::Display for MissingKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MissingKey::Invalid => f.write_str("invalid"),
+            MissingKey::ZeroValue => f.write_str("zero"),
+            MissingKey::Error => f.write_str("error"),
+        }
+    }
+}
+
+impl core::str::FromStr for MissingKey {
+    type Err = TemplateError;
+
+    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
+        match s {
+            "invalid" | "default" => Ok(MissingKey::Invalid),
+            "zero" => Ok(MissingKey::ZeroValue),
+            "error" => Ok(MissingKey::Error),
+            _ => Err(TemplateError::Exec(format!(
+                "unrecognized missingkey value: {s:?}"
+            ))),
+        }
+    }
 }
 
 // ─── Internal control-flow signaling ────────────────────────────────────

@@ -33,7 +33,8 @@ use alloc::vec::Vec;
 #[cfg(feature = "std")]
 use std::io::Write;
 
-use exec::{Executor, MissingKey};
+pub use exec::MissingKey;
+use exec::Executor;
 use parse::{ListNode, Parser};
 
 /// A function map mapping names to template functions.
@@ -62,11 +63,11 @@ pub type FuncMap = BTreeMap<String, Func>;
 /// Use the builder-style API to configure, parse, and execute templates:
 ///
 /// ```
-/// use gotmpl::{Template, tmap};
+/// use gotmpl::{Template, MissingKey, tmap};
 ///
 /// let output = Template::new("greet")
 ///     .delims("<<", ">>")                        // optional: custom delimiters
-///     .option("missingkey=error")                 // optional: error on missing keys
+///     .missing_key(MissingKey::Error)             // optional: error on missing keys
 ///     .func("shout", |args| {                     // optional: custom functions
 ///         let s = format!("{}", args[0]).to_uppercase();
 ///         Ok(gotmpl::Value::String(s))
@@ -166,26 +167,22 @@ impl Template {
         self
     }
 
-    /// Set execution options, matching Go's `template.Option()`.
+    /// Set the behavior for missing map keys.
     ///
-    /// # Supported options
+    /// # Examples
     ///
-    /// | Option | Behavior |
-    /// |--------|----------|
-    /// | `"missingkey=invalid"` | Missing map keys return [`Value::Nil`] (default) |
-    /// | `"missingkey=zero"` | Same as `invalid` |
-    /// | `"missingkey=default"` | Same as `invalid` |
-    /// | `"missingkey=error"` | Missing map keys cause a [`TemplateError::Exec`] |
+    /// ```
+    /// use gotmpl::{Template, MissingKey, tmap};
     ///
-    /// Unknown options are silently ignored.
-    pub fn option(mut self, opt: &str) -> Self {
-        match opt {
-            "missingkey=invalid" => self.missing_key = MissingKey::Invalid,
-            "missingkey=zero" => self.missing_key = MissingKey::ZeroValue,
-            "missingkey=default" => self.missing_key = MissingKey::Invalid,
-            "missingkey=error" => self.missing_key = MissingKey::Error,
-            _ => {} // ignore unknown options like Go does
-        }
+    /// let result = Template::new("t")
+    ///     .missing_key(MissingKey::Error)
+    ///     .parse("{{.Y}}")
+    ///     .unwrap()
+    ///     .execute_to_string(&tmap! { "X" => 1i64 });
+    /// assert!(result.is_err());
+    /// ```
+    pub fn missing_key(mut self, mk: MissingKey) -> Self {
+        self.missing_key = mk;
         self
     }
 
@@ -768,7 +765,7 @@ mod tests {
     fn test_missingkey_error() {
         let data = tmap! { "X" => 1i64 };
         let result = Template::new("test")
-            .option("missingkey=error")
+            .missing_key(MissingKey::Error)
             .parse("{{.Missing}}")
             .unwrap()
             .execute_to_string(&data);

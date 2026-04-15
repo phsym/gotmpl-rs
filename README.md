@@ -151,20 +151,29 @@ assert_eq!(result, "7");
 ## Options
 
 ```rust
-use gotmpl::Template;
+use gotmpl::{Template, MissingKey};
 
 let tmpl = Template::new("t")
-    .option("missingkey=error")   // error on missing map keys
-    .delims("<<", ">>")           // custom delimiters
+    .missing_key(MissingKey::Error)   // error on missing map keys
+    .delims("<<", ">>")              // custom delimiters
     .parse("<< .Name >>")
     .unwrap();
 ```
 
-| Option | Behavior |
-|--------|----------|
-| `missingkey=invalid` | Return `<no value>` (default) |
-| `missingkey=zero` | Return `<no value>` |
-| `missingkey=error` | Return an error |
+`MissingKey` implements `FromStr`, so you can parse from strings (useful for
+config files or CLI args):
+
+```rust
+use gotmpl::MissingKey;
+
+let mk: MissingKey = "error".parse().unwrap();
+```
+
+| `MissingKey` variant | `FromStr` value | Behavior |
+|----------------------|-----------------|----------|
+| `Invalid` (default) | `"invalid"`, `"default"` | Return `<no value>` |
+| `ZeroValue`          | `"zero"` | Return `<no value>` |
+| `Error`              | `"error"` | Return an error |
 
 ## Number literals
 

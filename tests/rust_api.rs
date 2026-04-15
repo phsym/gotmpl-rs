@@ -10,7 +10,7 @@ extern crate alloc;
 use alloc::sync::Arc;
 
 use gotmpl::Value;
-use gotmpl::{Template, tmap};
+use gotmpl::{MissingKey, Template, tmap};
 
 // ─── Value::Function variant and call builtin ─────────────────────────────
 
@@ -43,7 +43,7 @@ fn test_function_value_truthy() {
 fn test_missingkey_error_integration() {
     let data = tmap! { "X" => 1i64 };
     let result = Template::new("test")
-        .option("missingkey=error")
+        .missing_key(MissingKey::Error)
         .parse("{{.Y}}")
         .unwrap()
         .execute_to_string(&data);
@@ -55,12 +55,38 @@ fn test_missingkey_error_integration() {
 fn test_missingkey_zero() {
     let data = tmap! { "X" => 1i64 };
     let result = Template::new("test")
-        .option("missingkey=zero")
+        .missing_key(MissingKey::ZeroValue)
         .parse("{{.Y}}")
         .unwrap()
         .execute_to_string(&data)
         .unwrap();
     assert_eq!(result, "<no value>");
+}
+
+#[test]
+fn test_missingkey_from_str() {
+    assert_eq!("error".parse::<MissingKey>().unwrap(), MissingKey::Error);
+    assert_eq!(
+        "invalid".parse::<MissingKey>().unwrap(),
+        MissingKey::Invalid
+    );
+    assert_eq!(
+        "default".parse::<MissingKey>().unwrap(),
+        MissingKey::Invalid
+    );
+    assert_eq!(
+        "zero".parse::<MissingKey>().unwrap(),
+        MissingKey::ZeroValue
+    );
+    assert!("garbage".parse::<MissingKey>().is_err());
+}
+
+#[test]
+fn test_missingkey_display_roundtrip() {
+    for mk in [MissingKey::Invalid, MissingKey::ZeroValue, MissingKey::Error] {
+        let s = mk.to_string();
+        assert_eq!(s.parse::<MissingKey>().unwrap(), mk);
+    }
 }
 
 // ─── Max execution depth (Rust safety guard) ──────────────────────────────
@@ -124,7 +150,7 @@ fn test_parse_additional_syntax_error() {
 #[test]
 fn test_clone_preserves_missingkey_error() {
     let original = Template::new("t")
-        .option("missingkey=error")
+        .missing_key(MissingKey::Error)
         .parse("{{.X}}")
         .unwrap();
 
