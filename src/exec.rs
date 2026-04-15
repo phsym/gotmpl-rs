@@ -14,8 +14,10 @@
 //! - **variable scopes** — a stack of name→[`Value`] frames, pushed/popped for control blocks
 //! - **recursion depth** — prevents stack overflow from recursive `{{template}}` calls
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::io::Write;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::error::{Result, TemplateError};
 use crate::funcs::Func;
@@ -394,6 +396,7 @@ impl<'a> Executor<'a> {
     ) -> ExecResult<()> {
         self.depth += 1;
         if self.depth > MAX_EXEC_DEPTH {
+            self.depth -= 1;
             return Err(TemplateError::Exec(format!(
                 "exceeded maximum template call depth ({})",
                 MAX_EXEC_DEPTH
@@ -574,7 +577,7 @@ impl<'a> Executor<'a> {
             args.push(piped_val);
         }
 
-        func(&args).map_err(ExecSignal::from)
+        self.invoke_func(name, func, &args)
     }
 
     /// Access a field on a value, respecting missingkey option.
@@ -587,7 +590,25 @@ impl<'a> Executor<'a> {
                 }
                 _ => Ok(Value::Nil),
             },
-            None => Ok(Value::Nil),
+            None if matches!(val, Value::Nil) => Ok(Value::Nil),
+            None => Err(TemplateError::Exec(format!(
+                "can't evaluate field {} in type {}",
+                name,
+                val.type_name()
+            ))
+            .into()),
+        }
+    }
+
+    fn invoke_func(&self, name: &str, func: &Func, args: &[Value]) -> ExecResult<Value> {
+        match catch_unwind(AssertUnwindSafe(|| func(args))) {
+            Ok(result) => result.map_err(ExecSignal::from),
+            Err(payload) => Err(TemplateError::Exec(format!(
+                "error calling {}: {}",
+                name,
+                panic_payload_to_string(payload)
+            ))
+            .into()),
         }
     }
 
@@ -604,9 +625,11 @@ impl<'a> Executor<'a> {
             }
 
             Expr::Variable(_, name, fields) => {
-                let val = self.vars.get(name).cloned().ok_or_else(|| {
-                    TemplateError::UndefinedVariable(name.clone())
-                })?;
+                let val = self
+                    .vars
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| TemplateError::UndefinedVariable(name.clone()))?;
                 let mut result = val;
                 for field in fields {
                     result = self.field_access(&result, field)?;
@@ -636,7 +659,7 @@ impl<'a> Executor<'a> {
             Expr::Identifier(_, name) => {
                 // Bare identifier — could be a zero-arg function call
                 if let Some(func) = self.funcs.get(name.as_str()) {
-                    return func(&[]).map_err(ExecSignal::from);
+                    return self.invoke_func(name, func, &[]);
                 }
                 Err(TemplateError::UndefinedFunction(name.clone()).into())
             }
@@ -649,6 +672,16 @@ impl<'a> Executor<'a> {
                 Ok(val)
             }
         }
+    }
+}
+
+fn panic_payload_to_string(payload: Box<dyn Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panic".to_string()
     }
 }
 
@@ -671,7 +704,7 @@ mod tests {
 
         let mut executor = Executor::new(&funcs, &templates);
         let mut buf = Vec::new();
-        executor.execute(&mut buf, &tree, &data).unwrap();
+        executor.execute(&mut buf, &tree, data).unwrap();
         String::from_utf8(buf).unwrap()
     }
 

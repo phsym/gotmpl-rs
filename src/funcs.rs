@@ -20,6 +20,7 @@
 use crate::error::{Result, TemplateError};
 use crate::go;
 use crate::value::Value;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
@@ -52,7 +53,12 @@ pub fn builtins() -> HashMap<String, Func> {
         Arc::new(|args: &[Value]| {
             check_min_args("eq", args, 2)?;
             let first = &args[0];
-            Ok(Value::Bool(args[1..].iter().any(|a| first == a)))
+            for arg in &args[1..] {
+                if compare_eq(first, arg)? {
+                    return Ok(Value::Bool(true));
+                }
+            }
+            Ok(Value::Bool(false))
         }),
     );
 
@@ -60,7 +66,7 @@ pub fn builtins() -> HashMap<String, Func> {
         "ne".into(),
         Arc::new(|args: &[Value]| {
             check_args("ne", args, 2)?;
-            Ok(Value::Bool(args[0] != args[1]))
+            Ok(Value::Bool(!compare_eq(&args[0], &args[1])?))
         }),
     );
 
@@ -69,7 +75,7 @@ pub fn builtins() -> HashMap<String, Func> {
         Arc::new(|args: &[Value]| {
             check_args("lt", args, 2)?;
             Ok(Value::Bool(
-                args[0].partial_cmp(&args[1]) == Some(std::cmp::Ordering::Less),
+                compare_order(&args[0], &args[1])? == Ordering::Less,
             ))
         }),
     );
@@ -78,7 +84,8 @@ pub fn builtins() -> HashMap<String, Func> {
         "le".into(),
         Arc::new(|args: &[Value]| {
             check_args("le", args, 2)?;
-            Ok(Value::Bool(args[0] <= args[1]))
+            let ord = compare_order(&args[0], &args[1])?;
+            Ok(Value::Bool(ord == Ordering::Less || ord == Ordering::Equal))
         }),
     );
 
@@ -87,7 +94,7 @@ pub fn builtins() -> HashMap<String, Func> {
         Arc::new(|args: &[Value]| {
             check_args("gt", args, 2)?;
             Ok(Value::Bool(
-                args[0].partial_cmp(&args[1]) == Some(std::cmp::Ordering::Greater),
+                compare_order(&args[0], &args[1])? == Ordering::Greater,
             ))
         }),
     );
@@ -96,7 +103,10 @@ pub fn builtins() -> HashMap<String, Func> {
         "ge".into(),
         Arc::new(|args: &[Value]| {
             check_args("ge", args, 2)?;
-            Ok(Value::Bool(args[0] >= args[1]))
+            let ord = compare_order(&args[0], &args[1])?;
+            Ok(Value::Bool(
+                ord == Ordering::Greater || ord == Ordering::Equal,
+            ))
         }),
     );
 
@@ -214,14 +224,77 @@ pub fn builtins() -> HashMap<String, Func> {
         }),
     );
 
-    // slice: Go allows 1-4 args: slice x, slice x i, slice x i j
+    // slice: Go allows 1-4 args total:
+    // slice x, slice x i, slice x i j, slice x i j k
     m.insert(
         "slice".into(),
         Arc::new(|args: &[Value]| {
             check_min_args("slice", args, 1)?;
-            let start = args.get(1).and_then(Value::as_int);
-            let end = args.get(2).and_then(Value::as_int);
-            args[0].slice(start, end)
+            if args.len() > 4 {
+                return Err(TemplateError::Exec(format!(
+                    "wrong number of args for slice: want 1-4 got {}",
+                    args.len()
+                )));
+            }
+
+            let v = &args[0];
+            match args.len() {
+                1 => v.slice(None, None),
+                2 => {
+                    let start = parse_slice_index(&args[1])?;
+                    v.slice(Some(start), None)
+                }
+                3 => {
+                    let start = parse_slice_index(&args[1])?;
+                    let end = parse_slice_index(&args[2])?;
+                    v.slice(Some(start), Some(end))
+                }
+                4 => {
+                    // 3-index slice. We only support this for lists (like slices),
+                    // and we validate i <= j <= k <= len.
+                    let start = parse_slice_index(&args[1])?;
+                    let end = parse_slice_index(&args[2])?;
+                    let max = parse_slice_index(&args[3])?;
+                    match v {
+                        Value::List(list) => {
+                            let len = list.len() as i64;
+                            if start < 0 || end < 0 || max < 0 {
+                                return Err(TemplateError::Exec(format!(
+                                    "slice: index out of range [{}:{}:{}]",
+                                    start, end, max
+                                )));
+                            }
+                            if start > end {
+                                return Err(TemplateError::Exec(format!(
+                                    "slice: invalid slice index: {} > {}",
+                                    start, end
+                                )));
+                            }
+                            if end > max {
+                                return Err(TemplateError::Exec(format!(
+                                    "slice: invalid slice index: {} > {}",
+                                    end, max
+                                )));
+                            }
+                            if max > len {
+                                return Err(TemplateError::Exec(format!(
+                                    "slice: index out of range [{}:{}:{}] with length {}",
+                                    start, end, max, len
+                                )));
+                            }
+                            v.slice(Some(start), Some(end))
+                        }
+                        Value::String(_) => Err(TemplateError::Exec(
+                            "slice: cannot 3-index slice a string".into(),
+                        )),
+                        _ => Err(TemplateError::Exec(format!(
+                            "slice: cannot slice type {}",
+                            v.type_name()
+                        ))),
+                    }
+                }
+                _ => unreachable!(),
+            }
         }),
     );
 
@@ -295,4 +368,52 @@ fn check_min_args(name: &str, args: &[Value], min: usize) -> Result<()> {
         });
     }
     Ok(())
+}
+
+fn compare_eq(left: &Value, right: &Value) -> Result<bool> {
+    match (left, right) {
+        (Value::Nil, Value::Nil) => Ok(true),
+        (Value::Nil, _) | (_, Value::Nil) => Ok(false),
+        (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
+        (Value::Int(a), Value::Int(b)) => Ok(a == b),
+        (Value::Float(a), Value::Float(b)) => Ok(a == b),
+        (Value::String(a), Value::String(b)) => Ok(a == b),
+        (Value::List(_), Value::List(_))
+        | (Value::Map(_), Value::Map(_))
+        | (Value::Function(_), Value::Function(_)) => Err(TemplateError::Exec(format!(
+            "non-comparable type {}",
+            left.type_name()
+        ))),
+        _ => Err(TemplateError::Exec(format!(
+            "incompatible types for comparison: {} and {}",
+            left.type_name(),
+            right.type_name()
+        ))),
+    }
+}
+
+fn compare_order(left: &Value, right: &Value) -> Result<Ordering> {
+    match (left, right) {
+        (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
+        (Value::Float(a), Value::Float(b)) => a
+            .partial_cmp(b)
+            .ok_or_else(|| TemplateError::Exec("invalid type for comparison".into())),
+        (Value::String(a), Value::String(b)) => Ok(a.cmp(b)),
+        _ if left.type_name() != right.type_name() => Err(TemplateError::Exec(format!(
+            "incompatible types for comparison: {} and {}",
+            left.type_name(),
+            right.type_name()
+        ))),
+        _ => Err(TemplateError::Exec("invalid type for comparison".into())),
+    }
+}
+
+fn parse_slice_index(arg: &Value) -> Result<i64> {
+    match arg {
+        Value::Int(n) => Ok(*n),
+        _ => Err(TemplateError::Exec(format!(
+            "slice: index must be integer, got {}",
+            arg.type_name()
+        ))),
+    }
 }

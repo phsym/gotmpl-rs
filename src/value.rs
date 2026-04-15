@@ -175,7 +175,7 @@ impl Value {
     /// Mirrors Go's `index` builtin semantics:
     /// - **List + Int**: returns the element, or an error if out of bounds.
     /// - **Map + String**: returns the value, or [`Value::Nil`] for missing keys.
-    /// - **Nil + anything**: returns [`Value::Nil`].
+    /// - **Nil + anything**: returns an error (`index of untyped nil`).
     /// - **Other combinations**: returns an error (type mismatch).
     ///
     /// # Errors
@@ -206,7 +206,9 @@ impl Value {
                 "cannot index map with type {}",
                 idx.type_name()
             ))),
-            (Value::Nil, _) => Ok(Value::Nil),
+            (Value::Nil, _) => Err(crate::error::TemplateError::Exec(
+                "index of untyped nil".into(),
+            )),
             _ => Err(crate::error::TemplateError::Exec(format!(
                 "cannot index type {}",
                 self.type_name()
@@ -362,11 +364,13 @@ impl fmt::Display for Value {
     }
 }
 
-/// Equality comparison with numeric coercion.
+/// Rust-side equality for [`Value`].
 ///
-/// [`Value::Int`] and [`Value::Float`] are comparable across types
-/// (e.g., `Int(1) == Float(1.0)`). All other cross-type comparisons
-/// return `false`.
+/// This comparison is type-strict: values must have the same variant to be equal
+/// (except `Nil == Nil`).
+///
+/// Template builtins (`eq`, `ne`) implement Go-compatible comparison error
+/// semantics separately in `funcs.rs`.
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -375,24 +379,24 @@ impl PartialEq for Value {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
-            (Value::Int(a), Value::Float(b)) => (*a as f64) == *b,
-            (Value::Float(a), Value::Int(b)) => *a == (*b as f64),
             _ => false,
         }
     }
 }
 
-/// Ordering comparison with numeric coercion.
+/// Rust-side partial ordering for [`Value`].
 ///
-/// Supports ordering for [`Value::Int`], [`Value::Float`] (including cross-type),
-/// and [`Value::String`]. Returns `None` for all other type combinations.
+/// Supports ordering for same-type numeric/string variants only:
+/// [`Value::Int`], [`Value::Float`], [`Value::String`].
+/// Returns `None` for all other combinations.
+///
+/// Template builtins (`lt`, `le`, `gt`, `ge`) implement Go-compatible comparison
+/// error semantics separately in `funcs.rs`.
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => a.partial_cmp(b),
             (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
-            (Value::Int(a), Value::Float(b)) => (*a as f64).partial_cmp(b),
-            (Value::Float(a), Value::Int(b)) => a.partial_cmp(&(*b as f64)),
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
             _ => None,
         }

@@ -410,14 +410,10 @@ fn format_g_default(f: f64, upper: bool) -> String {
         return (if f.is_sign_negative() { "-0" } else { "0" }).to_string();
     }
     let exp = f.abs().log10().floor() as i32;
-    if exp < -4 || exp >= 6 {
+    if !(-4..6).contains(&exp) {
         let raw = format!("{:e}", f);
         let s = go_normalize_sci(&raw);
-        if upper {
-            s.replace('e', "E")
-        } else {
-            s
-        }
+        if upper { s.replace('e', "E") } else { s }
     } else {
         format!("{}", f)
     }
@@ -437,11 +433,7 @@ fn format_g_with_precision(f: f64, prec: usize, upper: bool) -> String {
         let raw = format!("{:.prec$e}", f, prec = e_prec);
         let s = go_normalize_sci(&raw);
         let s = strip_trailing_zeros_sci(&s);
-        if upper {
-            s.replace('e', "E")
-        } else {
-            s
-        }
+        if upper { s.replace('e', "E") } else { s }
     } else {
         let f_prec = if prec as i32 > exp + 1 {
             (prec as i32 - exp - 1) as usize
@@ -1281,10 +1273,7 @@ mod tests {
 
     #[test]
     fn sprintf_q_with_special() {
-        assert_eq!(
-            sf("%q", &[Value::String("a\nb".into())]),
-            r#""a\nb""#
-        );
+        assert_eq!(sf("%q", &[Value::String("a\nb".into())]), r#""a\nb""#);
     }
 
     #[test]
@@ -1294,18 +1283,12 @@ mod tests {
 
     #[test]
     fn sprintf_hash_q_fallback_on_backtick() {
-        assert_eq!(
-            sf("%#q", &[Value::String("hel`lo".into())]),
-            r#""hel`lo""#
-        );
+        assert_eq!(sf("%#q", &[Value::String("hel`lo".into())]), r#""hel`lo""#);
     }
 
     #[test]
     fn sprintf_hash_q_fallback_on_control() {
-        assert_eq!(
-            sf("%#q", &[Value::String("a\nb".into())]),
-            r#""a\nb""#
-        );
+        assert_eq!(sf("%#q", &[Value::String("a\nb".into())]), r#""a\nb""#);
     }
 
     // ─── sprintf: %t ────────────────────────────────────────────────

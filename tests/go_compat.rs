@@ -10,7 +10,8 @@
 //   - Go's iter.Seq / iter.Seq2
 //   - Go's specific fmt.Sprintf formatting (e.g. %T for type names)
 //
-// Everything else is faithfully ported.
+// Additional Rust-only edge-case tests may appear here when needed to guard
+// behavior parity with upstream Go tests.
 
 use go_template::Value;
 use go_template::{Template, tmap};
@@ -32,7 +33,7 @@ fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
                 "oneArg requires a string".into(),
             )),
         })
-        .func("twoArgs", |args| match (args.get(0), args.get(1)) {
+        .func("twoArgs", |args| match (args.first(), args.get(1)) {
             (Some(Value::String(a)), Some(Value::String(b))) => {
                 Ok(Value::String(format!("twoArgs={}{}", a, b)))
             }
@@ -81,12 +82,11 @@ fn ok(input: &str, data: &Value, expected: &str) {
 
 #[allow(dead_code)]
 fn fail(input: &str, data: &Value) {
-    match run(input, data) {
-        Ok(result) => panic!(
+    if let Ok(result) = run(input, data) {
+        panic!(
             "template {:?} should have failed but got {:?}",
             input, result
-        ),
-        Err(_) => {} // expected
+        );
     }
 }
 
@@ -488,6 +488,11 @@ fn test_map_index() {
     ok(r#"{{index .MSI "two"}}"#, &data, "2");
 }
 
+#[test]
+fn test_index_nil_fails() {
+    fail("{{index nil 1}}", &Value::Nil);
+}
+
 // ─── Slicing ────────────────────────────────────────────────────────────
 
 #[test]
@@ -508,6 +513,30 @@ fn test_string_slice() {
     ok("{{slice .S 0 1}}", &data, "x");
     ok("{{slice .S 1}}", &data, "yz");
     ok("{{slice .S 1 2}}", &data, "y");
+}
+
+#[test]
+fn test_slice_three_index_list() {
+    let data = tmap! { "SI" => vec![1i64, 2, 3] };
+    ok("{{slice .SI 1 3 3}}", &data, "[2 3]");
+}
+
+#[test]
+fn test_slice_three_index_negative_fails() {
+    let data = tmap! { "SI" => vec![1i64, 2, 3] };
+    fail("{{slice .SI 1 2 -1}}", &data);
+}
+
+#[test]
+fn test_slice_three_index_inverted_fails() {
+    let data = tmap! { "SI" => vec![1i64, 2, 3] };
+    fail("{{slice .SI 2 2 1}}", &data);
+}
+
+#[test]
+fn test_slice_three_index_string_fails() {
+    let data = tmap! { "S" => "xyz" };
+    fail("{{slice .S 1 2 2}}", &data);
 }
 
 // ─── Len ────────────────────────────────────────────────────────────────
@@ -1508,28 +1537,28 @@ fn test_js_escape_ampersand() {
     ok(r#"{{js "a&b"}}"#, &Value::Nil, r"a\u0026b");
 }
 
-// ─── Additional Go test coverage: comparison mixed types ─────────────
+// ─── Additional Go test coverage: incompatible comparisons error ─────
 
 #[test]
 fn test_eq_int_float() {
-    ok("{{eq 1 1.0}}", &Value::Nil, "true");
+    fail("{{eq 1 1.0}}", &Value::Nil);
 }
 
 #[test]
 fn test_lt_int_float() {
-    ok("{{lt 1 1.5}}", &Value::Nil, "true");
+    fail("{{lt 1 1.5}}", &Value::Nil);
 }
 
 #[test]
 fn test_gt_float_int() {
-    ok("{{gt 2.5 2}}", &Value::Nil, "true");
+    fail("{{gt 2.5 2}}", &Value::Nil);
 }
 
-// ─── Additional Go test coverage: index out of range returns nil ──────
+// ─── Additional Go test coverage: index errors ─────────────────────────
 
 #[test]
 fn test_index_out_of_range() {
-    // Go panics (template error) on out-of-bounds list index
+    // Go returns a template execution error on out-of-bounds list index.
     let data = tmap! { "SI" => vec![1i64, 2, 3] };
     fail("{{index .SI 99}}", &data);
 }
@@ -1556,6 +1585,31 @@ fn test_undefined_function_fails() {
 #[test]
 fn test_undefined_template_fails() {
     fail(r#"{{template "nope"}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_field_on_non_map_fails() {
+    fail("{{.X}}", &Value::Int(1));
+}
+
+#[test]
+fn test_function_panic_is_exec_error() {
+    let result = std::panic::catch_unwind(|| {
+        Template::new("test")
+            .func("boom", |_| panic!("boom panic"))
+            .parse("{{boom}}")
+            .unwrap()
+            .execute_to_string(&Value::Nil)
+    });
+
+    match result {
+        Ok(exec_result) => {
+            let err = exec_result.expect_err("expected execution error");
+            assert!(err.to_string().contains("error calling boom"));
+            assert!(err.to_string().contains("boom panic"));
+        }
+        Err(_) => panic!("panic escaped template execution"),
+    }
 }
 
 #[test]
@@ -1859,21 +1913,21 @@ fn test_eq_multi_arg_none() {
 
 #[test]
 fn test_eq_mixed_int_float() {
-    ok("{{eq 1 1.0}}", &Value::Nil, "true");
-    ok("{{eq 2 2.0}}", &Value::Nil, "true");
-    ok("{{eq 1 1.1}}", &Value::Nil, "false");
+    fail("{{eq 1 1.0}}", &Value::Nil);
+    fail("{{eq 2 2.0}}", &Value::Nil);
+    fail("{{eq 1 1.1}}", &Value::Nil);
 }
 
 #[test]
 fn test_lt_mixed_int_float() {
-    ok("{{lt 1 1.5}}", &Value::Nil, "true");
-    ok("{{lt 2 1.5}}", &Value::Nil, "false");
+    fail("{{lt 1 1.5}}", &Value::Nil);
+    fail("{{lt 2 1.5}}", &Value::Nil);
 }
 
 #[test]
 fn test_ge_mixed_float_int() {
-    ok("{{ge 2.0 2}}", &Value::Nil, "true");
-    ok("{{ge 1.5 2}}", &Value::Nil, "false");
+    fail("{{ge 2.0 2}}", &Value::Nil);
+    fail("{{ge 1.5 2}}", &Value::Nil);
 }
 
 // ─── Go exec_test.go: comparison in pipelines ───────────────────────
@@ -2634,18 +2688,18 @@ fn test_parse_error_malformed_define_name() {
 
 #[test]
 fn test_lt_uncomparable_types() {
-    // lt on bool should return false (no ordering defined)
-    ok("{{lt true false}}", &Value::Nil, "false");
+    // Go: bools are unordered for lt/le/gt/ge.
+    fail("{{lt true false}}", &Value::Nil);
 }
 
 #[test]
 fn test_eq_list_list() {
-    // Lists are not comparable — always false
+    // Go: slices/lists are not comparable.
     let data = tmap! {
         "A" => vec![1i64],
         "B" => vec![1i64],
     };
-    ok("{{$a := .A}}{{$b := .B}}{{eq $a $b}}", &data, "false");
+    fail("{{$a := .A}}{{$b := .B}}{{eq $a $b}}", &data);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2755,11 +2809,7 @@ fn test_printf_hash_q() {
 #[test]
 fn test_printf_hash_q_with_backtick() {
     // Contains backtick — falls back to double-quoted
-    ok(
-        r#"{{printf "%#q" "hel`lo"}}"#,
-        &Value::Nil,
-        r#""hel`lo""#,
-    );
+    ok(r#"{{printf "%#q" "hel`lo"}}"#, &Value::Nil, r#""hel`lo""#);
 }
 
 // ─── Printf %04x (Go exec_test.go: "printf int") ────────────────────

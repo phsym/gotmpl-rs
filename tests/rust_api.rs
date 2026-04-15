@@ -3,8 +3,8 @@
 // Tests for Rust-specific APIs and implementation details that don't correspond
 // to specific Go text/template test cases.
 //
-// These were originally in go_compat.rs but moved here to keep that file
-// exclusively for tests ported from Go's exec_test.go and multi_test.go.
+// These were originally in go_compat.rs and are separated here to keep
+// compatibility tests easier to audit against upstream Go behavior.
 
 use go_template::Value;
 use go_template::{Template, tmap};

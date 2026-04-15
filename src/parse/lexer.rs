@@ -582,8 +582,7 @@ impl Lexer {
                             look += 1;
                         } else if ch == '_' {
                             look += 1;
-                        } else if ch == '.' || ch == 'e' || ch == 'E' || ch == '8' || ch == '9'
-                        {
+                        } else if ch == '.' || ch == 'e' || ch == 'E' || ch == '8' || ch == '9' {
                             is_legacy_octal = false;
                             break;
                         } else {
@@ -815,7 +814,9 @@ impl Lexer {
                             match self.next_char() {
                                 Some(c) if c.is_ascii_hexdigit() => hex.push(c),
                                 _ => {
-                                    return Err(self.error("invalid unicode escape in char literal"));
+                                    return Err(
+                                        self.error("invalid unicode escape in char literal")
+                                    );
                                 }
                             }
                         }
@@ -828,7 +829,9 @@ impl Lexer {
                             match self.next_char() {
                                 Some(c) if c.is_ascii_hexdigit() => hex.push(c),
                                 _ => {
-                                    return Err(self.error("invalid unicode escape in char literal"));
+                                    return Err(
+                                        self.error("invalid unicode escape in char literal")
+                                    );
                                 }
                             }
                         }
