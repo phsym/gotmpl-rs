@@ -6,6 +6,9 @@
 // These were originally in go_compat.rs and are separated here to keep
 // compatibility tests easier to audit against upstream Go behavior.
 
+extern crate alloc;
+use alloc::sync::Arc;
+
 use gotmpl::Value;
 use gotmpl::{Template, tmap};
 
@@ -13,7 +16,6 @@ use gotmpl::{Template, tmap};
 
 #[test]
 fn test_call_function_value() {
-    use std::sync::Arc;
     let adder: gotmpl::ValueFunc = Arc::new(|args: &[Value]| {
         let sum: i64 = args.iter().filter_map(|a| a.as_int()).sum();
         Ok(Value::Int(sum))
@@ -30,7 +32,6 @@ fn test_call_function_value() {
 
 #[test]
 fn test_function_value_truthy() {
-    use std::sync::Arc;
     let f: gotmpl::ValueFunc = Arc::new(|_| Ok(Value::Int(42)));
     let data = Value::Function(f);
     assert!(data.is_truthy());
@@ -178,8 +179,9 @@ fn test_add_parse_tree_to_unparsed() {
     assert!(tmpl.execute_to_string(&Value::Nil).is_err());
 
     // But execute_template should work for the added tree
-    let mut buf = Vec::new();
-    tmpl.execute_template(&mut buf, "greeting", &Value::Nil)
-        .unwrap();
-    assert_eq!(String::from_utf8(buf).unwrap(), "hello");
+    assert_eq!(
+        tmpl.execute_template_to_string("greeting", &Value::Nil)
+            .unwrap(),
+        "hello"
+    );
 }

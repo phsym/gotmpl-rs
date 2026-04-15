@@ -20,7 +20,9 @@
 //! | URL encode | [`url_encode`] | `template.URLQueryEscaper` |
 //! | Hex float parse | [`parse_hex_float`] | Hex float literal `0x1.Fp10` |
 
-use std::fmt::Write;
+use alloc::format;
+use alloc::string::{String, ToString};
+use core::fmt::Write;
 
 use crate::error::Result;
 use crate::value::Value;
@@ -49,7 +51,7 @@ struct FmtSpec {
 }
 
 impl FmtSpec {
-    fn parse(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Self {
+    fn parse(chars: &mut core::iter::Peekable<core::str::Chars<'_>>) -> Self {
         let mut spec = FmtSpec {
             left_align: false,
             plus: false,

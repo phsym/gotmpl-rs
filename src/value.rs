@@ -18,9 +18,12 @@
 //! };
 //! ```
 
-use std::collections::{BTreeMap, HashMap};
-use std::fmt;
-use std::sync::Arc;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::error::Result;
 
@@ -393,7 +396,7 @@ impl PartialEq for Value {
 /// Template builtins (`lt`, `le`, `gt`, `ge`) implement Go-compatible comparison
 /// error semantics separately in `funcs.rs`.
 impl PartialOrd for Value {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => a.partial_cmp(b),
             (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
@@ -520,8 +523,9 @@ impl<T: ToValue> ToValue for Option<T> {
 /// let val = Value::from(hm);
 /// assert!(matches!(val, Value::Map(_)));
 /// ```
-impl From<HashMap<String, Value>> for Value {
-    fn from(m: HashMap<String, Value>) -> Self {
+#[cfg(feature = "std")]
+impl From<std::collections::HashMap<String, Value>> for Value {
+    fn from(m: std::collections::HashMap<String, Value>) -> Self {
         Value::Map(m.into_iter().collect())
     }
 }
@@ -551,10 +555,10 @@ impl From<HashMap<String, Value>> for Value {
 #[macro_export]
 macro_rules! tmap {
     () => {
-        $crate::Value::Map(std::collections::BTreeMap::new())
+        $crate::Value::Map(::core::default::Default::default())
     };
     ($($key:expr => $val:expr),+ $(,)?) => {
-        $crate::Value::Map(std::collections::BTreeMap::from([
+        $crate::Value::Map(::core::convert::From::from([
             $(($key.to_string(), $crate::ToValue::to_value(&$val)),)+
         ]))
     };

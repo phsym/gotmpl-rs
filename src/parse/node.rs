@@ -7,6 +7,10 @@
 //!
 //! The top-level enum is [`Node`], with expression-level atoms in [`Expr`].
 
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
+
 /// Byte-level position in the template source, used for error reporting.
 ///
 /// Carried by every AST node so that execution errors can point back to

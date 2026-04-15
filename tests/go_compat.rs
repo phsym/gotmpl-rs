@@ -1,3 +1,4 @@
+extern crate alloc;
 // tests/go_compat.rs
 //
 // Test cases ported from Go's text/template/exec_test.go and multi_test.go.
@@ -147,8 +148,8 @@ mod go_crosscheck {
             );
         }
 
-        let go_result = String::from_utf8(output.stdout)
-            .expect("go-crosscheck produced non-UTF-8 output");
+        let go_result =
+            String::from_utf8(output.stdout).expect("go-crosscheck produced non-UTF-8 output");
 
         assert_eq!(
             rust_result, &go_result,
@@ -160,7 +161,7 @@ mod go_crosscheck {
 
 // ─── Helper ──────────────────────────────────────────────────────────────
 
-fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
+fn run(input: &str, data: &Value) -> core::result::Result<String, String> {
     Template::new("test")
         .func("add", |args| {
             let sum: i64 = args.iter().filter_map(|a| a.as_int()).sum();
@@ -195,7 +196,7 @@ fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
             Ok(Value::List(items))
         })
         .func("makemap", |args| {
-            let mut m = std::collections::BTreeMap::new();
+            let mut m = alloc::collections::BTreeMap::new();
             let strs: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
             for chunk in strs.chunks(2) {
                 if chunk.len() == 2 {
@@ -205,7 +206,7 @@ fn run(input: &str, data: &Value) -> std::result::Result<String, String> {
             Ok(Value::Map(m))
         })
         .func("mapOfThree", |_args| {
-            let mut m = std::collections::BTreeMap::new();
+            let mut m = alloc::collections::BTreeMap::new();
             m.insert("three".to_string(), Value::Int(3));
             Ok(Value::Map(m))
         })
@@ -413,7 +414,7 @@ fn test_if_slice() {
 #[test]
 fn test_if_empty_map() {
     let data = tmap! {
-        "MSIEmpty" => std::collections::BTreeMap::<String, i64>::new()
+        "MSIEmpty" => alloc::collections::BTreeMap::<String, i64>::new()
     };
     ok(
         "{{if .MSIEmpty}}NON-EMPTY{{else}}EMPTY{{end}}",
@@ -1108,7 +1109,7 @@ fn test_bug4_nil_in_if() {
 #[test]
 fn test_bug9_lowercase_map_key() {
     // A bug broke map lookups for lower-case names.
-    let mut m = std::collections::BTreeMap::new();
+    let mut m = alloc::collections::BTreeMap::new();
     m.insert("cause".to_string(), Value::String("neglect".into()));
     ok("{{.cause}}", &Value::Map(m), "neglect");
 }
@@ -1739,6 +1740,7 @@ fn test_field_on_non_map_fails() {
 }
 
 #[test]
+#[cfg(feature = "std")]
 fn test_function_panic_is_exec_error() {
     let result = std::panic::catch_unwind(|| {
         Template::new("test")
@@ -1983,7 +1985,7 @@ fn test_range_map_full() {
 #[test]
 fn test_range_empty_map_no_else() {
     let data = tmap! {
-        "MSIEmpty" => std::collections::BTreeMap::<String, i64>::new()
+        "MSIEmpty" => alloc::collections::BTreeMap::<String, i64>::new()
     };
     ok("{{range .MSIEmpty}}-{{.}}-{{end}}", &data, "");
 }
@@ -1991,7 +1993,7 @@ fn test_range_empty_map_no_else() {
 #[test]
 fn test_range_empty_map_else() {
     let data = tmap! {
-        "MSIEmpty" => std::collections::BTreeMap::<String, i64>::new()
+        "MSIEmpty" => alloc::collections::BTreeMap::<String, i64>::new()
     };
     ok(
         "{{range .MSIEmpty}}-{{.}}-{{else}}empty{{end}}",
@@ -2109,7 +2111,7 @@ fn test_or_as_if_false_inline() {
 #[test]
 fn test_with_empty_map() {
     let data = tmap! {
-        "MSIEmpty" => std::collections::BTreeMap::<String, i64>::new()
+        "MSIEmpty" => alloc::collections::BTreeMap::<String, i64>::new()
     };
     ok(
         "{{with .MSIEmpty}}non-empty{{else}}empty{{end}}",
@@ -2315,16 +2317,16 @@ fn test_execute_template_with_data() {
         .unwrap();
 
     let data = tmap! { "Name" => "Alice" };
-    let mut buf = Vec::new();
-    tmpl.execute_template(&mut buf, "greet", &data).unwrap();
-    assert_eq!(String::from_utf8(buf).unwrap(), "Hello, Alice!");
+    assert_eq!(
+        tmpl.execute_template_to_string("greet", &data).unwrap(),
+        "Hello, Alice!"
+    );
 }
 
 #[test]
 fn test_execute_template_undefined_fails() {
     let tmpl = Template::new("t").parse("hello").unwrap();
-    let mut buf = Vec::new();
-    let err = tmpl.execute_template(&mut buf, "no_such_template", &Value::Nil);
+    let err = tmpl.execute_template_to_string("no_such_template", &Value::Nil);
     assert!(err.is_err());
 }
 
@@ -2461,7 +2463,7 @@ fn test_range_int_continue_else() {
 
 #[test]
 fn test_call_with_args() {
-    use std::sync::Arc;
+    use alloc::sync::Arc;
     let data = tmap! {};
     let result = Template::new("test")
         .func("getfn", |_| {

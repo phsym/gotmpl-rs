@@ -17,13 +17,17 @@
 //! | Data | `len`, `index`, `slice`, `call` |
 //! | Escaping | `html`, `js`, `urlquery` |
 
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::cmp::Ordering;
+use core::fmt::Write;
+
 use crate::error::{Result, TemplateError};
 use crate::go;
 use crate::value::Value;
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::fmt::Write;
-use std::sync::Arc;
 
 /// The function type used by the template engine.
 ///
@@ -35,15 +39,15 @@ use std::sync::Arc;
 /// Register custom functions via [`Template::func`](crate::Template::func).
 pub type Func = Arc<dyn Fn(&[Value]) -> Result<Value> + Send + Sync>;
 
-/// Returns a [`HashMap`] containing all built-in template functions.
+/// Returns a [`BTreeMap`] containing all built-in template functions.
 ///
 /// This is called automatically by [`Template::new`](crate::Template::new).
 /// The returned map can be extended with custom functions via
 /// [`Template::func`](crate::Template::func).
 ///
 /// See the module source for the full list of built-in functions.
-pub fn builtins() -> HashMap<String, Func> {
-    let mut m: HashMap<String, Func> = HashMap::new();
+pub fn builtins() -> BTreeMap<String, Func> {
+    let mut m: BTreeMap<String, Func> = BTreeMap::new();
 
     // ─── Comparison operators ────────────────────────────────────────
     // Go's eq can take 2+ args: eq x y z means x==y || x==z

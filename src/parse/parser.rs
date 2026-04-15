@@ -1,5 +1,11 @@
 //! Recursive-descent parser that converts a token stream into an AST.
 
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+
 use super::lexer::{Lexer, Token, TokenKind};
 use super::node::*;
 use crate::error::{Result, TemplateError};
@@ -498,7 +504,7 @@ impl Parser {
         field_str
             .split('.')
             .filter(|s| !s.is_empty())
-            .map(std::string::ToString::to_string)
+            .map(ToString::to_string)
             .collect()
     }
 

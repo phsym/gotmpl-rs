@@ -145,7 +145,8 @@ assert_eq!(result, "HELLO");
 The `Value::Function` variant allows passing callable values through templates:
 
 ```rust
-use std::sync::Arc;
+extern crate alloc;
+use alloc::sync::Arc;
 use gotmpl::{Template, tmap};
 use gotmpl::{Value, ValueFunc};
 
@@ -177,11 +178,11 @@ let tmpl = Template::new("t")
 
 ### Missing key behavior
 
-| Option               | Behavior                        |
-| -------------------- | ------------------------------- |
-| `missingkey=invalid` | Return `<no value>` (default)   |
-| `missingkey=zero`    | Return `<no value>`             |
-| `missingkey=error`   | Return an error                 |
+| Option               | Behavior                      |
+| -------------------- | ----------------------------- |
+| `missingkey=invalid` | Return `<no value>` (default) |
+| `missingkey=zero`    | Return `<no value>`           |
+| `missingkey=error`   | Return an error               |
 
 ## Number literals
 
@@ -264,17 +265,17 @@ This isolates the Rust↔Go translation layer from the template engine logic.
 
 ### Not yet implemented
 
-| Feature                                          | Go equivalent             | Reason                                                                                           |
-| ------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| `missingkey=zero` returning typed zero values    | `reflect.Zero(type)`      | Without reflection, zero-value depends on the map's value type; we return `Nil`                  |
-| `index` on missing map key returns typed zero    | `index .Map "k"`          | `Value::Map` is dynamically typed, so missing keys return `Nil` instead of typed zero            |
-| `%T` format verb (type name)                     | `fmt.Sprintf("%T", ...)`  | Go-specific type name formatting                                                                 |
-| `%p` format verb (pointer)                       | `fmt.Sprintf("%p", ...)`  | No pointers in `Value`                                                                           |
-| `%w` format verb (error wrapping)                | `fmt.Errorf("%w", ...)`   | Not applicable to templates                                                                      |
-| `%#v` Go-syntax value representation             | `fmt.Sprintf("%#v", ...)` | Would need Go-style printing of `Value`                                                          |
-| `%U` Unicode format (`U+0041`)                   | `fmt.Sprintf("%U", ...)`  | Rarely used in templates                                                                         |
-| Function name validation (reject `"a-b"`, `"2"`) | Go template parser        | Names are validated syntactically but not with Go's exact character rules                        |
-| `{{range $i = .List}}` assignment form           | Go range assignment       | Only `:=` declaration form is supported                                                          |
+| Feature                                          | Go equivalent             | Reason                                                                                |
+| ------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------- |
+| `missingkey=zero` returning typed zero values    | `reflect.Zero(type)`      | Without reflection, zero-value depends on the map's value type; we return `Nil`       |
+| `index` on missing map key returns typed zero    | `index .Map "k"`          | `Value::Map` is dynamically typed, so missing keys return `Nil` instead of typed zero |
+| `%T` format verb (type name)                     | `fmt.Sprintf("%T", ...)`  | Go-specific type name formatting                                                      |
+| `%p` format verb (pointer)                       | `fmt.Sprintf("%p", ...)`  | No pointers in `Value`                                                                |
+| `%w` format verb (error wrapping)                | `fmt.Errorf("%w", ...)`   | Not applicable to templates                                                           |
+| `%#v` Go-syntax value representation             | `fmt.Sprintf("%#v", ...)` | Would need Go-style printing of `Value`                                               |
+| `%U` Unicode format (`U+0041`)                   | `fmt.Sprintf("%U", ...)`  | Rarely used in templates                                                              |
+| Function name validation (reject `"a-b"`, `"2"`) | Go template parser        | Names are validated syntactically but not with Go's exact character rules             |
+| `{{range $i = .List}}` assignment form           | Go range assignment       | Only `:=` declaration form is supported                                               |
 
 ## Differences from Go
 
@@ -289,6 +290,35 @@ Since Rust has no runtime reflection, some Go features are not applicable:
   are implemented as `!le`/`!lt`, so `gt NaN NaN` returns `true` (an IEEE 754
   violation). This library returns an error for unorderable float comparisons,
   which is strictly more correct
+
+## `no_std` support
+
+`gotmpl` supports `no_std` environments (with `alloc`). The `std` feature is enabled by
+default; disable it with:
+
+```toml
+[dependencies]
+gotmpl = { version = "0.1", default-features = false }
+```
+
+### What changes without `std`
+
+| Feature                                   | `std` (default) | `no_std`              |
+| ----------------------------------------- | --------------- | --------------------- |
+| Parse & execute templates                 | yes             | yes                   |
+| `execute_fmt` (write to `fmt::Write`)     | yes             | yes                   |
+| `execute_to_string`                       | yes             | yes                   |
+| `execute` (write to `io::Write`)          | yes             | no                    |
+| `execute_template` (write to `io::Write`) | yes             | no                    |
+| `parse_files` (load from filesystem)      | yes             | no                    |
+| Panic catching in user functions          | yes             | no — panics propagate |
+
+In `no_std` mode, use `execute_fmt` with any `core::fmt::Write` target (e.g. `String`)
+or `execute_to_string`. The `execute` and `execute_template` methods that accept
+`std::io::Write` targets (`Vec<u8>`, `File`, etc.) require the `std` feature.
+
+User-defined functions that panic will abort in `no_std` instead of being caught and
+converted to a `TemplateError::Exec`.
 
 ## Go cross-check
 

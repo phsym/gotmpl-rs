@@ -6,6 +6,7 @@
 //! Errors are split into phases — lexing, parsing, and execution — so callers
 //! can match on the variant to provide targeted diagnostics.
 
+use alloc::string::String;
 use thiserror::Error;
 
 /// The error type returned by all template operations.
@@ -88,11 +89,22 @@ pub enum TemplateError {
     NotIterable(String),
 
     /// An I/O error occurred while writing template output.
+    #[cfg(feature = "std")]
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// A formatting/write error occurred while writing template output.
+    #[error("write error")]
+    Write,
 }
 
-/// Alias for `std::result::Result<T, TemplateError>`.
+impl From<core::fmt::Error> for TemplateError {
+    fn from(_: core::fmt::Error) -> Self {
+        TemplateError::Write
+    }
+}
+
+/// Alias for `Result<T, TemplateError>`.
 ///
 /// This is the return type of all fallible operations in this crate.
-pub type Result<T> = std::result::Result<T, TemplateError>;
+pub type Result<T> = core::result::Result<T, TemplateError>;

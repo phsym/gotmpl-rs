@@ -1,7 +1,7 @@
 //! Template execution engine — walks the AST and writes output.
 //!
 //! The [`Executor`] evaluates a parsed template tree against a [`Value`] data
-//! context, writing results to any [`std::io::Write`] destination.
+//! context, writing results to any [`core::fmt::Write`] destination.
 //!
 //! This module is used internally by [`Template::execute`](crate::Template::execute);
 //! most users don't need to interact with it directly.
@@ -14,9 +14,17 @@
 //! - **variable scopes** — a stack of name→[`Value`] frames, pushed/popped for control blocks
 //! - **recursion depth** — prevents stack overflow from recursive `{{template}}` calls
 
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::fmt::Write;
+
+#[cfg(feature = "std")]
 use std::any::Any;
-use std::collections::HashMap;
-use std::io::Write;
+#[cfg(feature = "std")]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::error::{Result, TemplateError};
@@ -73,30 +81,37 @@ impl From<TemplateError> for ExecSignal {
     }
 }
 
+#[cfg(feature = "std")]
 impl From<std::io::Error> for ExecSignal {
     fn from(e: std::io::Error) -> Self {
         ExecSignal::Err(Box::new(TemplateError::Io(e)))
     }
 }
 
+impl From<core::fmt::Error> for ExecSignal {
+    fn from(_: core::fmt::Error) -> Self {
+        ExecSignal::Err(Box::new(TemplateError::Write))
+    }
+}
+
 /// Internal result alias used by the executor's private methods.
-type ExecResult<T> = std::result::Result<T, ExecSignal>;
+type ExecResult<T> = core::result::Result<T, ExecSignal>;
 
 /// Variable scope: a stack of name→value mappings.
 /// New scopes are pushed for range/with blocks.
 struct VarScope {
-    frames: Vec<HashMap<String, Value>>,
+    frames: Vec<BTreeMap<String, Value>>,
 }
 
 impl VarScope {
     fn new() -> Self {
         VarScope {
-            frames: vec![HashMap::new()],
+            frames: vec![BTreeMap::new()],
         }
     }
 
     fn push(&mut self) {
-        self.frames.push(HashMap::new());
+        self.frames.push(BTreeMap::new());
     }
 
     fn pop(&mut self) {
@@ -138,8 +153,8 @@ impl VarScope {
 ///
 /// Created internally by [`Template::execute`](crate::Template::execute).
 pub struct Executor<'a> {
-    funcs: &'a HashMap<String, Func>,
-    templates: &'a HashMap<String, ListNode>,
+    funcs: &'a BTreeMap<String, Func>,
+    templates: &'a BTreeMap<String, ListNode>,
     vars: VarScope,
     depth: usize,
     missing_key: MissingKey,
@@ -202,7 +217,7 @@ impl<'a> Executor<'a> {
     /// The `funcs` map should contain all [built-in](crate::funcs::builtins) and
     /// user-defined functions. The `templates` map holds named templates from
     /// `{{define}}` blocks.
-    pub fn new(funcs: &'a HashMap<String, Func>, templates: &'a HashMap<String, ListNode>) -> Self {
+    pub fn new(funcs: &'a BTreeMap<String, Func>, templates: &'a BTreeMap<String, ListNode>) -> Self {
         Executor {
             funcs,
             templates,
@@ -254,7 +269,7 @@ impl<'a> Executor<'a> {
     fn walk_node<W: Write>(&mut self, w: &mut W, node: &Node, dot: &Value) -> ExecResult<()> {
         match node {
             Node::Text(text) => {
-                w.write_all(text.text.as_bytes())?;
+                w.write_str(&text.text)?;
                 Ok(())
             }
             Node::Action(action) => {
@@ -264,10 +279,9 @@ impl<'a> Executor<'a> {
                     // Go's template engine prints "<no value>" for nil/missing
                     // values, distinct from fmt.Sprint(nil) which prints "<nil>".
                     if matches!(val, Value::Nil) {
-                        w.write_all(b"<no value>")?;
+                        w.write_str("<no value>")?;
                     } else {
-                        let s = format!("{}", val);
-                        w.write_all(s.as_bytes())?;
+                        write!(w, "{}", val)?;
                     }
                 }
                 Ok(())
@@ -606,6 +620,7 @@ impl<'a> Executor<'a> {
         }
     }
 
+    #[cfg(feature = "std")]
     fn invoke_func(&self, name: &str, func: &Func, args: &[Value]) -> ExecResult<Value> {
         match catch_unwind(AssertUnwindSafe(|| func(args))) {
             Ok(result) => result.map_err(ExecSignal::from),
@@ -616,6 +631,11 @@ impl<'a> Executor<'a> {
             ))
             .into()),
         }
+    }
+
+    #[cfg(not(feature = "std"))]
+    fn invoke_func(&self, _name: &str, func: &Func, args: &[Value]) -> ExecResult<Value> {
+        func(args).map_err(ExecSignal::from)
     }
 
     fn eval_expr(&mut self, dot: &Value, expr: &Expr) -> ExecResult<Value> {
@@ -681,6 +701,7 @@ impl<'a> Executor<'a> {
     }
 }
 
+#[cfg(feature = "std")]
 fn panic_payload_to_string(payload: Box<dyn Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
@@ -703,15 +724,15 @@ mod tests {
         let (tree, defines) = parser.parse().unwrap();
 
         let funcs = builtins();
-        let mut templates: HashMap<String, ListNode> = HashMap::new();
+        let mut templates: BTreeMap<String, ListNode> = BTreeMap::new();
         for def in &defines {
             templates.insert(def.name.clone(), def.body.clone());
         }
 
         let mut executor = Executor::new(&funcs, &templates);
-        let mut buf = Vec::new();
+        let mut buf = String::new();
         executor.execute(&mut buf, &tree, data).unwrap();
-        String::from_utf8(buf).unwrap()
+        buf
     }
 
     #[test]

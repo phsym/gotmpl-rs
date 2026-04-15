@@ -10,6 +10,10 @@
 //!
 //! This module is primarily used internally by the [`Parser`](crate::parse::Parser).
 
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
 use crate::error::{Result, TemplateError};
 
 // ─── Token types ─────────────────────────────────────────────────────────
@@ -957,6 +961,7 @@ fn unescape(s: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     fn lex(input: &str) -> Vec<Token> {
         Lexer::new(input, "{{", "}}").tokenize().unwrap()

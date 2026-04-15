@@ -1,9 +1,18 @@
-use gotmpl::{Result, Template, Value};
+use gotmpl::{Result, Template, TemplateError, Value, tmap};
 
 fn title(s: &[Value]) -> Result<Value> {
+    //TODO: Add helper for validating argument count and types, to simplify writing custom functions.
+    if s.len() != 1 {
+        return Err(TemplateError::ArgCount {
+            name: "title".to_string(),
+            expected: 1,
+            got: s.len(),
+        });
+    }
     let Some(Value::String(s)) = s.into_iter().next() else {
-        //TODO: Don't panic, return a TemplateError instead (may have to create a new error variant for this)
-        panic!("title function expects a single string argument");
+        return Err(TemplateError::Exec(
+            "title function expects a single string argument".to_string(),
+        ));
     };
     // Simple implementation of title case: uppercase the first character, leave the rest unchanged.
     let s = s
@@ -21,13 +30,13 @@ fn title(s: &[Value]) -> Result<Value> {
 }
 
 fn main() {
+    let data = tmap! { "name" => "world"};
+
     let tmpl = Template::new("")
         .func("title", title)
-        .parse("Hello {{ . | title }}")
+        .parse("Hello {{ .name | title }}")
         .unwrap();
 
-    let res = tmpl
-        .execute_to_string(&Value::String("world".into()))
-        .unwrap();
+    let res = tmpl.execute_to_string(&data).unwrap();
     println!("result: {}", res);
 }

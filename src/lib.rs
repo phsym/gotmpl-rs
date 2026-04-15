@@ -1,4 +1,7 @@
 #![doc = include_str!("../README.md")]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
 
 pub(crate) mod error;
 pub(crate) mod exec;
@@ -21,9 +24,14 @@ use funcs::builtins;
 pub use go::{html_escape, js_escape, url_encode};
 pub use value::{ToValue, Value, ValueFunc};
 
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+
+#[cfg(feature = "std")]
 use std::io::Write;
-use std::sync::Arc;
 
 use exec::{Executor, MissingKey};
 use parse::{ListNode, Parser};
@@ -44,7 +52,7 @@ use parse::{ListNode, Parser};
 ///     Ok(Value::Int(args[0].as_int().unwrap_or(0) * 2))
 /// }));
 /// ```
-pub type FuncMap = HashMap<String, Func>;
+pub type FuncMap = BTreeMap<String, Func>;
 
 /// A parsed, ready-to-execute template.
 ///
@@ -73,11 +81,48 @@ pub type FuncMap = HashMap<String, Func>;
 pub struct Template {
     name: String,
     tree: Option<ListNode>,
-    defines: HashMap<String, ListNode>,
-    funcs: HashMap<String, Func>,
+    defines: BTreeMap<String, ListNode>,
+    funcs: BTreeMap<String, Func>,
     left_delim: String,
     right_delim: String,
     missing_key: MissingKey,
+}
+
+/// Adapter that bridges [`std::io::Write`] to [`core::fmt::Write`].
+///
+/// Stashes the [`io::Error`](std::io::Error) since [`fmt::Error`](core::fmt::Error)
+/// carries no payload.
+#[cfg(feature = "std")]
+struct IoAdapter<'a, W> {
+    inner: &'a mut W,
+    error: Option<std::io::Error>,
+}
+
+#[cfg(feature = "std")]
+impl<'a, W> IoAdapter<'a, W> {
+    fn new(inner: &'a mut W) -> Self {
+        IoAdapter { inner, error: None }
+    }
+
+    fn err_mapper(self) -> impl FnOnce(TemplateError) -> TemplateError {
+        move |e| match e {
+            error::TemplateError::Write => error::TemplateError::Io(
+                self.error
+                    .unwrap_or_else(|| std::io::Error::other("write error")),
+            ),
+            _ => e,
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<W: std::io::Write> core::fmt::Write for IoAdapter<'_, W> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.inner.write_all(s.as_bytes()).map_err(|e| {
+            self.error = Some(e);
+            core::fmt::Error
+        })
+    }
 }
 
 impl Template {
@@ -90,7 +135,7 @@ impl Template {
         Template {
             name: name.to_string(),
             tree: None,
-            defines: HashMap::new(),
+            defines: BTreeMap::new(),
             funcs: builtins(),
             left_delim: "{{".to_string(),
             right_delim: "}}".to_string(),
@@ -269,6 +314,7 @@ impl Template {
     ///     .parse_files(&["templates/header.html", "templates/footer.html"])
     ///     .unwrap();
     /// ```
+    #[cfg(feature = "std")]
     pub fn parse_files(mut self, filenames: &[&str]) -> Result<Self> {
         for filename in filenames {
             let content = std::fs::read_to_string(filename).map_err(|e| {
@@ -327,7 +373,7 @@ impl Template {
         self
     }
 
-    /// Execute the template, writing output to the given writer.
+    /// Execute the template, writing output to the given [`fmt::Write`](core::fmt::Write) destination.
     ///
     /// The `data` argument becomes the initial dot (`.`) value inside the template.
     ///
@@ -337,9 +383,9 @@ impl Template {
     /// - The template has not been [parsed](Self::parse) yet.
     /// - An undefined function, template, or variable is referenced.
     /// - A type error occurs during execution (e.g., ranging over a non-iterable).
-    /// - An I/O error occurs writing to `writer`.
+    /// - A write error occurs.
     /// - The recursive template call depth exceeds the safety limit.
-    pub fn execute<W: Write>(&self, writer: &mut W, data: &Value) -> Result<()> {
+    pub fn execute_fmt<W: core::fmt::Write>(&self, writer: &mut W, data: &Value) -> Result<()> {
         let tree = self.tree.as_ref().ok_or_else(|| {
             error::TemplateError::Exec(format!("template {:?} has not been parsed", self.name))
         })?;
@@ -349,7 +395,7 @@ impl Template {
         executor.execute(writer, tree, data)
     }
 
-    /// Execute a named sub-template (from a `{{define}}` or `{{block}}`).
+    /// Execute a named sub-template, writing output to a [`fmt::Write`](core::fmt::Write) destination.
     ///
     /// Equivalent to Go's `template.ExecuteTemplate()`. Looks up the named
     /// template in the definition map and executes it with the given data.
@@ -358,7 +404,39 @@ impl Template {
     ///
     /// Returns [`TemplateError::UndefinedTemplate`]
     /// if no template with the given name exists, plus all errors from
-    /// [`execute`](Self::execute).
+    /// [`execute_fmt`](Self::execute_fmt).
+    pub fn execute_template_fmt<W: core::fmt::Write>(
+        &self,
+        writer: &mut W,
+        name: &str,
+        data: &Value,
+    ) -> Result<()> {
+        let tree = self
+            .defines
+            .get(name)
+            .ok_or_else(|| error::TemplateError::UndefinedTemplate(name.to_string()))?;
+
+        let mut executor = Executor::new(&self.funcs, &self.defines);
+        executor.set_missing_key(self.missing_key);
+        executor.execute(writer, tree, data)
+    }
+
+    /// Execute the template, writing output to the given [`io::Write`](std::io::Write) destination.
+    ///
+    /// This is a convenience wrapper around [`execute_fmt`](Self::execute_fmt) for
+    /// `std::io::Write` targets (files, sockets, `Vec<u8>`, etc.).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`execute_fmt`](Self::execute_fmt), plus I/O errors from the writer.
+    #[cfg(feature = "std")]
+    pub fn execute<W: Write>(&self, writer: &mut W, data: &Value) -> Result<()> {
+        let mut adapter = IoAdapter::new(writer);
+        self.execute_fmt(&mut adapter, data)
+            .map_err(adapter.err_mapper())
+    }
+
+    /// Execute a named sub-template, writing output to an [`io::Write`](std::io::Write) destination.
     ///
     /// # Examples
     ///
@@ -379,35 +457,39 @@ impl Template {
     /// tmpl.execute_template(&mut buf, "header", &data).unwrap();
     /// assert_eq!(String::from_utf8(buf).unwrap(), "Header: Hello");
     /// ```
+    #[cfg(feature = "std")]
     pub fn execute_template<W: Write>(
         &self,
         writer: &mut W,
         name: &str,
         data: &Value,
     ) -> Result<()> {
-        let tree = self
-            .defines
-            .get(name)
-            .ok_or_else(|| error::TemplateError::UndefinedTemplate(name.to_string()))?;
-
-        let mut executor = Executor::new(&self.funcs, &self.defines);
-        executor.set_missing_key(self.missing_key);
-        executor.execute(writer, tree, data)
+        let mut adapter = IoAdapter::new(writer);
+        self.execute_template_fmt(&mut adapter, name, data)
+            .map_err(adapter.err_mapper())
     }
 
     /// Execute the template and return the result as a [`String`].
     ///
-    /// Convenience wrapper around [`execute`](Self::execute) that collects
+    /// Convenience wrapper around [`execute_fmt`](Self::execute_fmt) that collects
     /// output into a string.
     ///
     /// # Errors
     ///
-    /// Same as [`execute`](Self::execute), plus an error if the output is
-    /// not valid UTF-8 (should not happen in practice).
+    /// Same as [`execute_fmt`](Self::execute_fmt).
     pub fn execute_to_string(&self, data: &Value) -> Result<String> {
-        let mut buf = Vec::new();
-        self.execute(&mut buf, data)?;
-        String::from_utf8(buf).map_err(|e| error::TemplateError::Exec(e.to_string()))
+        let mut buf = String::new();
+        self.execute_fmt(&mut buf, data)?;
+        Ok(buf)
+    }
+
+    /// Execute a named sub-template and return the result as a [`String`].
+    ///
+    /// Convenience wrapper around [`execute_template_fmt`](Self::execute_template_fmt).
+    pub fn execute_template_to_string(&self, name: &str, data: &Value) -> Result<String> {
+        let mut buf = String::new();
+        self.execute_template_fmt(&mut buf, name, data)?;
+        Ok(buf)
     }
 
     /// Returns the template name set in [`new`](Self::new).
@@ -581,6 +663,7 @@ pub fn is_true(val: &Value) -> (bool, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     use crate::ToValue;
 
     #[test]
@@ -709,13 +792,14 @@ mod tests {
             .parse(r#"{{define "a"}}hello{{end}}{{define "b"}}world{{end}}main"#)
             .unwrap();
 
-        let mut buf = Vec::new();
-        tmpl.execute_template(&mut buf, "a", &Value::Nil).unwrap();
-        assert_eq!(String::from_utf8(buf).unwrap(), "hello");
-
-        let mut buf = Vec::new();
-        tmpl.execute_template(&mut buf, "b", &Value::Nil).unwrap();
-        assert_eq!(String::from_utf8(buf).unwrap(), "world");
+        assert_eq!(
+            tmpl.execute_template_to_string("a", &Value::Nil).unwrap(),
+            "hello"
+        );
+        assert_eq!(
+            tmpl.execute_template_to_string("b", &Value::Nil).unwrap(),
+            "world"
+        );
 
         // Main template
         assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "main");
@@ -724,8 +808,7 @@ mod tests {
     #[test]
     fn test_execute_template_undefined() {
         let tmpl = Template::new("t").parse("hello").unwrap();
-        let mut buf = Vec::new();
-        let err = tmpl.execute_template(&mut buf, "nope", &Value::Nil);
+        let err = tmpl.execute_template_to_string("nope", &Value::Nil);
         assert!(err.is_err());
     }
 
@@ -818,6 +901,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn test_parse_files() {
         use std::io::Write as _;
         let dir = std::env::temp_dir().join("gotmpl_test_parse_files");
@@ -856,6 +940,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn test_parse_files_not_found() {
         let result = Template::new("t").parse_files(&["/nonexistent/file.html"]);
         assert!(result.is_err());
