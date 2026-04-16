@@ -261,7 +261,7 @@ pub(crate) fn sprintf(fmt_str: &str, args: &[Value]) -> Result<String> {
             }
             'q' => {
                 let raw = match arg {
-                    Value::String(s) => s.as_str(),
+                    Value::String(s) => s,
                     _ => "",
                 };
                 let display;

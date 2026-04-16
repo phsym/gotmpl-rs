@@ -9,7 +9,7 @@ fn title(s: &[Value]) -> Result<Value> {
             got: s.len(),
         });
     }
-    let Some(Value::String(s)) = s.into_iter().next() else {
+    let Some(Value::String(s)) = s.first() else {
         return Err(TemplateError::Exec(
             "title function expects a single string argument".to_string(),
         ));
@@ -26,7 +26,7 @@ fn title(s: &[Value]) -> Result<Value> {
             };
             acc
         });
-    Ok(Value::String(s))
+    Ok(Value::String(s.into()))
 }
 
 fn main() {

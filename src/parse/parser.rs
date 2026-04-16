@@ -470,7 +470,7 @@ impl Parser {
 
                 TokenKind::String => {
                     let tok = self.next().clone();
-                    args.push(Expr::String(Pos::new(tok.pos, tok.line), tok.val));
+                    args.push(Expr::String(Pos::new(tok.pos, tok.line), tok.val.into()));
                 }
                 TokenKind::Number => {
                     let tok = self.next().clone();

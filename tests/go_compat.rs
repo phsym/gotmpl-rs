@@ -100,7 +100,7 @@ mod go_crosscheck {
             }
             Value::Map(m) => {
                 let mut entries = Vec::new();
-                for (k, v) in m {
+                for (k, v) in m.as_ref() {
                     let v_json = value_to_json(v)?;
                     entries.push(format!(r#""{}":{}"#, json_escape(k), v_json));
                 }
@@ -170,14 +170,14 @@ fn run(input: &str, data: &Value) -> core::result::Result<String, String> {
             Ok(args.first().cloned().unwrap_or(Value::Nil))
         })
         .func("oneArg", |args| match args.first() {
-            Some(Value::String(s)) => Ok(Value::String(format!("oneArg={}", s))),
+            Some(Value::String(s)) => Ok(Value::String(format!("oneArg={}", s).into())),
             _ => Err(gotmpl::TemplateError::Exec(
                 "oneArg requires a string".into(),
             )),
         })
         .func("twoArgs", |args| match (args.first(), args.get(1)) {
             (Some(Value::String(a)), Some(Value::String(b))) => {
-                Ok(Value::String(format!("twoArgs={}{}", a, b)))
+                Ok(Value::String(format!("twoArgs={}{}", a, b).into()))
             }
             _ => Err(gotmpl::TemplateError::Exec(
                 "twoArgs requires two strings".into(),
@@ -189,25 +189,27 @@ fn run(input: &str, data: &Value) -> core::result::Result<String, String> {
             let items: Vec<Value> = (0..n)
                 .map(|i| {
                     let c = "abcdefghijklmnop".chars().nth(i as usize).unwrap_or('?');
-                    Value::String(c.to_string())
+                    Value::String(c.to_string().into())
                 })
                 .collect();
-            Ok(Value::List(items))
+            Ok(Value::List(items.into()))
         })
         .func("makemap", |args| {
-            let mut m = alloc::collections::BTreeMap::new();
+            let mut m: alloc::collections::BTreeMap<String, Value> =
+                alloc::collections::BTreeMap::new();
             let strs: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
             for chunk in strs.chunks(2) {
                 if chunk.len() == 2 {
-                    m.insert(chunk[0].clone(), Value::String(chunk[1].clone()));
+                    m.insert(chunk[0].clone(), Value::String(chunk[1].as_str().into()));
                 }
             }
-            Ok(Value::Map(m))
+            Ok(m.into())
         })
         .func("mapOfThree", |_args| {
-            let mut m = alloc::collections::BTreeMap::new();
+            let mut m: alloc::collections::BTreeMap<String, Value> =
+                alloc::collections::BTreeMap::new();
             m.insert("three".to_string(), Value::Int(3));
-            Ok(Value::Map(m))
+            Ok(m.into())
         })
         .parse(input)
         .map_err(|e| e.to_string())?
@@ -302,7 +304,7 @@ fn test_dot_string() {
 
 #[test]
 fn test_dot_list() {
-    let data = Value::List(vec![Value::Int(-1), Value::Int(-2), Value::Int(-3)]);
+    let data = Value::List(vec![Value::Int(-1), Value::Int(-2), Value::Int(-3)].into());
     ok("<{{.}}>", &data, "<[-1 -2 -3]>");
 }
 
@@ -1108,9 +1110,9 @@ fn test_bug4_nil_in_if() {
 #[test]
 fn test_bug9_lowercase_map_key() {
     // A bug broke map lookups for lower-case names.
-    let mut m = alloc::collections::BTreeMap::new();
+    let mut m: alloc::collections::BTreeMap<String, Value> = alloc::collections::BTreeMap::new();
     m.insert("cause".to_string(), Value::String("neglect".into()));
-    ok("{{.cause}}", &Value::Map(m), "neglect");
+    ok("{{.cause}}", &m.into(), "neglect");
 }
 
 // ─── Pipelines with print functions ─────────────────────────────────────
@@ -1984,7 +1986,7 @@ fn test_double_index() {
         "Nested" => vec![
             vec![10i64, 20].into_iter().map(Value::Int).collect::<Vec<_>>(),
             vec![30i64, 40].into_iter().map(Value::Int).collect::<Vec<_>>(),
-        ].into_iter().map(Value::List).collect::<Vec<_>>(),
+        ].into_iter().map(|v| Value::List(v.into())).collect::<Vec<_>>(),
     };
     ok("{{index .Nested 1 0}}", &data, "30");
 }

@@ -18,6 +18,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Write;
@@ -264,7 +265,10 @@ impl<'a> Executor<'a> {
     /// The `funcs` map should contain all [built-in](crate::funcs::builtins) and
     /// user-defined functions. The `templates` map holds named templates from
     /// `{{define}}` blocks.
-    pub fn new(funcs: &'a BTreeMap<String, Func>, templates: &'a BTreeMap<String, ListNode>) -> Self {
+    pub fn new(
+        funcs: &'a BTreeMap<String, Func>,
+        templates: &'a BTreeMap<String, ListNode>,
+    ) -> Self {
         Executor {
             funcs,
             templates,
@@ -422,7 +426,7 @@ impl<'a> Executor<'a> {
                     w,
                     branch,
                     map.iter()
-                        .map(|(k, v)| (Value::String(k.clone()), v.clone()))
+                        .map(|(k, v)| (Value::String(Arc::clone(k)), v.clone()))
                 );
             }
             Value::Int(n) => {
@@ -710,7 +714,7 @@ impl<'a> Executor<'a> {
                 Ok(result)
             }
 
-            Expr::String(_, s) => Ok(Value::String(s.clone())),
+            Expr::String(_, s) => Ok(Value::String(Arc::clone(s))),
 
             Expr::Number(_, s) => {
                 if s.contains('.') || s.contains('e') || s.contains('E') {

@@ -33,8 +33,8 @@ use alloc::vec::Vec;
 #[cfg(feature = "std")]
 use std::io::Write;
 
-pub use exec::MissingKey;
 use exec::Executor;
+pub use exec::MissingKey;
 use parse::{ListNode, Parser};
 
 /// A function map mapping names to template functions.
@@ -70,7 +70,7 @@ pub type FuncMap = BTreeMap<String, Func>;
 ///     .missing_key(MissingKey::Error)             // optional: error on missing keys
 ///     .func("shout", |args| {                     // optional: custom functions
 ///         let s = format!("{}", args[0]).to_uppercase();
-///         Ok(gotmpl::Value::String(s))
+///         Ok(gotmpl::Value::String(s.into()))
 ///     })
 ///     .parse("Hello, << .Name | shout >>!")       // parse template source
 ///     .unwrap()
@@ -232,7 +232,7 @@ impl Template {
     ///
     /// let mut fm = FuncMap::new();
     /// fm.insert("greet".into(), Arc::new(|args: &[Value]| {
-    ///     Ok(Value::String(format!("Hello, {}!", args[0])))
+    ///     Ok(Value::String(format!("Hello, {}!", args[0]).into()))
     /// }));
     ///
     /// let result = Template::new("t")
@@ -660,8 +660,8 @@ pub fn is_true(val: &Value) -> (bool, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
     use crate::ToValue;
+    use alloc::vec;
 
     #[test]
     fn test_simple_api() {
@@ -674,7 +674,7 @@ mod tests {
         let result = Template::new("test")
             .func("upper", |args| {
                 if let Some(Value::String(s)) = args.first() {
-                    Ok(Value::String(s.to_uppercase()))
+                    Ok(Value::String(s.to_uppercase().into()))
                 } else {
                     Ok(Value::Nil)
                 }
@@ -886,7 +886,7 @@ mod tests {
         let mut fm = FuncMap::new();
         fm.insert(
             "greet".into(),
-            Arc::new(|args: &[Value]| Ok(Value::String(format!("Hi, {}!", args[0])))),
+            Arc::new(|args: &[Value]| Ok(Value::String(format!("Hi, {}!", args[0]).into()))),
         );
         let result = Template::new("t")
             .funcs(fm)
