@@ -183,6 +183,160 @@ fn test_clone_unparsed_template() {
     assert!(cloned.execute_to_string(&Value::Nil).is_err());
 }
 
+// ─── ToValue implementations ─────────────────────────────────────────────
+
+#[test]
+fn test_to_value_integers() {
+    use gotmpl::ToValue;
+
+    assert_eq!(42i8.to_value(), Value::Int(42));
+    assert_eq!(42i16.to_value(), Value::Int(42));
+    assert_eq!(42i32.to_value(), Value::Int(42));
+    assert_eq!(42i64.to_value(), Value::Int(42));
+    assert_eq!(42u8.to_value(), Value::Int(42));
+    assert_eq!(42u16.to_value(), Value::Int(42));
+    assert_eq!(42u32.to_value(), Value::Int(42));
+    assert_eq!(42u64.to_value(), Value::Int(42));
+    assert_eq!(42usize.to_value(), Value::Int(42));
+    assert_eq!(42isize.to_value(), Value::Int(42));
+}
+
+#[test]
+fn test_to_value_floats() {
+    use gotmpl::ToValue;
+
+    assert_eq!(3.14f64.to_value(), Value::Float(3.14));
+    // f32 → f64 conversion
+    let f: f32 = 2.5;
+    if let Value::Float(v) = f.to_value() {
+        assert!((v - 2.5).abs() < 1e-6);
+    } else {
+        panic!("expected Float");
+    }
+}
+
+#[test]
+fn test_to_value_cow_str() {
+    use alloc::borrow::Cow;
+    use gotmpl::ToValue;
+
+    let borrowed: Cow<'_, str> = Cow::Borrowed("hello");
+    assert_eq!(borrowed.to_value(), Value::String("hello".into()));
+
+    let owned: Cow<'_, str> = Cow::Owned("world".into());
+    assert_eq!(owned.to_value(), Value::String("world".into()));
+}
+
+#[test]
+fn test_to_value_slice_and_array() {
+    use gotmpl::ToValue;
+
+    let arr = [1i64, 2, 3];
+    assert_eq!(
+        arr.to_value(),
+        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+    );
+
+    let slice: &[i64] = &[4, 5];
+    assert_eq!(
+        slice.to_value(),
+        Value::List(vec![Value::Int(4), Value::Int(5)])
+    );
+}
+
+#[test]
+fn test_to_value_vecdeque() {
+    use alloc::collections::VecDeque;
+    use gotmpl::ToValue;
+
+    let mut vd = VecDeque::new();
+    vd.push_back(1i64);
+    vd.push_back(2);
+    assert_eq!(
+        vd.to_value(),
+        Value::List(vec![Value::Int(1), Value::Int(2)])
+    );
+}
+
+#[test]
+fn test_to_value_linked_list() {
+    use alloc::collections::LinkedList;
+    use gotmpl::ToValue;
+
+    let mut ll = LinkedList::new();
+    ll.push_back("a");
+    ll.push_back("b");
+    assert_eq!(
+        ll.to_value(),
+        Value::List(vec![
+            Value::String("a".into()),
+            Value::String("b".into())
+        ])
+    );
+}
+
+#[test]
+fn test_to_value_btreeset() {
+    use alloc::collections::BTreeSet;
+    use gotmpl::ToValue;
+
+    let mut s = BTreeSet::new();
+    s.insert(3i64);
+    s.insert(1);
+    s.insert(2);
+    // BTreeSet iterates in sorted order
+    assert_eq!(
+        s.to_value(),
+        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+    );
+}
+
+#[test]
+fn test_to_value_btreemap_str_keys() {
+    use alloc::collections::BTreeMap;
+    use gotmpl::ToValue;
+
+    let mut m = BTreeMap::new();
+    m.insert("x", 1i64);
+    m.insert("y", 2i64);
+    let val = m.to_value();
+    assert_eq!(val, tmap! { "x" => 1i64, "y" => 2i64 });
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn test_to_value_hashmap() {
+    use gotmpl::ToValue;
+    use std::collections::HashMap;
+
+    let mut m = HashMap::new();
+    m.insert("a".to_string(), 1i64);
+    let val = m.to_value();
+    assert_eq!(val, tmap! { "a" => 1i64 });
+
+    let mut m2 = HashMap::new();
+    m2.insert("b", 2i64);
+    let val2 = m2.to_value();
+    assert_eq!(val2, tmap! { "b" => 2i64 });
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn test_to_value_hashset() {
+    use gotmpl::ToValue;
+    use std::collections::HashSet;
+
+    let mut s = HashSet::new();
+    s.insert(3i64);
+    s.insert(1);
+    s.insert(2);
+    // HashSet ToValue sorts for determinism
+    assert_eq!(
+        s.to_value(),
+        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+    );
+}
+
 // ─── add_parse_tree API ───────────────────────────────────────────────────
 
 #[test]

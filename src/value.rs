@@ -382,6 +382,8 @@ impl PartialEq for Value {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
+            (Value::List(a), Value::List(b)) => a == b,
+            (Value::Map(a), Value::Map(b)) => a == b,
             _ => false,
         }
     }
@@ -437,21 +439,29 @@ impl ToValue for Value {
     }
 }
 
+// ─── Primitive scalar impls ──────────────────────────────────────────────
+
 impl ToValue for bool {
     fn to_value(&self) -> Value {
         Value::Bool(*self)
     }
 }
 
-impl ToValue for i64 {
-    fn to_value(&self) -> Value {
-        Value::Int(*self)
-    }
+macro_rules! impl_to_value_int {
+    ($($t:ty),*) => {
+        $(impl ToValue for $t {
+            fn to_value(&self) -> Value {
+                Value::Int(*self as i64)
+            }
+        })*
+    };
 }
 
-impl ToValue for i32 {
+impl_to_value_int!(i8, i16, i32, i64, u8, u16, u32, u64, isize, usize);
+
+impl ToValue for f32 {
     fn to_value(&self) -> Value {
-        Value::Int(*self as i64)
+        Value::Float(*self as f64)
     }
 }
 
@@ -461,15 +471,11 @@ impl ToValue for f64 {
     }
 }
 
+// ─── String-like impls ──────────────────────────────────────────────────
+
 impl ToValue for str {
     fn to_value(&self) -> Value {
         Value::String(self.to_string())
-    }
-}
-
-impl<T: ToValue + ?Sized> ToValue for &T {
-    fn to_value(&self) -> Value {
-        (*self).to_value()
     }
 }
 
@@ -479,11 +485,79 @@ impl ToValue for String {
     }
 }
 
+impl ToValue for alloc::borrow::Cow<'_, str> {
+    fn to_value(&self) -> Value {
+        Value::String(self.clone().into_owned())
+    }
+}
+
+// ─── Reference / wrapper impls ──────────────────────────────────────────
+
+impl<T: ToValue + ?Sized> ToValue for &T {
+    fn to_value(&self) -> Value {
+        (*self).to_value()
+    }
+}
+
+/// Converts `Some(v)` to `v.to_value()` and `None` to [`Value::Nil`].
+impl<T: ToValue> ToValue for Option<T> {
+    fn to_value(&self) -> Value {
+        match self {
+            Some(v) => v.to_value(),
+            None => Value::Nil,
+        }
+    }
+}
+
+// ─── List-like collection impls ─────────────────────────────────────────
+
+impl<T: ToValue> ToValue for [T] {
+    fn to_value(&self) -> Value {
+        Value::List(self.iter().map(ToValue::to_value).collect())
+    }
+}
+
+impl<T: ToValue, const N: usize> ToValue for [T; N] {
+    fn to_value(&self) -> Value {
+        Value::List(self.iter().map(ToValue::to_value).collect())
+    }
+}
+
 impl<T: ToValue> ToValue for Vec<T> {
     fn to_value(&self) -> Value {
         Value::List(self.iter().map(ToValue::to_value).collect())
     }
 }
+
+impl<T: ToValue> ToValue for alloc::collections::VecDeque<T> {
+    fn to_value(&self) -> Value {
+        Value::List(self.iter().map(ToValue::to_value).collect())
+    }
+}
+
+impl<T: ToValue> ToValue for alloc::collections::LinkedList<T> {
+    fn to_value(&self) -> Value {
+        Value::List(self.iter().map(ToValue::to_value).collect())
+    }
+}
+
+impl<T: ToValue> ToValue for alloc::collections::BTreeSet<T> {
+    fn to_value(&self) -> Value {
+        Value::List(self.iter().map(ToValue::to_value).collect())
+    }
+}
+
+#[cfg(feature = "std")]
+impl<T: ToValue> ToValue for std::collections::HashSet<T> {
+    fn to_value(&self) -> Value {
+        // Collect and sort for deterministic output.
+        let mut items: Vec<Value> = self.iter().map(ToValue::to_value).collect();
+        items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+        Value::List(items)
+    }
+}
+
+// ─── Map-like collection impls ──────────────────────────────────────────
 
 impl<T: ToValue> ToValue for BTreeMap<String, T> {
     fn to_value(&self) -> Value {
@@ -495,13 +569,35 @@ impl<T: ToValue> ToValue for BTreeMap<String, T> {
     }
 }
 
-/// Converts `Some(v)` to `v.to_value()` and `None` to [`Value::Nil`].
-impl<T: ToValue> ToValue for Option<T> {
+impl<T: ToValue> ToValue for BTreeMap<&str, T> {
     fn to_value(&self) -> Value {
-        match self {
-            Some(v) => v.to_value(),
-            None => Value::Nil,
-        }
+        Value::Map(
+            self.iter()
+                .map(|(k, v)| (k.to_string(), v.to_value()))
+                .collect(),
+        )
+    }
+}
+
+#[cfg(feature = "std")]
+impl<T: ToValue> ToValue for std::collections::HashMap<String, T> {
+    fn to_value(&self) -> Value {
+        Value::Map(
+            self.iter()
+                .map(|(k, v)| (k.clone(), v.to_value()))
+                .collect(),
+        )
+    }
+}
+
+#[cfg(feature = "std")]
+impl<T: ToValue> ToValue for std::collections::HashMap<&str, T> {
+    fn to_value(&self) -> Value {
+        Value::Map(
+            self.iter()
+                .map(|(k, v)| (k.to_string(), v.to_value()))
+                .collect(),
+        )
     }
 }
 
