@@ -113,25 +113,22 @@ impl FmtSpec {
 
     /// Pad a formatted string to the configured width.
     fn pad(&self, s: &str, is_numeric: bool) -> String {
-        let char_len = s.chars().count();
-        let width = match self.width {
-            Some(w) if char_len < w => w,
-            _ => return s.to_string(),
+        let Some(width) = self.width else {
+            return s.to_string();
         };
-        let padding = width - char_len;
         if self.left_align {
-            format!("{}{}", s, " ".repeat(padding))
+            format!("{s:<width$}")
         } else if self.zero && is_numeric {
             // Put zeros after the sign character
-            if let Some(rest) = s.strip_prefix('-') {
-                format!("-{}{}", "0".repeat(padding), rest)
-            } else if let Some(rest) = s.strip_prefix('+') {
-                format!("+{}{}", "0".repeat(padding), rest)
+            if let Some(rest) = s.strip_prefix(['-', '+']) {
+                let sign = &s[..1];
+                let w = width.saturating_sub(1);
+                format!("{sign}{rest:0>w$}")
             } else {
-                format!("{}{}", "0".repeat(padding), s)
+                format!("{s:0>width$}")
             }
         } else {
-            format!("{}{}", " ".repeat(padding), s)
+            format!("{s:>width$}")
         }
     }
 
