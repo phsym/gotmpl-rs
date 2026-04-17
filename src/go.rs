@@ -89,8 +89,8 @@ impl FmtSpec {
         }
         // Width
         let mut w = String::new();
-        while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
-            w.push(chars.next().unwrap());
+        while let Some(c) = chars.next_if(|c| c.is_ascii_digit()) {
+            w.push(c);
         }
         if !w.is_empty() {
             spec.width = w.parse().ok();
@@ -99,8 +99,8 @@ impl FmtSpec {
         if chars.peek() == Some(&'.') {
             chars.next();
             let mut p = String::new();
-            while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
-                p.push(chars.next().unwrap());
+            while let Some(c) = chars.next_if(|c| c.is_ascii_digit()) {
+                p.push(c);
             }
             spec.precision = Some(if p.is_empty() {
                 0
@@ -194,7 +194,7 @@ pub(crate) fn sprintf(fmt_str: &str, args: &[Value]) -> Result<String> {
             arg_idx += 1;
             &args[arg_idx - 1]
         } else {
-            write!(result, "%!{}(MISSING)", verb).unwrap();
+            write!(result, "%!{}(MISSING)", verb).ok();
             continue;
         };
 
@@ -327,7 +327,7 @@ fn go_quote(s: &str) -> String {
             '\x0C' => out.push_str("\\f"),
             '\x0B' => out.push_str("\\v"),
             c if (c as u32) < 0x20 || c == '\x7F' => {
-                write!(out, "\\x{:02x}", c as u32).unwrap();
+                write!(out, "\\x{:02x}", c as u32).ok();
             }
             c => out.push(c),
         }
@@ -469,6 +469,10 @@ fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> String {
         "X" => format!("{:X}", abs),
         "o" => format!("{:o}", abs),
         "b" => format!("{:b}", abs),
+        #[allow(
+            clippy::unreachable,
+            reason = "private helper; callers only pass \"x\", \"X\", \"o\", \"b\""
+        )]
         _ => unreachable!(),
     };
     let prefix = if spec.hash {
@@ -477,7 +481,11 @@ fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> String {
             "X" => "0X",
             "o" => "0",
             "b" => "0b",
-            _ => "",
+            #[allow(
+                clippy::unreachable,
+                reason = "private helper; callers only pass \"x\", \"X\", \"o\", \"b\""
+            )]
+            _ => unreachable!(),
         }
     } else {
         ""
@@ -531,7 +539,7 @@ pub fn js_escape(s: &str) -> String {
             '&' => out.push_str("\\u0026"),
             '=' => out.push_str("\\u003D"),
             _ if (ch as u32) < 0x20 => {
-                write!(out, "\\u{:04X}", ch as u32).unwrap();
+                write!(out, "\\u{:04X}", ch as u32).ok();
             }
             _ => out.push(ch),
         }
@@ -551,7 +559,7 @@ pub fn url_encode(s: &str) -> String {
                 out.push(byte as char);
             }
             _ => {
-                write!(out, "%{:02X}", byte).unwrap();
+                write!(out, "%{:02X}", byte).ok();
             }
         }
     }

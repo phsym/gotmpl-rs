@@ -132,7 +132,12 @@ pub fn builtins() -> BTreeMap<String, Func> {
                     return Ok(arg.clone());
                 }
             }
-            Ok(args.last().unwrap().clone())
+            #[allow(
+                clippy::unwrap_used,
+                reason = "check_min_args guarantees args is non-empty"
+            )]
+            let last = args.last().unwrap().clone();
+            Ok(last)
         }),
     );
 
@@ -145,7 +150,12 @@ pub fn builtins() -> BTreeMap<String, Func> {
                     return Ok(arg.clone());
                 }
             }
-            Ok(args.last().unwrap().clone())
+            #[allow(
+                clippy::unwrap_used,
+                reason = "check_min_args guarantees args is non-empty"
+            )]
+            let last = args.last().unwrap().clone();
+            Ok(last)
         }),
     );
 
@@ -168,7 +178,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
                 if i > 0 && go::needs_space(&args[i - 1], arg) {
                     result.push(' ');
                 }
-                write!(result, "{}", arg).unwrap();
+                write!(result, "{}", arg).ok();
             }
             Ok(Value::String(Arc::from(result)))
         }),
@@ -297,6 +307,10 @@ pub fn builtins() -> BTreeMap<String, Func> {
                         ))),
                     }
                 }
+                #[allow(
+                    clippy::unreachable,
+                    reason = "args.len() is in 1..=4: bounded by check_min_args and the `> 4` bailout above"
+                )]
                 _ => unreachable!(),
             }
         }),

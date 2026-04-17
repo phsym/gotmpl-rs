@@ -406,7 +406,9 @@ impl Lexer {
                 return Ok(());
             }
 
-            let ch = self.peek().unwrap();
+            let Some(ch) = self.peek() else {
+                return Err(self.error("unclosed action"));
+            };
 
             match ch {
                 '|' => {
@@ -809,7 +811,12 @@ impl Lexer {
                                 _ => return Err(self.error("invalid hex escape in char literal")),
                             }
                         }
-                        char::from_u32(u32::from_str_radix(&hex, 16).unwrap()).unwrap_or('\0')
+                        #[allow(
+                            clippy::unwrap_used,
+                            reason = "hex is 2 validated ASCII hex digits, always parses"
+                        )]
+                        let n = u32::from_str_radix(&hex, 16).unwrap();
+                        char::from_u32(n).unwrap_or('\0')
                     }
                     Some('u') => {
                         // \uHHHH
@@ -824,7 +831,12 @@ impl Lexer {
                                 }
                             }
                         }
-                        char::from_u32(u32::from_str_radix(&hex, 16).unwrap()).unwrap_or('\0')
+                        #[allow(
+                            clippy::unwrap_used,
+                            reason = "hex is 4 validated ASCII hex digits, always parses"
+                        )]
+                        let n = u32::from_str_radix(&hex, 16).unwrap();
+                        char::from_u32(n).unwrap_or('\0')
                     }
                     Some('U') => {
                         // \UHHHHHHHH
@@ -839,7 +851,12 @@ impl Lexer {
                                 }
                             }
                         }
-                        char::from_u32(u32::from_str_radix(&hex, 16).unwrap()).unwrap_or('\0')
+                        #[allow(
+                            clippy::unwrap_used,
+                            reason = "hex is 8 validated ASCII hex digits, always parses"
+                        )]
+                        let n = u32::from_str_radix(&hex, 16).unwrap();
+                        char::from_u32(n).unwrap_or('\0')
                     }
                     Some(c) if c.is_ascii_digit() => {
                         // Octal: \NNN

@@ -5,6 +5,12 @@ A Rust port of Go's [`text/template`](https://pkg.go.dev/text/template).
 Supports the full template syntax (pipelines, control flow, custom functions, template
 composition, whitespace trimming) with Go compatible output. `no_std` compatible.
 
+**No `unsafe`, no panics**: the crate `#![forbid(unsafe_code)]` and denies `panic!`,
+`unwrap`, `expect`, `unreachable!`, `todo!`, and `unimplemented!` at the lint level.
+Parse and execution errors are returned as `Result<_, TemplateError>`, so malformed
+templates or bad input never panic from the library itself. User-provided functions that
+panic are caught under `std`; see `no_std` notes below.
+
 ## Quick start
 
 ```rust
