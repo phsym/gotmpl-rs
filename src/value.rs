@@ -270,7 +270,12 @@ impl Value {
         // Resolve caller-supplied i64 bounds into usize indices in [0, len].
         // `len as i64` is lossless: Rust caps allocations at isize::MAX, which
         // fits in i64 on every supported target.
-        fn resolve(kind: &str, start: Option<i64>, end: Option<i64>, len: usize) -> Result<(usize, usize)> {
+        fn resolve(
+            kind: &str,
+            start: Option<i64>,
+            end: Option<i64>,
+            len: usize,
+        ) -> Result<(usize, usize)> {
             let len_i = len as i64;
             let start = start.unwrap_or(0);
             let end = end.unwrap_or(len_i);

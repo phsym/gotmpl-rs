@@ -2,7 +2,7 @@
 name = "gotmpl"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 description = "A Rust reimplementation of Go's text/template library"
 repository = "https://github.com/phsym/gotmpl-rs"
 license = "MIT"

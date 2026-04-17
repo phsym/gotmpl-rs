@@ -1,0 +1,9 @@
+name: Setup Build Environment
+description: Setup build environment
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@1.89.0
+      with:
+        components: clippy,rustfmt

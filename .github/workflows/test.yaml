@@ -1,0 +1,44 @@
+name: Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_call: 
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest] #, windows-latest, macos-latest]
+        features: [""]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v6
+    - uses: ./.github/actions/setup-build-env
+
+    - name: Build
+      run: cargo build --verbose --features "${{ matrix.features }}"
+    - name: Run tests
+      run: cargo test --verbose --features "${{ matrix.features }}"
+  
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: ./.github/actions/setup-build-env
+    - name: Check formatting
+      run: cargo fmt --check --all
+    - name: Run Cargo check
+      run: cargo check --all --all-features --all-targets
+    - name: Run Clippy linter
+      run: cargo clippy --all --all-features --all-targets -- -D clippy::all

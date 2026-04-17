@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    # run only against tags
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yaml
+  check-tag:
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-build-env
+      - name: Verify Cargo.toml matches git tag
+        run: |
+          CRATE_VERSION="v$(cargo read-manifest --manifest-path=Cargo.toml | jq -r '.version')"
+          echo "CRATE_VERSION=$CRATE_VERSION" >> $GITHUB_ENV
+          if [ "$TAG_NAME" != "$CRATE_VERSION" ]; then
+            echo "Crate version and git tag mismatch"
+            echo "Tag: $TAG_NAME"
+            echo "Crate: $CRATE_VERSION"
+            exit 1
+          fi
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [test, check-tag]
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Generate a changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: .github/release-note.toml
+          args: --verbose --current
+        env:
+          OUTPUT: CHANGELOG.md
+      - name: Release
+        uses: softprops/action-gh-release@v3
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          # prerelease: true
+          name: ${{ github.ref_name }}
+          # draft: true
+          body_path: CHANGELOG.md
+          # generate_release_notes: true
