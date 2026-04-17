@@ -113,7 +113,7 @@ use gotmpl::Value;
 let result = Template::new("test")
     .func("upper", |args| {
         match args.first() {
-            Some(Value::String(s)) => Ok(Value::String(s.to_uppercase())),
+            Some(Value::String(s)) => Ok(Value::String(s.to_uppercase().into())),
             _ => Ok(Value::Nil),
         }
     })
@@ -201,9 +201,9 @@ Template data uses the `Value` enum:
 | `Bool(bool)` | `bool` | `bool` |
 | `Int(i64)` | `i64` | `int` |
 | `Float(f64)` | `f64` | `float64` |
-| `String(String)` | `String` | `string` |
-| `List(Vec<Value>)` | `Vec<Value>` | `[]any` |
-| `Map(BTreeMap<String, Value>)` | `BTreeMap` | `map[string]any` |
+| `String(Arc<str>)` | `String` | `string` |
+| `List(Arc<[Value]>)` | `Vec<Value>` | `[]any` |
+| `Map(Arc<BTreeMap<Arc<str>, Value>>)` | `BTreeMap` | `map[string]any` |
 | `Function(ValueFunc)` | `Arc<dyn Fn>` | `func(...)` |
 
 The `tmap!` macro builds data maps:

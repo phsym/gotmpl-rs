@@ -170,7 +170,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
                 }
                 write!(result, "{}", arg).unwrap();
             }
-            Ok(Value::String(result))
+            Ok(Value::String(Arc::from(result)))
         }),
     );
 
@@ -178,7 +178,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
         "println".into(),
         Arc::new(|args: &[Value]| {
             let s: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
-            Ok(Value::String(format!("{}\n", s.join(" "))))
+            Ok(Value::String(Arc::from(format!("{}\n", s.join(" ")))))
         }),
     );
 
@@ -186,8 +186,8 @@ pub fn builtins() -> BTreeMap<String, Func> {
         "printf".into(),
         Arc::new(|args: &[Value]| {
             check_min_args("printf", args, 1)?;
-            let fmt_str = match &args[0] {
-                Value::String(s) => s.clone(),
+            let fmt_str: &str = match &args[0] {
+                Value::String(s) => s,
                 other => {
                     return Err(TemplateError::Exec(format!(
                         "printf: first arg must be string, got {}",
@@ -195,8 +195,8 @@ pub fn builtins() -> BTreeMap<String, Func> {
                     )));
                 }
             };
-            let result = go::sprintf(&fmt_str, &args[1..])?;
-            Ok(Value::String(result))
+            let result = go::sprintf(fmt_str, &args[1..])?;
+            Ok(Value::String(Arc::from(result)))
         }),
     );
 
@@ -325,7 +325,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
         Arc::new(|args: &[Value]| {
             check_args("html", args, 1)?;
             let s = format!("{}", args[0]);
-            Ok(Value::String(go::html_escape(&s)))
+            Ok(Value::String(Arc::from(go::html_escape(&s))))
         }),
     );
 
@@ -334,7 +334,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
         Arc::new(|args: &[Value]| {
             check_args("js", args, 1)?;
             let s = format!("{}", args[0]);
-            Ok(Value::String(go::js_escape(&s)))
+            Ok(Value::String(Arc::from(go::js_escape(&s))))
         }),
     );
 
@@ -343,7 +343,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
         Arc::new(|args: &[Value]| {
             check_args("urlquery", args, 1)?;
             let s = format!("{}", args[0]);
-            Ok(Value::String(go::url_encode(&s)))
+            Ok(Value::String(Arc::from(go::url_encode(&s))))
         }),
     );
 

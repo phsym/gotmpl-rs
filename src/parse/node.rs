@@ -9,6 +9,7 @@
 
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 /// Byte-level position in the template source, used for error reporting.
@@ -171,7 +172,10 @@ pub enum Expr {
     Identifier(Pos, String),
 
     /// A string literal (`"hello"` or `` `raw` ``).
-    String(Pos, String),
+    ///
+    /// Stored as [`Arc<str>`] so execution can cheaply clone it into
+    /// [`Value::String`](crate::Value::String) via a refcount bump.
+    String(Pos, Arc<str>),
 
     /// A number literal, stored as its string representation.
     ///

@@ -84,14 +84,18 @@ pub enum Value {
     /// A 64-bit floating-point number.
     Float(f64),
     /// A UTF-8 string.
-    String(String),
+    String(Arc<str>),
     /// An ordered list of values.
-    List(Vec<Value>),
+    ///
+    /// Uses [`Arc<[Value]>`] for cheap cloning and single-allocation storage.
+    List(Arc<[Value]>),
     /// A sorted string-keyed map of values.
     ///
-    /// Uses [`BTreeMap`] to ensure deterministic iteration order (matching
-    /// Go's sorted map key iteration in templates).
-    Map(BTreeMap<String, Value>),
+    /// Uses [`BTreeMap`] with [`Arc<str>`] keys to ensure deterministic
+    /// iteration order (matching Go's sorted map key iteration in templates)
+    /// and to let `{{range}}` over a map refcount-bump the key into
+    /// [`Value::String`] instead of allocating.
+    Map(Arc<BTreeMap<Arc<str>, Value>>),
     /// A callable function value, invoked via the `call` builtin.
     ///
     /// See [`ValueFunc`] for the expected signature.
@@ -105,9 +109,9 @@ impl Clone for Value {
             Value::Bool(b) => Value::Bool(*b),
             Value::Int(n) => Value::Int(*n),
             Value::Float(f) => Value::Float(*f),
-            Value::String(s) => Value::String(s.clone()),
-            Value::List(v) => Value::List(v.clone()),
-            Value::Map(m) => Value::Map(m.clone()),
+            Value::String(s) => Value::String(Arc::clone(s)),
+            Value::List(v) => Value::List(Arc::clone(v)),
+            Value::Map(m) => Value::Map(Arc::clone(m)),
             Value::Function(f) => Value::Function(Arc::clone(f)),
         }
     }
@@ -203,7 +207,7 @@ impl Value {
                 idx.type_name()
             ))),
             (Value::Map(m), Value::String(k)) => {
-                Ok(m.get(k.as_str()).cloned().unwrap_or(Value::Nil))
+                Ok(m.get(k.as_ref()).cloned().unwrap_or(Value::Nil))
             }
             (Value::Map(_), _) => Err(crate::error::TemplateError::Exec(format!(
                 "cannot index map with type {}",
@@ -275,7 +279,10 @@ impl Value {
                         v.len()
                     )));
                 }
-                Ok(Value::List(v[start..end].to_vec()))
+                if start == 0 && end == v.len() {
+                    return Ok(Value::List(Arc::clone(v)));
+                }
+                Ok(Value::List(Arc::from(&v[start..end])))
             }
             Value::String(s) => {
                 let start = start.unwrap_or(0) as usize;
@@ -293,7 +300,10 @@ impl Value {
                         "slice: index not on UTF-8 character boundary".to_string(),
                     ));
                 }
-                Ok(Value::String(s[start..end].to_string()))
+                if start == 0 && end == s.len() {
+                    return Ok(Value::String(Arc::clone(s)));
+                }
+                Ok(Value::String(Arc::from(&s[start..end])))
             }
             _ => Err(crate::error::TemplateError::Exec(format!(
                 "slice: cannot slice type {}",
@@ -305,7 +315,7 @@ impl Value {
     /// Extracts a string slice if this is a [`Value::String`].
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            Value::String(s) => Some(s.as_str()),
+            Value::String(s) => Some(s),
             _ => None,
         }
     }
@@ -331,6 +341,19 @@ impl Value {
     /// Returns `true` if this is a [`Value::Function`].
     pub fn is_function(&self) -> bool {
         matches!(self, Value::Function(_))
+    }
+
+    /// Creates a [`Value::Map`] from a fixed-size array of key-value pairs.
+    ///
+    /// This is the constructor used by the [`tmap!`](crate::tmap) macro.
+    #[doc(hidden)]
+    pub fn from_entries<const N: usize>(entries: [(String, Value); N]) -> Self {
+        Value::Map(Arc::new(
+            entries
+                .into_iter()
+                .map(|(k, v)| (Arc::from(k), v))
+                .collect(),
+        ))
     }
 }
 
@@ -475,19 +498,19 @@ impl ToValue for f64 {
 
 impl ToValue for str {
     fn to_value(&self) -> Value {
-        Value::String(self.to_string())
+        Value::String(Arc::from(self))
     }
 }
 
 impl ToValue for String {
     fn to_value(&self) -> Value {
-        Value::String(self.clone())
+        Value::String(Arc::from(self.as_str()))
     }
 }
 
 impl ToValue for alloc::borrow::Cow<'_, str> {
     fn to_value(&self) -> Value {
-        Value::String(self.clone().into_owned())
+        Value::String(Arc::from(self.as_ref()))
     }
 }
 
@@ -513,37 +536,67 @@ impl<T: ToValue> ToValue for Option<T> {
 
 impl<T: ToValue> ToValue for [T] {
     fn to_value(&self) -> Value {
-        Value::List(self.iter().map(ToValue::to_value).collect())
+        Value::List(
+            self.iter()
+                .map(ToValue::to_value)
+                .collect::<Vec<_>>()
+                .into(),
+        )
     }
 }
 
 impl<T: ToValue, const N: usize> ToValue for [T; N] {
     fn to_value(&self) -> Value {
-        Value::List(self.iter().map(ToValue::to_value).collect())
+        Value::List(
+            self.iter()
+                .map(ToValue::to_value)
+                .collect::<Vec<_>>()
+                .into(),
+        )
     }
 }
 
 impl<T: ToValue> ToValue for Vec<T> {
     fn to_value(&self) -> Value {
-        Value::List(self.iter().map(ToValue::to_value).collect())
+        Value::List(
+            self.iter()
+                .map(ToValue::to_value)
+                .collect::<Vec<_>>()
+                .into(),
+        )
     }
 }
 
 impl<T: ToValue> ToValue for alloc::collections::VecDeque<T> {
     fn to_value(&self) -> Value {
-        Value::List(self.iter().map(ToValue::to_value).collect())
+        Value::List(
+            self.iter()
+                .map(ToValue::to_value)
+                .collect::<Vec<_>>()
+                .into(),
+        )
     }
 }
 
 impl<T: ToValue> ToValue for alloc::collections::LinkedList<T> {
     fn to_value(&self) -> Value {
-        Value::List(self.iter().map(ToValue::to_value).collect())
+        Value::List(
+            self.iter()
+                .map(ToValue::to_value)
+                .collect::<Vec<_>>()
+                .into(),
+        )
     }
 }
 
 impl<T: ToValue> ToValue for alloc::collections::BTreeSet<T> {
     fn to_value(&self) -> Value {
-        Value::List(self.iter().map(ToValue::to_value).collect())
+        Value::List(
+            self.iter()
+                .map(ToValue::to_value)
+                .collect::<Vec<_>>()
+                .into(),
+        )
     }
 }
 
@@ -553,7 +606,7 @@ impl<T: ToValue> ToValue for std::collections::HashSet<T> {
         // Collect and sort for deterministic output.
         let mut items: Vec<Value> = self.iter().map(ToValue::to_value).collect();
         items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
-        Value::List(items)
+        Value::List(items.into())
     }
 }
 
@@ -561,47 +614,97 @@ impl<T: ToValue> ToValue for std::collections::HashSet<T> {
 
 impl<T: ToValue> ToValue for BTreeMap<String, T> {
     fn to_value(&self) -> Value {
-        Value::Map(
+        Value::Map(Arc::new(
             self.iter()
-                .map(|(k, v)| (k.clone(), v.to_value()))
+                .map(|(k, v)| (Arc::from(k.as_str()), v.to_value()))
                 .collect(),
-        )
+        ))
     }
 }
 
 impl<T: ToValue> ToValue for BTreeMap<&str, T> {
     fn to_value(&self) -> Value {
-        Value::Map(
+        Value::Map(Arc::new(
             self.iter()
-                .map(|(k, v)| (k.to_string(), v.to_value()))
+                .map(|(k, v)| (Arc::from(*k), v.to_value()))
                 .collect(),
-        )
+        ))
     }
 }
 
 #[cfg(feature = "std")]
 impl<T: ToValue> ToValue for std::collections::HashMap<String, T> {
     fn to_value(&self) -> Value {
-        Value::Map(
+        Value::Map(Arc::new(
             self.iter()
-                .map(|(k, v)| (k.clone(), v.to_value()))
+                .map(|(k, v)| (Arc::from(k.as_str()), v.to_value()))
                 .collect(),
-        )
+        ))
     }
 }
 
 #[cfg(feature = "std")]
 impl<T: ToValue> ToValue for std::collections::HashMap<&str, T> {
     fn to_value(&self) -> Value {
-        Value::Map(
+        Value::Map(Arc::new(
             self.iter()
-                .map(|(k, v)| (k.to_string(), v.to_value()))
+                .map(|(k, v)| (Arc::from(*k), v.to_value()))
                 .collect(),
-        )
+        ))
     }
 }
 
-// ─── From conversions for common collection types ──────────────────────
+// ─── From conversions for common types ─────────────────────────────────
+
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
+        Value::String(Arc::from(s))
+    }
+}
+
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Value::String(Arc::from(s))
+    }
+}
+
+impl From<BTreeMap<String, Value>> for Value {
+    fn from(m: BTreeMap<String, Value>) -> Self {
+        Value::Map(Arc::new(
+            m.into_iter().map(|(k, v)| (Arc::from(k), v)).collect(),
+        ))
+    }
+}
+
+impl From<BTreeMap<Arc<str>, Value>> for Value {
+    fn from(m: BTreeMap<Arc<str>, Value>) -> Self {
+        Value::Map(Arc::new(m))
+    }
+}
+
+impl From<Vec<Value>> for Value {
+    fn from(v: Vec<Value>) -> Self {
+        Value::List(v.into())
+    }
+}
+
+impl From<Arc<str>> for Value {
+    fn from(s: Arc<str>) -> Self {
+        Value::String(s)
+    }
+}
+
+impl From<Arc<[Value]>> for Value {
+    fn from(v: Arc<[Value]>) -> Self {
+        Value::List(v)
+    }
+}
+
+impl From<Arc<BTreeMap<Arc<str>, Value>>> for Value {
+    fn from(m: Arc<BTreeMap<Arc<str>, Value>>) -> Self {
+        Value::Map(m)
+    }
+}
 
 /// Converts a [`HashMap<String, Value>`] into a [`Value::Map`].
 ///
@@ -622,7 +725,9 @@ impl<T: ToValue> ToValue for std::collections::HashMap<&str, T> {
 #[cfg(feature = "std")]
 impl From<std::collections::HashMap<String, Value>> for Value {
     fn from(m: std::collections::HashMap<String, Value>) -> Self {
-        Value::Map(m.into_iter().collect())
+        Value::Map(Arc::new(
+            m.into_iter().map(|(k, v)| (Arc::from(k), v)).collect(),
+        ))
     }
 }
 
@@ -651,11 +756,11 @@ impl From<std::collections::HashMap<String, Value>> for Value {
 #[macro_export]
 macro_rules! tmap {
     () => {
-        $crate::Value::Map(::core::default::Default::default())
+        $crate::Value::from_entries([])
     };
     ($($key:expr => $val:expr),+ $(,)?) => {
-        $crate::Value::Map(::core::convert::From::from([
+        $crate::Value::from_entries([
             $(($key.to_string(), $crate::ToValue::to_value(&$val)),)+
-        ]))
+        ])
     };
 }

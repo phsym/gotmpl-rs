@@ -74,16 +74,17 @@ fn test_missingkey_from_str() {
         "default".parse::<MissingKey>().unwrap(),
         MissingKey::Invalid
     );
-    assert_eq!(
-        "zero".parse::<MissingKey>().unwrap(),
-        MissingKey::ZeroValue
-    );
+    assert_eq!("zero".parse::<MissingKey>().unwrap(), MissingKey::ZeroValue);
     assert!("garbage".parse::<MissingKey>().is_err());
 }
 
 #[test]
 fn test_missingkey_display_roundtrip() {
-    for mk in [MissingKey::Invalid, MissingKey::ZeroValue, MissingKey::Error] {
+    for mk in [
+        MissingKey::Invalid,
+        MissingKey::ZeroValue,
+        MissingKey::Error,
+    ] {
         let s = mk.to_string();
         assert_eq!(s.parse::<MissingKey>().unwrap(), mk);
     }
@@ -205,7 +206,7 @@ fn test_to_value_integers() {
 fn test_to_value_floats() {
     use gotmpl::ToValue;
 
-    assert_eq!(3.14f64.to_value(), Value::Float(3.14));
+    assert_eq!(1.5f64.to_value(), Value::Float(1.5));
     // f32 → f64 conversion
     let f: f32 = 2.5;
     if let Value::Float(v) = f.to_value() {
@@ -234,13 +235,13 @@ fn test_to_value_slice_and_array() {
     let arr = [1i64, 2, 3];
     assert_eq!(
         arr.to_value(),
-        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into())
     );
 
     let slice: &[i64] = &[4, 5];
     assert_eq!(
         slice.to_value(),
-        Value::List(vec![Value::Int(4), Value::Int(5)])
+        Value::List(vec![Value::Int(4), Value::Int(5)].into())
     );
 }
 
@@ -254,7 +255,7 @@ fn test_to_value_vecdeque() {
     vd.push_back(2);
     assert_eq!(
         vd.to_value(),
-        Value::List(vec![Value::Int(1), Value::Int(2)])
+        Value::List(vec![Value::Int(1), Value::Int(2)].into())
     );
 }
 
@@ -268,10 +269,7 @@ fn test_to_value_linked_list() {
     ll.push_back("b");
     assert_eq!(
         ll.to_value(),
-        Value::List(vec![
-            Value::String("a".into()),
-            Value::String("b".into())
-        ])
+        Value::List(vec![Value::String("a".into()), Value::String("b".into())].into())
     );
 }
 
@@ -287,7 +285,7 @@ fn test_to_value_btreeset() {
     // BTreeSet iterates in sorted order
     assert_eq!(
         s.to_value(),
-        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into())
     );
 }
 
@@ -333,8 +331,102 @@ fn test_to_value_hashset() {
     // HashSet ToValue sorts for determinism
     assert_eq!(
         s.to_value(),
-        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into())
     );
+}
+
+// ─── From impls for Value ────────────────────────────────────────────────
+
+#[test]
+fn test_from_str_and_string() {
+    assert_eq!(Value::from("hi"), Value::String("hi".into()));
+    assert_eq!(Value::from("hi".to_string()), Value::String("hi".into()));
+}
+
+#[test]
+fn test_from_vec_of_values() {
+    let v: Vec<Value> = vec![Value::Int(1), Value::Int(2)];
+    assert_eq!(
+        Value::from(v),
+        Value::List(vec![Value::Int(1), Value::Int(2)].into())
+    );
+}
+
+#[test]
+fn test_from_btreemap_string_keys() {
+    use alloc::collections::BTreeMap;
+    let mut m: BTreeMap<String, Value> = BTreeMap::new();
+    m.insert("k".to_string(), Value::Int(1));
+    let v: Value = m.into();
+    assert!(matches!(v, Value::Map(_)));
+    assert_eq!(v.field("k"), Some(&Value::Int(1)));
+}
+
+#[test]
+fn test_from_arc_payloads_are_zero_copy() {
+    let s: Arc<str> = Arc::from("hello");
+    let s_ptr = Arc::as_ptr(&s);
+    let v = Value::from(Arc::clone(&s));
+    if let Value::String(ref inner) = v {
+        assert!(core::ptr::eq(Arc::as_ptr(inner), s_ptr));
+    } else {
+        panic!("expected Value::String");
+    }
+
+    let list: Arc<[Value]> = Arc::from(vec![Value::Int(1), Value::Int(2)]);
+    let list_ptr = Arc::as_ptr(&list);
+    let v = Value::from(Arc::clone(&list));
+    if let Value::List(ref inner) = v {
+        assert!(core::ptr::eq(Arc::as_ptr(inner), list_ptr));
+    } else {
+        panic!("expected Value::List");
+    }
+
+    use alloc::collections::BTreeMap;
+    let mut inner_map: BTreeMap<Arc<str>, Value> = BTreeMap::new();
+    inner_map.insert("x".into(), Value::Int(1));
+    let m: Arc<BTreeMap<Arc<str>, Value>> = Arc::new(inner_map);
+    let m_ptr = Arc::as_ptr(&m);
+    let v = Value::from(Arc::clone(&m));
+    if let Value::Map(ref inner) = v {
+        assert!(core::ptr::eq(Arc::as_ptr(inner), m_ptr));
+    } else {
+        panic!("expected Value::Map");
+    }
+}
+
+#[test]
+fn test_from_entries_roundtrip_via_tmap() {
+    let v = tmap! { "a" => 1i64, "b" => 2i64 };
+    assert_eq!(v.field("a"), Some(&Value::Int(1)));
+    assert_eq!(v.field("b"), Some(&Value::Int(2)));
+}
+
+#[test]
+fn test_slice_full_range_shares_storage() {
+    // Slicing a List over its full range should return the same Arc, not allocate.
+    let list_val = Value::List(Arc::from(vec![Value::Int(1), Value::Int(2), Value::Int(3)]));
+    let list_inner_ptr = match &list_val {
+        Value::List(a) => Arc::as_ptr(a),
+        _ => unreachable!(),
+    };
+    let sliced = list_val.slice(None, None).unwrap();
+    match &sliced {
+        Value::List(a) => assert!(core::ptr::eq(Arc::as_ptr(a), list_inner_ptr)),
+        _ => panic!("expected Value::List"),
+    }
+
+    // Same for String.
+    let str_val = Value::String(Arc::from("hello"));
+    let str_inner_ptr = match &str_val {
+        Value::String(a) => Arc::as_ptr(a),
+        _ => unreachable!(),
+    };
+    let sliced = str_val.slice(Some(0), Some(5)).unwrap();
+    match &sliced {
+        Value::String(a) => assert!(core::ptr::eq(Arc::as_ptr(a), str_inner_ptr)),
+        _ => panic!("expected Value::String"),
+    }
 }
 
 // ─── add_parse_tree API ───────────────────────────────────────────────────
