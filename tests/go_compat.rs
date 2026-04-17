@@ -687,6 +687,40 @@ fn test_slice_three_index_string_fails() {
     fail("{{slice .S 1 2 2}}", &data);
 }
 
+#[test]
+fn test_slice_negative_start_fails() {
+    let data = tmap! { "SI" => vec![1i64, 2, 3] };
+    fail("{{slice .SI -1}}", &data);
+    fail("{{slice .SI -1 2}}", &data);
+}
+
+#[test]
+fn test_slice_negative_end_fails() {
+    let data = tmap! { "SI" => vec![1i64, 2, 3] };
+    fail("{{slice .SI 0 -1}}", &data);
+}
+
+#[test]
+fn test_slice_out_of_bounds_fails() {
+    let data = tmap! { "SI" => vec![1i64, 2, 3] };
+    fail("{{slice .SI 0 10}}", &data);
+    fail("{{slice .SI 5 6}}", &data);
+}
+
+#[test]
+fn test_slice_start_gt_end_fails() {
+    let data = tmap! { "SI" => vec![1i64, 2, 3] };
+    fail("{{slice .SI 2 1}}", &data);
+}
+
+#[test]
+fn test_string_slice_mid_char_utf8_fails() {
+    // "é" is 2 bytes in UTF-8 (0xC3 0xA9); slicing at byte 1 is not on a
+    // character boundary and must error, not panic.
+    let data = tmap! { "S" => "café" };
+    fail("{{slice .S 0 4}}", &data); // 4 is inside 'é'
+}
+
 // ─── Len ────────────────────────────────────────────────────────────────
 
 #[test]

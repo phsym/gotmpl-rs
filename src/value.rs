@@ -267,43 +267,39 @@ impl Value {
     /// Returns an error if the indices are out of range, inverted, on a
     /// non-UTF-8-char boundary (strings), or the value is not sliceable.
     pub fn slice(&self, start: Option<i64>, end: Option<i64>) -> Result<Value> {
+        // Resolve caller-supplied i64 bounds into usize indices in [0, len].
+        // `len as i64` is lossless: Rust caps allocations at isize::MAX, which
+        // fits in i64 on every supported target.
+        fn resolve(kind: &str, start: Option<i64>, end: Option<i64>, len: usize) -> Result<(usize, usize)> {
+            let len_i = len as i64;
+            let start = start.unwrap_or(0);
+            let end = end.unwrap_or(len_i);
+            if start < 0 || end < 0 || start > len_i || end > len_i || start > end {
+                return Err(crate::error::TemplateError::Exec(format!(
+                    "slice: {kind} index out of range [{start}:{end}] with length {len}"
+                )));
+            }
+            Ok((start as usize, end as usize))
+        }
         match self {
             Value::List(v) => {
-                let start = start.unwrap_or(0) as usize;
-                let end = end.map(|n| n as usize).unwrap_or(v.len());
-                if start > v.len() || end > v.len() || start > end {
-                    return Err(crate::error::TemplateError::Exec(format!(
-                        "slice: index out of range [{}:{}] with length {}",
-                        start,
-                        end,
-                        v.len()
-                    )));
-                }
-                if start == 0 && end == v.len() {
+                let (s, e) = resolve("list", start, end, v.len())?;
+                if s == 0 && e == v.len() {
                     return Ok(Value::List(Arc::clone(v)));
                 }
-                Ok(Value::List(Arc::from(&v[start..end])))
+                Ok(Value::List(Arc::from(&v[s..e])))
             }
-            Value::String(s) => {
-                let start = start.unwrap_or(0) as usize;
-                let end = end.map(|n| n as usize).unwrap_or(s.len());
-                if start > s.len() || end > s.len() || start > end {
-                    return Err(crate::error::TemplateError::Exec(format!(
-                        "slice: index out of range [{}:{}] with length {}",
-                        start,
-                        end,
-                        s.len()
-                    )));
-                }
-                if !s.is_char_boundary(start) || !s.is_char_boundary(end) {
+            Value::String(str) => {
+                let (s, e) = resolve("string", start, end, str.len())?;
+                if !str.is_char_boundary(s) || !str.is_char_boundary(e) {
                     return Err(crate::error::TemplateError::Exec(
                         "slice: index not on UTF-8 character boundary".to_string(),
                     ));
                 }
-                if start == 0 && end == s.len() {
-                    return Ok(Value::String(Arc::clone(s)));
+                if s == 0 && e == str.len() {
+                    return Ok(Value::String(Arc::clone(str)));
                 }
-                Ok(Value::String(Arc::from(&s[start..end])))
+                Ok(Value::String(Arc::from(&str[s..e])))
             }
             _ => Err(crate::error::TemplateError::Exec(format!(
                 "slice: cannot slice type {}",

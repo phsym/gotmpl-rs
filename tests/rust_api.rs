@@ -403,6 +403,61 @@ fn test_from_entries_roundtrip_via_tmap() {
 }
 
 #[test]
+fn test_slice_negative_error_echoes_input_value() {
+    // Regression: previously `Option<i64> as usize` cast -1 to usize::MAX,
+    // so the error message printed a huge unsigned number. The message must
+    // show the caller's actual (negative) index so the error is actionable.
+    let list = Value::List(Arc::from(vec![Value::Int(1), Value::Int(2), Value::Int(3)]));
+    let err = list.slice(Some(-1), None).unwrap_err().to_string();
+    assert!(err.contains("-1"), "error should mention -1, got: {err}");
+    assert!(
+        !err.contains("18446744073709551615") && !err.contains("9223372036854775807"),
+        "error leaks overflowed integer: {err}"
+    );
+}
+
+#[test]
+fn test_missingkey_error_on_range() {
+    // MissingKey::Error must also fire when a missing key is used as the
+    // subject of a {{range}}, not only bare `{{.Missing}}`.
+    let data = tmap! { "X" => vec![1i64, 2] };
+    let result = Template::new("t")
+        .missing_key(MissingKey::Error)
+        .parse("{{range .Missing}}x{{end}}")
+        .unwrap()
+        .execute_to_string(&data);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_missingkey_zero_in_pipeline() {
+    // Under MissingKey::ZeroValue a missing key yields nil (which %v renders
+    // as "<nil>"), rather than erroring or producing the default "<no value>"
+    // sentinel.
+    let data = tmap! { "X" => 1i64 };
+    let out = Template::new("t")
+        .missing_key(MissingKey::ZeroValue)
+        .parse("{{.Y | printf \"%v\"}}")
+        .unwrap()
+        .execute_to_string(&data)
+        .unwrap();
+    assert_eq!(out, "<nil>");
+}
+
+#[test]
+fn test_block_override_with_nested_pipeline() {
+    // Block override should work for bodies containing pipelines/control flow,
+    // not just bare text.
+    let tmpl = Template::new("t")
+        .parse(r#"[{{block "b" .}}{{.X | printf "%d"}}{{end}}]"#)
+        .unwrap()
+        .parse_additional(r#"{{define "b"}}{{range .Items}}{{.}}/{{end}}{{end}}"#)
+        .unwrap();
+    let data = tmap! { "Items" => vec!["a", "b", "c"] };
+    assert_eq!(tmpl.execute_to_string(&data).unwrap(), "[a/b/c/]");
+}
+
+#[test]
 fn test_slice_full_range_shares_storage() {
     // Slicing a List over its full range should return the same Arc, not allocate.
     let list_val = Value::List(Arc::from(vec![Value::Int(1), Value::Int(2), Value::Int(3)]));

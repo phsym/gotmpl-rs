@@ -2,16 +2,23 @@
 name = "gotmpl"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "A Rust reimplementation of Go's text/template library"
 repository = "https://github.com/phsym/gotmpl-rs"
 license = "MIT"
+readme = "README.md"
 authors = ["Pierre-Henri Symoneaux"]
 keywords = ["template", "golang", "templating", "parser", "no-std"]
 categories = ["template-engine", "parser-implementations", "no-std", "text-processing"]
 
 [features]
 default = ["std"]
+# Enables `std`-only APIs (io::Write-based execute, parse_files, catch_unwind
+# around user function panics).
 std = []
+# When enabled, the test suite additionally shells out to a Go helper and
+# asserts output parity with Go's `text/template`. Intended for tests only;
+# requires a `go` toolchain on PATH.
 go-crosscheck = []
 
 [dependencies]
