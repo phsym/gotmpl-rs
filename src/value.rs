@@ -707,7 +707,7 @@ impl From<Arc<BTreeMap<Arc<str>, Value>>> for Value {
     }
 }
 
-/// Converts a [`HashMap<String, Value>`] into a [`Value::Map`].
+/// Converts a [`std::collections::HashMap<String, Value>`] into a [`Value::Map`].
 ///
 /// Useful when you already have data in a `HashMap` and want to pass it
 /// to a template without manually converting to `BTreeMap`.
