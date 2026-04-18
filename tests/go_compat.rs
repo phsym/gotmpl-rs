@@ -3241,6 +3241,29 @@ fn test_printf_huge_width_terminates() {
 }
 
 #[test]
+fn test_deeply_nested_parens_rejected_not_panic() {
+    // Paren nesting in a pipeline recurses through parse_command/parse_pipeline,
+    // so the depth guard must apply there too (not just to parse_list).
+    let n = 200; // exceeds MAX_PARSE_DEPTH (100)
+    let mut src = String::from("{{");
+    for _ in 0..n {
+        src.push('(');
+    }
+    src.push('1');
+    for _ in 0..n {
+        src.push(')');
+    }
+    src.push_str("}}");
+    let err = Template::new("t").parse(&src).err();
+    assert!(
+        err.as_ref()
+            .is_some_and(|e| e.to_string().contains("nesting depth")),
+        "expected depth-limit error, got {:?}",
+        err
+    );
+}
+
+#[test]
 fn test_huge_range_rejected() {
     // Billion-iteration range must fail fast under the iteration cap.
     let r = Template::new("t")

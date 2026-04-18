@@ -242,11 +242,15 @@ impl<'a> Parser<'a> {
     }
 
     // Control structure parsers
-    fn parse_branch(&mut self, defines: &mut Vec<DefineNode>) -> Result<BranchNode> {
+    fn parse_branch(
+        &mut self,
+        defines: &mut Vec<DefineNode>,
+        allow_multi_decl: bool,
+    ) -> Result<BranchNode> {
         let pos = self.cur_pos();
         self.next();
 
-        let pipe = self.parse_pipeline(true)?;
+        let pipe = self.parse_pipeline_full(true, allow_multi_decl)?;
         self.expect_close_delim()?;
 
         let body = self.parse_list(defines)?;
@@ -286,15 +290,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_if(&mut self, defines: &mut Vec<DefineNode>) -> Result<Node> {
-        Ok(Node::If(self.parse_branch(defines)?))
+        Ok(Node::If(self.parse_branch(defines, false)?))
     }
 
     fn parse_range(&mut self, defines: &mut Vec<DefineNode>) -> Result<Node> {
-        Ok(Node::Range(self.parse_branch(defines)?))
+        Ok(Node::Range(self.parse_branch(defines, true)?))
     }
 
     fn parse_with(&mut self, defines: &mut Vec<DefineNode>) -> Result<Node> {
-        Ok(Node::With(self.parse_branch(defines)?))
+        Ok(Node::With(self.parse_branch(defines, false)?))
     }
 
     fn parse_define(&mut self, defines: &mut Vec<DefineNode>) -> Result<DefineNode> {
@@ -376,6 +380,14 @@ impl<'a> Parser<'a> {
 
     // Pipeline and command parsing
     fn parse_pipeline(&mut self, allow_decl: bool) -> Result<PipeNode> {
+        self.parse_pipeline_full(allow_decl, false)
+    }
+
+    fn parse_pipeline_full(
+        &mut self,
+        allow_decl: bool,
+        allow_multi_decl: bool,
+    ) -> Result<PipeNode> {
         let pos = self.cur_pos();
         let mut decl = Vec::new();
         let mut is_assign = false;
@@ -404,6 +416,13 @@ impl<'a> Parser<'a> {
             } else {
                 self.pos = saved;
             }
+        }
+
+        if !allow_multi_decl && decl.len() > 1 {
+            return Err(self.error(format!(
+                "cannot assign {} variables outside a range pipeline",
+                decl.len()
+            )));
         }
 
         let mut commands = Vec::new();
@@ -438,7 +457,10 @@ impl<'a> Parser<'a> {
                 TokenKind::LeftParen => {
                     let paren_pos = self.cur_pos();
                     self.next();
-                    let pipe = self.parse_pipeline(false)?;
+                    self.enter()?;
+                    let pipe_result = self.parse_pipeline(false);
+                    self.leave();
+                    let pipe = pipe_result?;
                     self.expect(TokenKind::RightParen)?;
                     let rparen = &self.tokens[self.pos - 1];
                     let mut chain_end = rparen.pos + 1;

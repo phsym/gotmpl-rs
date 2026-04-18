@@ -332,26 +332,33 @@ pub(crate) fn sprintf(fmt_str: &str, args: &[Value]) -> Result<String> {
 
 /// Emit Go's `%!verb(type=value)` marker for a type-mismatched or unknown verb.
 fn write_bad_verb(out: &mut String, verb: char, arg: &Value) {
-    write!(out, "%!{}({}=", verb, arg.type_name()).ok();
+    let _ = write!(out, "%!{}({}=", verb, arg.type_name());
     match arg {
         Value::String(s) => out.push_str(s),
-        other => write!(out, "{}", other).unwrap_or(()),
+        other => {
+            let _ = write!(out, "{}", other);
+        }
     }
     out.push(')');
 }
 
 /// `%x` / `%X` on strings: hex-encode each byte.
+///
+/// Go's precision on `%.Nx` for strings limits the number of *input bytes*
+/// consumed, yielding `2 * N` hex characters — not `N` hex characters.
 fn format_string_hex(s: &str, upper: bool, spec: &FmtSpec) -> String {
-    let mut out = String::with_capacity(s.len() * 2);
-    for b in s.as_bytes() {
-        if upper {
-            write!(out, "{:02X}", b).ok();
+    let bytes = s.as_bytes();
+    let take = spec
+        .precision
+        .map(|p| p.min(bytes.len()))
+        .unwrap_or(bytes.len());
+    let mut out = String::with_capacity(take * 2);
+    for b in &bytes[..take] {
+        let _ = if upper {
+            write!(out, "{:02X}", b)
         } else {
-            write!(out, "{:02x}", b).ok();
-        }
-    }
-    if let Some(prec) = spec.precision {
-        out.truncate(prec);
+            write!(out, "{:02x}", b)
+        };
     }
     out
 }
@@ -1452,6 +1459,31 @@ mod tests {
     #[test]
     fn sprintf_f_non_numeric_emits_bad_verb() {
         assert_eq!(sf("%f", &[Value::String("abc".into())]), "%!f(string=abc)");
+    }
+
+    // sprintf: %x / %X on strings (Go parity: precision limits input bytes)
+    #[test]
+    fn sprintf_x_string_full() {
+        assert_eq!(sf("%x", &[Value::String("abc".into())]), "616263");
+    }
+
+    #[test]
+    fn sprintf_x_string_precision_limits_input_bytes() {
+        // Go: fmt.Sprintf("%.2x", "abc") == "6162" (2 bytes → 4 hex chars).
+        assert_eq!(sf("%.2x", &[Value::String("abc".into())]), "6162");
+        assert_eq!(sf("%.3x", &[Value::String("abc".into())]), "616263");
+        assert_eq!(sf("%.0x", &[Value::String("abc".into())]), "");
+    }
+
+    #[test]
+    fn sprintf_x_string_uppercase_verb() {
+        assert_eq!(sf("%X", &[Value::String("abc".into())]), "616263");
+    }
+
+    #[test]
+    fn sprintf_x_string_precision_over_length_is_capped() {
+        // Precision larger than the string length just emits the whole string.
+        assert_eq!(sf("%.99x", &[Value::String("ab".into())]), "6162");
     }
 
     // FmtSpec::pad

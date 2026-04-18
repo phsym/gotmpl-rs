@@ -514,11 +514,19 @@ impl<'a> Executor<'a> {
         dot: &Value,
     ) -> ExecResult<()> {
         self.depth += 1;
-        if self.depth > MAX_EXEC_DEPTH {
-            self.depth -= 1;
-            return Err(TemplateError::RecursionLimit.into());
-        }
+        let result = self
+            .check_depth()
+            .and_then(|()| self.walk_template_inner(w, tmpl, dot));
+        self.depth -= 1;
+        result
+    }
 
+    fn walk_template_inner<W: Write>(
+        &mut self,
+        w: &mut W,
+        tmpl: &TemplateNode,
+        dot: &Value,
+    ) -> ExecResult<()> {
         let new_dot = if let Some(ref pipe) = tmpl.pipe {
             self.eval_pipeline(dot, pipe)?
         } else {
@@ -535,7 +543,6 @@ impl<'a> Executor<'a> {
         self.vars.set("$", new_dot.clone());
         let result = self.walk(w, &tree, &new_dot);
         self.vars.pop();
-        self.depth -= 1;
         result
     }
 

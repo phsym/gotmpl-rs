@@ -41,8 +41,8 @@ numbers are the criterion median, Go numbers are the median of five
 
 | Scenario        | Rust `gotmpl` | Go `text/template` | Go allocs    |
 | --------------- | ------------- | ------------------ | ------------ |
-| `parse/simple`  | 2.84 µs       | 1.14 µs            | 31 / 3.0 KiB |
-| `parse/complex` | 4.70 µs       | 3.34 µs            | 69 / 4.6 KiB |
+| `parse/simple`  | 2.80 µs       | 1.11 µs            | 31 / 3.0 KiB |
+| `parse/complex` | 4.59 µs       | 3.41 µs            | 69 / 4.6 KiB |
 
 Go still wins on parse, but the gap has narrowed substantially. The Rust
 lexer scans the source as bytes (rather than materializing a `Vec<char>`
@@ -56,10 +56,10 @@ for identifiers, field names, and template names.
 
 | Scenario                | Rust `gotmpl` | Go `text/template` | Go allocs      | Speedup |
 | ----------------------- | ------------- | ------------------ | -------------- | ------- |
-| `exec/simple`           | 136.4 ns      | 148.4 ns           | 4 / 160 B      | 1.09×   |
-| `exec/printf`           | 595.1 ns      | 625.3 ns           | 14 / 456 B     | 1.05×   |
-| `exec/range_100`        | 3.43 µs       | 9.17 µs            | 103 / 960 B    | 2.67×   |
-| `exec/complex_50_users` | 18.67 µs      | 23.18 µs           | 455 / 12.0 KiB | 1.24×   |
+| `exec/simple`           | 127.0 ns      | 150.6 ns           | 4 / 160 B      | 1.19×   |
+| `exec/printf`           | 570.2 ns      | 618.6 ns           | 14 / 456 B     | 1.08×   |
+| `exec/range_100`        | 3.52 µs       | 9.05 µs            | 103 / 960 B    | 2.57×   |
+| `exec/complex_50_users` | 20.77 µs      | 22.34 µs           | 455 / 12.0 KiB | 1.08×   |
 
 Execution is where this crate pulls ahead — especially once there is
 iteration or non-trivial data to walk. Go's `text/template` pays for
