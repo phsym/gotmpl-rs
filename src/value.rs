@@ -534,69 +534,53 @@ impl<T: ToValue> ToValue for Option<T> {
 
 // ─── List-like collection impls ─────────────────────────────────────────
 
+fn list_from_iter<'a, T: ToValue + 'a, I: IntoIterator<Item = &'a T>>(iter: I) -> Value {
+    Value::List(iter.into_iter().map(ToValue::to_value).collect::<Vec<_>>().into())
+}
+
+fn map_from_iter_str<'a, T: ToValue + 'a, I: IntoIterator<Item = (&'a str, &'a T)>>(
+    iter: I,
+) -> Value {
+    Value::Map(Arc::new(
+        iter.into_iter()
+            .map(|(k, v)| (Arc::from(k), v.to_value()))
+            .collect(),
+    ))
+}
+
 impl<T: ToValue> ToValue for [T] {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
 impl<T: ToValue, const N: usize> ToValue for [T; N] {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
 impl<T: ToValue> ToValue for Vec<T> {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
 impl<T: ToValue> ToValue for alloc::collections::VecDeque<T> {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
 impl<T: ToValue> ToValue for alloc::collections::LinkedList<T> {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
 impl<T: ToValue> ToValue for alloc::collections::BTreeSet<T> {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
@@ -614,43 +598,27 @@ impl<T: ToValue> ToValue for std::collections::HashSet<T> {
 
 impl<T: ToValue> ToValue for BTreeMap<String, T> {
     fn to_value(&self) -> Value {
-        Value::Map(Arc::new(
-            self.iter()
-                .map(|(k, v)| (Arc::from(k.as_str()), v.to_value()))
-                .collect(),
-        ))
+        map_from_iter_str(self.iter().map(|(k, v)| (k.as_str(), v)))
     }
 }
 
 impl<T: ToValue> ToValue for BTreeMap<&str, T> {
     fn to_value(&self) -> Value {
-        Value::Map(Arc::new(
-            self.iter()
-                .map(|(k, v)| (Arc::from(*k), v.to_value()))
-                .collect(),
-        ))
+        map_from_iter_str(self.iter().map(|(k, v)| (*k, v)))
     }
 }
 
 #[cfg(feature = "std")]
 impl<T: ToValue> ToValue for std::collections::HashMap<String, T> {
     fn to_value(&self) -> Value {
-        Value::Map(Arc::new(
-            self.iter()
-                .map(|(k, v)| (Arc::from(k.as_str()), v.to_value()))
-                .collect(),
-        ))
+        map_from_iter_str(self.iter().map(|(k, v)| (k.as_str(), v)))
     }
 }
 
 #[cfg(feature = "std")]
 impl<T: ToValue> ToValue for std::collections::HashMap<&str, T> {
     fn to_value(&self) -> Value {
-        Value::Map(Arc::new(
-            self.iter()
-                .map(|(k, v)| (Arc::from(*k), v.to_value()))
-                .collect(),
-        ))
+        map_from_iter_str(self.iter().map(|(k, v)| (*k, v)))
     }
 }
 
