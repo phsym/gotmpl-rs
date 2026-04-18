@@ -15,8 +15,8 @@ mod parser;
 
 // Re-export AST node types
 pub use node::{
-    ActionNode, BranchNode, CommandNode, DefineNode, Expr, IfNode, ListNode, Node, PipeNode, Pos,
-    RangeNode, TemplateNode, TextNode, WithNode,
+    ActionNode, BranchNode, CommandNode, DefineNode, Expr, IfNode, ListNode, Node, Number,
+    PipeNode, Pos, RangeNode, TemplateNode, TextNode, WithNode,
 };
 
 // Re-export the parser

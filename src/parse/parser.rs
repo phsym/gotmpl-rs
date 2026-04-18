@@ -2,13 +2,27 @@
 
 use alloc::boxed::Box;
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use super::lexer::{Lexer, Token, TokenKind};
 use super::node::*;
 use crate::error::{Result, TemplateError};
+
+/// Parse a decimal-form number token into a [`Number`].
+///
+/// The lexer already normalizes hex/octal/binary integer literals to decimal
+/// and hex floats to their decimal-float form, so this only has to discriminate
+/// between integer and float on the final text.
+fn parse_number(s: &str) -> Option<Number> {
+    if s.contains('.') || s.contains('e') || s.contains('E') {
+        s.parse::<f64>().ok().map(Number::Float)
+    } else {
+        s.parse::<i64>().ok().map(Number::Int)
+    }
+}
 
 /// Recursive-descent parser for Go template source.
 ///
@@ -25,13 +39,13 @@ use crate::error::{Result, TemplateError};
 /// assert_eq!(tree.nodes.len(), 3); // Text, Action, Text
 /// assert!(defines.is_empty());
 /// ```
-pub struct Parser {
-    tokens: Vec<Token>,
+pub struct Parser<'a> {
+    tokens: Vec<Token<'a>>,
     pos: usize,
-    source: String,
+    source: &'a str,
 }
 
-impl Parser {
+impl<'a> Parser<'a> {
     /// Create a new parser for the given template source.
     ///
     /// Runs the lexer internally to produce the token stream.
@@ -40,13 +54,13 @@ impl Parser {
     ///
     /// Returns a [`TemplateError::Lex`] if
     /// the source contains lexical errors (unterminated strings, invalid characters, etc.).
-    pub fn new(source: &str, left_delim: &str, right_delim: &str) -> Result<Self> {
+    pub fn new(source: &'a str, left_delim: &'a str, right_delim: &'a str) -> Result<Self> {
         let lexer = Lexer::new(source, left_delim, right_delim);
         let tokens = lexer.tokenize()?;
         Ok(Parser {
             tokens,
             pos: 0,
-            source: source.to_string(),
+            source,
         })
     }
 
@@ -68,11 +82,11 @@ impl Parser {
 
     // ─── Token navigation ────────────────────────────────────────────
 
-    fn peek(&self) -> &Token {
+    fn peek(&self) -> &Token<'a> {
         &self.tokens[self.pos]
     }
 
-    fn next(&mut self) -> &Token {
+    fn next(&mut self) -> &Token<'a> {
         let tok = &self.tokens[self.pos];
         self.pos += 1;
         tok
@@ -85,7 +99,7 @@ impl Parser {
         if tok.kind != kind {
             let tok_kind = tok.kind.clone();
             let tok_val = tok.val.clone();
-            let (line, col) = tok.line_col(&self.source);
+            let (line, col) = tok.line_col(self.source);
             return Err(TemplateError::Parse {
                 line,
                 col,
@@ -101,7 +115,19 @@ impl Parser {
 
     fn error(&self, msg: impl Into<String>) -> TemplateError {
         let tok = self.peek();
-        let (line, col) = tok.line_col(&self.source);
+        let (line, col) = tok.line_col(self.source);
+        TemplateError::Parse {
+            line,
+            col,
+            message: msg.into(),
+        }
+    }
+
+    /// Build a `TemplateError::Parse` anchored at an arbitrary token's location.
+    /// Used for errors surfaced after a token has already been consumed, where
+    /// `self.peek()` no longer points at the offending token.
+    fn token_error(&self, tok: &Token<'a>, msg: impl Into<String>) -> TemplateError {
+        let (line, col) = tok.line_col(self.source);
         TemplateError::Parse {
             line,
             col,
@@ -122,7 +148,7 @@ impl Parser {
                     let tok = self.next().clone();
                     nodes.push(Node::Text(TextNode {
                         pos: Pos::new(tok.pos, tok.line),
-                        text: tok.val,
+                        text: Arc::from(tok.val.as_ref()),
                     }));
                 }
                 TokenKind::LeftDelim | TokenKind::LeftTrimDelim => {
@@ -260,7 +286,7 @@ impl Parser {
 
         Ok(DefineNode {
             pos,
-            name: name_tok.val,
+            name: Arc::from(name_tok.val.as_ref()),
             body,
         })
     }
@@ -286,7 +312,7 @@ impl Parser {
 
         Ok(Node::Template(TemplateNode {
             pos,
-            name: name_tok.val,
+            name: Arc::from(name_tok.val.as_ref()),
             pipe,
         }))
     }
@@ -311,17 +337,14 @@ impl Parser {
         self.expect_close_delim()?;
         let body = self.parse_list(defines)?;
 
+        let name: Arc<str> = Arc::from(name_tok.val.as_ref());
         let define = DefineNode {
             pos,
-            name: name_tok.val.clone(),
+            name: Arc::clone(&name),
             body: body.clone(),
         };
 
-        let tmpl = Node::Template(TemplateNode {
-            pos,
-            name: name_tok.val,
-            pipe,
-        });
+        let tmpl = Node::Template(TemplateNode { pos, name, pipe });
 
         Ok((tmpl, define))
     }
@@ -339,7 +362,7 @@ impl Parser {
 
             while self.peek().kind == TokenKind::Variable {
                 let var_tok = self.next().clone();
-                vars.push(var_tok.val);
+                vars.push(Arc::from(var_tok.val.as_ref()));
 
                 if self.peek().kind == TokenKind::Comma {
                     self.next();
@@ -398,7 +421,7 @@ impl Parser {
                     let mut fields = Vec::new();
                     while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
                         let ftok = self.next().clone();
-                        chain_end = ftok.pos + ftok.val.chars().count();
+                        chain_end = ftok.pos + ftok.val.len();
                         fields.extend(self.parse_field_chain(&ftok.val));
                     }
                     if fields.is_empty() {
@@ -418,7 +441,7 @@ impl Parser {
                     let mut chain_end = tok.pos + 1;
                     while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
                         let ftok = self.next().clone();
-                        chain_end = ftok.pos + ftok.val.chars().count();
+                        chain_end = ftok.pos + ftok.val.len();
                         fields.extend(self.parse_field_chain(&ftok.val));
                     }
                     if fields.is_empty() {
@@ -431,10 +454,10 @@ impl Parser {
                 TokenKind::Field => {
                     let tok = self.next().clone();
                     let mut fields = self.parse_field_chain(&tok.val);
-                    let mut chain_end = tok.pos + tok.val.chars().count();
+                    let mut chain_end = tok.pos + tok.val.len();
                     while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
                         let ftok = self.next().clone();
-                        chain_end = ftok.pos + ftok.val.chars().count();
+                        chain_end = ftok.pos + ftok.val.len();
                         fields.extend(self.parse_field_chain(&ftok.val));
                     }
                     args.push(Expr::Field(Pos::new(tok.pos, tok.line), fields));
@@ -442,17 +465,16 @@ impl Parser {
 
                 TokenKind::Variable => {
                     let tok = self.next().clone();
-                    let var_name = tok.val.clone();
                     let mut fields = Vec::new();
-                    let mut chain_end = tok.pos + tok.val.chars().count();
+                    let mut chain_end = tok.pos + tok.val.len();
                     while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
                         let ftok = self.next().clone();
-                        chain_end = ftok.pos + ftok.val.chars().count();
+                        chain_end = ftok.pos + ftok.val.len();
                         fields.extend(self.parse_field_chain(&ftok.val));
                     }
                     args.push(Expr::Variable(
                         Pos::new(tok.pos, tok.line),
-                        var_name,
+                        Arc::from(tok.val.as_ref()),
                         fields,
                     ));
                 }
@@ -460,18 +482,20 @@ impl Parser {
                 TokenKind::Identifier => {
                     let tok = self.next().clone();
                     let mut fields = Vec::new();
-                    let mut chain_end = tok.pos + tok.val.chars().count();
+                    let mut chain_end = tok.pos + tok.val.len();
                     while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
                         let ftok = self.next().clone();
-                        chain_end = ftok.pos + ftok.val.chars().count();
+                        chain_end = ftok.pos + ftok.val.len();
                         fields.extend(self.parse_field_chain(&ftok.val));
                     }
+                    let ident_pos = Pos::new(tok.pos, tok.line);
+                    let name: Arc<str> = Arc::from(tok.val.as_ref());
                     if fields.is_empty() {
-                        args.push(Expr::Identifier(Pos::new(tok.pos, tok.line), tok.val));
+                        args.push(Expr::Identifier(ident_pos, name));
                     } else {
                         args.push(Expr::Chain(
-                            Pos::new(tok.pos, tok.line),
-                            Box::new(Expr::Identifier(Pos::new(tok.pos, tok.line), tok.val)),
+                            ident_pos,
+                            Box::new(Expr::Identifier(ident_pos, name)),
                             fields,
                         ));
                     }
@@ -479,11 +503,17 @@ impl Parser {
 
                 TokenKind::String => {
                     let tok = self.next().clone();
-                    args.push(Expr::String(Pos::new(tok.pos, tok.line), tok.val.into()));
+                    args.push(Expr::String(
+                        Pos::new(tok.pos, tok.line),
+                        Arc::from(tok.val.as_ref()),
+                    ));
                 }
                 TokenKind::Number => {
                     let tok = self.next().clone();
-                    args.push(Expr::Number(Pos::new(tok.pos, tok.line), tok.val));
+                    let num = parse_number(&tok.val).ok_or_else(|| {
+                        self.token_error(&tok, format!("invalid number: {}", tok.val))
+                    })?;
+                    args.push(Expr::Number(Pos::new(tok.pos, tok.line), num));
                 }
                 TokenKind::Bool => {
                     let tok = self.next().clone();
@@ -495,7 +525,11 @@ impl Parser {
                 }
                 TokenKind::Char => {
                     let tok = self.next().clone();
-                    args.push(Expr::Number(Pos::new(tok.pos, tok.line), tok.val));
+                    // Char tokens carry the Unicode code point as a decimal integer.
+                    let num = tok.val.parse::<i64>().map(Number::Int).map_err(|_| {
+                        self.token_error(&tok, format!("invalid char literal: {}", tok.val))
+                    })?;
+                    args.push(Expr::Number(Pos::new(tok.pos, tok.line), num));
                 }
 
                 _ => break,
@@ -509,11 +543,11 @@ impl Parser {
         Ok(CommandNode { pos, args })
     }
 
-    fn parse_field_chain(&self, field_str: &str) -> Vec<String> {
+    fn parse_field_chain(&self, field_str: &str) -> Vec<Arc<str>> {
         field_str
             .split('.')
             .filter(|s| !s.is_empty())
-            .map(ToString::to_string)
+            .map(Arc::from)
             .collect()
     }
 
@@ -524,7 +558,7 @@ impl Parser {
         match tok.kind {
             TokenKind::RightDelim | TokenKind::RightTrimDelim => Ok(()),
             _ => {
-                let (line, col) = self.tokens[self.pos - 1].line_col(&self.source);
+                let (line, col) = self.tokens[self.pos - 1].line_col(self.source);
                 Err(TemplateError::Parse {
                     line,
                     col,
@@ -574,7 +608,7 @@ mod tests {
         let (list, _) = parse("hello world");
         assert_eq!(list.nodes.len(), 1);
         match &list.nodes[0] {
-            Node::Text(t) => assert_eq!(t.text, "hello world"),
+            Node::Text(t) => assert_eq!(&*t.text, "hello world"),
             _ => panic!("expected Text node"),
         }
     }
@@ -640,7 +674,7 @@ mod tests {
     fn test_parse_define() {
         let (_, defines) = parse("{{define \"header\"}}Header{{end}}");
         assert_eq!(defines.len(), 1);
-        assert_eq!(defines[0].name, "header");
+        assert_eq!(&*defines[0].name, "header");
     }
 
     #[test]
@@ -648,10 +682,63 @@ mod tests {
         let (list, _) = parse("{{template \"header\" .}}");
         match &list.nodes[0] {
             Node::Template(t) => {
-                assert_eq!(t.name, "header");
+                assert_eq!(&*t.name, "header");
                 assert!(t.pipe.is_some());
             }
             _ => panic!("expected Template node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_number_helper_discriminates_int_and_float() {
+        assert_eq!(parse_number("42"), Some(Number::Int(42)));
+        assert_eq!(parse_number("-7"), Some(Number::Int(-7)));
+        assert_eq!(parse_number("1.5"), Some(Number::Float(1.5)));
+        assert_eq!(parse_number("2e3"), Some(Number::Float(2000.0)));
+        assert_eq!(parse_number("2E-1"), Some(Number::Float(0.2)));
+        assert!(parse_number("not a number").is_none());
+    }
+
+    #[test]
+    fn test_parse_number_expr_carries_parsed_variant() {
+        // Integer literal -> Expr::Number(_, Number::Int(_))
+        let (list, _) = parse("{{42}}");
+        match &list.nodes[0] {
+            Node::Action(a) => match &a.pipe.commands[0].args[0] {
+                Expr::Number(_, Number::Int(42)) => {}
+                other => panic!("expected Number::Int(42), got {:?}", other),
+            },
+            _ => panic!("expected Action node"),
+        }
+
+        // Float literal -> Expr::Number(_, Number::Float(_))
+        let (list, _) = parse("{{2.5}}");
+        match &list.nodes[0] {
+            Node::Action(a) => match &a.pipe.commands[0].args[0] {
+                Expr::Number(_, Number::Float(f)) if (*f - 2.5).abs() < 1e-9 => {}
+                other => panic!("expected Number::Float(2.5), got {:?}", other),
+            },
+            _ => panic!("expected Action node"),
+        }
+
+        // Hex literal is normalized to decimal by the lexer, still an Int.
+        let (list, _) = parse("{{0xff}}");
+        match &list.nodes[0] {
+            Node::Action(a) => match &a.pipe.commands[0].args[0] {
+                Expr::Number(_, Number::Int(255)) => {}
+                other => panic!("expected Number::Int(255), got {:?}", other),
+            },
+            _ => panic!("expected Action node"),
+        }
+
+        // Char literal is emitted as its Unicode code point (also an Int).
+        let (list, _) = parse("{{'A'}}");
+        match &list.nodes[0] {
+            Node::Action(a) => match &a.pipe.commands[0].args[0] {
+                Expr::Number(_, Number::Int(65)) => {}
+                other => panic!("expected Number::Int(65), got {:?}", other),
+            },
+            _ => panic!("expected Action node"),
         }
     }
 }

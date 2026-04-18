@@ -41,21 +41,25 @@ numbers are the criterion median, Go numbers are the median of five
 
 | Scenario        | Rust `gotmpl` | Go `text/template` | Go allocs    |
 | --------------- | ------------- | ------------------ | ------------ |
-| `parse/simple`  | 4.75 µs       | 1.11 µs            | 31 / 3.0 KiB |
-| `parse/complex` | 10.12 µs      | 3.24 µs            | 69 / 4.6 KiB |
+| `parse/simple`  | 2.84 µs       | 1.14 µs            | 31 / 3.0 KiB |
+| `parse/complex` | 4.70 µs       | 3.34 µs            | 69 / 4.6 KiB |
 
-Go wins on parse: its lexer/parser is one of the most-tuned pieces of the
-standard library and builds up a tree of pointer-linked nodes rather than
-the `Arc`-wrapped enums used here.
+Go still wins on parse, but the gap has narrowed substantially. The Rust
+lexer scans the source as bytes (rather than materializing a `Vec<char>`
+upfront), tokens borrow their value directly from the source via
+`Cow<'a, str>`, and numeric literals are parsed to `i64` / `f64` at parse
+time so the executor reads them with zero conversion. The remaining gap
+is mostly in AST construction: this crate still allocates owned `String`s
+for identifiers, field names, and template names.
 
 ### Execute
 
 | Scenario                | Rust `gotmpl` | Go `text/template` | Go allocs      | Speedup |
 | ----------------------- | ------------- | ------------------ | -------------- | ------- |
-| `exec/simple`           | 137.5 ns      | 147.6 ns           | 4 / 160 B      | 1.07×   |
-| `exec/printf`           | 577.2 ns      | 625.3 ns           | 14 / 456 B     | 1.08×   |
-| `exec/range_100`        | 3.34 µs       | 9.15 µs            | 103 / 960 B    | 2.74×   |
-| `exec/complex_50_users` | 18.72 µs      | 22.78 µs           | 455 / 12.0 KiB | 1.22×   |
+| `exec/simple`           | 136.4 ns      | 148.4 ns           | 4 / 160 B      | 1.09×   |
+| `exec/printf`           | 595.1 ns      | 625.3 ns           | 14 / 456 B     | 1.05×   |
+| `exec/range_100`        | 3.43 µs       | 9.17 µs            | 103 / 960 B    | 2.67×   |
+| `exec/complex_50_users` | 18.67 µs      | 23.18 µs           | 455 / 12.0 KiB | 1.24×   |
 
 Execution is where this crate pulls ahead — especially once there is
 iteration or non-trivial data to walk. Go's `text/template` pays for

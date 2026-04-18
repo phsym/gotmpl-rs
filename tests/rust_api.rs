@@ -642,9 +642,9 @@ fn test_parse_error_line_and_col_across_newline_after_utf8() {
 }
 
 #[test]
-fn test_parse_tree_node_offsets_are_char_indices() {
-    // AST node offsets are documented (see Pos::offset) as character offsets.
-    // For source "éé{{.X}}" the `.X` action starts at char index 4, not byte 6.
+fn test_parse_tree_node_offsets_are_byte_indices() {
+    // AST node offsets are documented (see Pos::offset) as byte offsets into
+    // the source. For "éé{{.X}}", `é` is 2 bytes so `.` sits at byte 6.
     use gotmpl::parse::{Expr, Node, Parser};
 
     let src = "éé{{.X}}";
@@ -656,14 +656,12 @@ fn test_parse_tree_node_offsets_are_char_indices() {
         .find_map(|n| if let Node::Action(a) = n { Some(a) } else { None })
         .expect("expected an Action node");
 
-    // The Field expression inside the action points to `.X`, whose `.` sits
-    // at character index 4 in "éé{{.X}}".
     let field_expr = &action.pipe.commands[0].args[0];
     assert!(matches!(field_expr, Expr::Field(_, _)));
     assert_eq!(
         field_expr.pos().offset,
-        4,
-        "Pos::offset must be a char index; got {}",
+        6,
+        "Pos::offset must be a byte offset; got {}",
         field_expr.pos().offset
     );
     assert_eq!(field_expr.pos().line, 1);
@@ -687,17 +685,17 @@ fn test_parse_tree_text_node_offset_after_utf8_and_newlines() {
         .find_map(|n| if let Node::Text(t) = n { Some(t) } else { None })
         .expect("expected a Text node");
     assert_eq!(first_text.pos.offset, 0);
-    assert_eq!(first_text.text, "日本語\nhello");
+    assert_eq!(&*first_text.text, "日本語\nhello");
 
-    // The Action `{{.}}` comes after "日本語\nhello" which is 4 chars + 1 '\n'
-    // + "hello" = 9 chars. Inside the action, `.` sits right after `{{`.
-    // Source chars: 日(0) 本(1) 語(2) \n(3) h(4) e(5) l(6) l(7) o(8) {(9) {(10) .(11)
+    // The Action `{{.}}` comes after "日本語\nhello" which is 9 bytes (3 CJK
+    // chars × 3 bytes) + 1 '\n' + "hello" (5) = 15 bytes, then `{{` (2) puts
+    // the `.` at byte 17.
     let action = tree
         .nodes
         .iter()
         .find_map(|n| if let Node::Action(a) = n { Some(a) } else { None })
         .expect("expected an Action node");
     let dot_expr = &action.pipe.commands[0].args[0];
-    assert_eq!(dot_expr.pos().offset, 11, "got {}", dot_expr.pos().offset);
+    assert_eq!(dot_expr.pos().offset, 17, "got {}", dot_expr.pos().offset);
     assert_eq!(dot_expr.pos().line, 2);
 }

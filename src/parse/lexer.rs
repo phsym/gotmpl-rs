@@ -10,11 +10,20 @@
 //!
 //! This module is primarily used internally by the [`Parser`](crate::parse::Parser).
 
+use alloc::borrow::Cow;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::error::{Result, TemplateError};
+
+fn strip_underscores(raw: &str) -> Cow<'_, str> {
+    if raw.contains('_') {
+        Cow::Owned(raw.replace('_', ""))
+    } else {
+        Cow::Borrowed(raw)
+    }
+}
 
 // ─── Token types ─────────────────────────────────────────────────────────
 
@@ -64,28 +73,44 @@ pub enum TokenKind {
 }
 
 /// A single token produced by the [`Lexer`].
+///
+/// The `val` field borrows from the source when possible (text, identifiers,
+/// field names, keywords, raw strings) and only allocates for values that
+/// must be transformed — quoted strings with escapes, numeric literals
+/// converted to decimal, and character literals rendered as code points.
 #[derive(Debug, Clone)]
-pub struct Token {
+pub struct Token<'a> {
     /// What kind of token this is.
     pub kind: TokenKind,
     /// The token's string value (literal text, identifier name, number, etc.).
-    pub val: String,
-    /// Character index in the original source (index into the `Vec<char>`).
+    pub val: Cow<'a, str>,
+    /// Byte offset in the original source.
     pub pos: usize,
     /// 1-based line number tracked during scanning.
     pub line: usize,
 }
 
-impl Token {
-    /// Compute the 1-based `(line, column)` from the character offset and the original source.
+impl Token<'_> {
+    /// Compute the 1-based `(line, column)` from the byte offset and the original source.
     ///
-    /// `self.pos` is a character index (into the lexer's `Vec<char>` view of
-    /// the source), so we iterate `chars()` rather than `char_indices()`;
-    /// otherwise multi-byte characters would skew the reported column.
+    /// `self.pos` is a byte offset. Columns count UTF-8 *characters*, not bytes,
+    /// so multi-byte characters advance the column by one.
     pub fn line_col(&self, source: &str) -> (usize, usize) {
+        debug_assert!(
+            self.pos <= source.len(),
+            "token pos {} exceeds source length {}",
+            self.pos,
+            source.len()
+        );
+        let end = self.pos.min(source.len());
+        debug_assert!(
+            source.is_char_boundary(end),
+            "token pos {} is not on a UTF-8 char boundary",
+            end
+        );
         let mut line = 1;
         let mut col = 1;
-        for ch in source.chars().take(self.pos) {
+        for ch in source[..end].chars() {
             if ch == '\n' {
                 line += 1;
                 col = 1;
@@ -107,32 +132,40 @@ impl Token {
 ///
 /// This is used internally by the [`Parser`](crate::parse::Parser); most users
 /// interact with [`Template`](crate::Template) directly.
-pub struct Lexer {
-    input: Vec<char>,
+pub struct Lexer<'a> {
+    input: &'a str,
     pos: usize,
     start: usize,
-    tokens: Vec<Token>,
-    left_delim: String,
-    right_delim: String,
+    tokens: Vec<Token<'a>>,
+    left_delim: &'a str,
+    right_delim: &'a str,
+    left_trim: String,
+    right_trim: String,
     line: usize,
 }
 
-impl Lexer {
+impl<'a> Lexer<'a> {
     /// Create a new lexer for the given input with the specified delimiters.
-    pub fn new(input: &str, left_delim: &str, right_delim: &str) -> Self {
+    pub fn new(input: &'a str, left_delim: &'a str, right_delim: &'a str) -> Self {
+        // Heuristic: one token per ~8 bytes of source. Overshoots slightly on
+        // ASCII-heavy text, which is fine — avoids the ~7 reallocations a
+        // defaulted Vec would do on a 100-token template.
+        let capacity = input.len() / 8 + 8;
         Lexer {
-            input: input.chars().collect(),
+            input,
             pos: 0,
             start: 0,
-            tokens: Vec::new(),
-            left_delim: left_delim.to_string(),
-            right_delim: right_delim.to_string(),
+            tokens: Vec::with_capacity(capacity),
+            left_delim,
+            right_delim,
+            left_trim: format!("{}-", left_delim),
+            right_trim: format!("-{}", right_delim),
             line: 1,
         }
     }
 
     /// Tokenize the entire input and return the token stream.
-    pub fn tokenize(mut self) -> Result<Vec<Token>> {
+    pub fn tokenize(mut self) -> Result<Vec<Token<'a>>> {
         self.lex_text()?;
         self.emit(TokenKind::Eof);
         Ok(self.tokens)
@@ -140,55 +173,71 @@ impl Lexer {
 
     // ─── Helpers ─────────────────────────────────────────────────────
 
-    fn remaining(&self) -> &[char] {
-        &self.input[self.pos..]
-    }
-
     fn starts_with(&self, prefix: &str) -> bool {
-        let prefix_chars: Vec<char> = prefix.chars().collect();
-        let rem = self.remaining();
-        if rem.len() < prefix_chars.len() {
-            return false;
-        }
-        rem[..prefix_chars.len()] == prefix_chars[..]
+        self.input.as_bytes()[self.pos..].starts_with(prefix.as_bytes())
     }
 
     fn peek(&self) -> Option<char> {
-        self.input.get(self.pos).copied()
+        self.input[self.pos..].chars().next()
     }
 
+    /// Look `n` characters ahead without advancing. O(n) in `n` (scans chars
+    /// from `self.pos`), so only use for small lookaheads — not in hot loops.
     fn peek_ahead(&self, n: usize) -> Option<char> {
-        self.input.get(self.pos + n).copied()
+        self.input[self.pos..].chars().nth(n)
     }
 
     fn next_char(&mut self) -> Option<char> {
-        let ch = self.input.get(self.pos).copied()?;
-        self.pos += 1;
+        let ch = self.input[self.pos..].chars().next()?;
+        self.pos += ch.len_utf8();
         if ch == '\n' {
             self.line += 1;
         }
         Some(ch)
     }
 
+    /// Back up one character. `self.pos` must be a char boundary and greater
+    /// than zero — both hold because every advance path (`next_char`, `skip`)
+    /// moves by whole UTF-8 characters starting from 0.
     fn backup(&mut self) {
-        self.pos -= 1;
-        if self.input.get(self.pos) == Some(&'\n') {
+        debug_assert!(self.pos > 0, "backup with self.pos == 0");
+        debug_assert!(
+            self.input.is_char_boundary(self.pos),
+            "backup from non-boundary offset"
+        );
+        let bytes = self.input.as_bytes();
+        let mut i = self.pos;
+        loop {
+            i -= 1;
+            // Stop at a char boundary: any non-continuation byte.
+            if bytes[i] < 0x80 || bytes[i] >= 0xC0 {
+                break;
+            }
+        }
+        if bytes[i] == b'\n' {
             self.line -= 1;
         }
+        self.pos = i;
     }
 
+    /// Advance `n` bytes, tracking newlines. `n` must land on a char boundary
+    /// (callers pass `delim.len()` or byte counts of ASCII sequences).
     fn skip(&mut self, n: usize) {
-        for _ in 0..n {
+        let target = self.pos + n;
+        while self.pos < target {
             self.next_char();
         }
+        debug_assert_eq!(self.pos, target, "skip({}) overshot a char boundary", n);
     }
 
-    fn current_val(&self) -> String {
-        self.input[self.start..self.pos].iter().collect()
+    fn current_str(&self) -> &'a str {
+        debug_assert!(self.input.is_char_boundary(self.start));
+        debug_assert!(self.input.is_char_boundary(self.pos));
+        &self.input[self.start..self.pos]
     }
 
     fn emit(&mut self, kind: TokenKind) {
-        let val = self.current_val();
+        let val = Cow::Borrowed(self.current_str());
         self.tokens.push(Token {
             kind,
             val,
@@ -198,7 +247,7 @@ impl Lexer {
         self.start = self.pos;
     }
 
-    fn emit_val(&mut self, kind: TokenKind, val: String) {
+    fn emit_val(&mut self, kind: TokenKind, val: Cow<'a, str>) {
         self.tokens.push(Token {
             kind,
             val,
@@ -235,13 +284,12 @@ impl Lexer {
             }
 
             // Check for left trim delimiter (e.g. "{{-")
-            let left_trim = format!("{}-", self.left_delim);
-            if self.starts_with(&left_trim) {
+            if self.starts_with(&self.left_trim) {
                 if self.pos > self.start {
                     // {{- trims trailing whitespace from preceding text
                     self.emit_pending_text(trim_leading, true);
                 }
-                self.skip(left_trim.len());
+                self.skip(self.left_trim.len());
                 self.ignore();
                 self.emit(TokenKind::LeftTrimDelim);
                 trim_leading = self.lex_action_body()?;
@@ -249,8 +297,8 @@ impl Lexer {
             }
 
             // Check for regular left delimiter (e.g. "{{")
-            let ld = self.left_delim.clone();
-            if self.starts_with(&ld) {
+            let ld = self.left_delim;
+            if self.starts_with(ld) {
                 if self.pos > self.start {
                     self.emit_pending_text(trim_leading, false);
                 }
@@ -271,17 +319,15 @@ impl Lexer {
     /// `trim_leading`: trim whitespace from the start (previous action had `-}}`).
     /// `trim_trailing`: trim whitespace from the end (current delimiter is `{{-`).
     fn emit_pending_text(&mut self, trim_leading: bool, trim_trailing: bool) {
-        let text: String = self.input[self.start..self.pos].iter().collect();
-        let mut text = if trim_leading {
-            text.trim_start().to_string()
-        } else {
-            text
-        };
-        if trim_trailing {
-            text = text.trim_end().to_string();
+        let mut slice = self.current_str();
+        if trim_leading {
+            slice = slice.trim_start();
         }
-        if !text.is_empty() {
-            self.emit_val(TokenKind::Text, text);
+        if trim_trailing {
+            slice = slice.trim_end();
+        }
+        if !slice.is_empty() {
+            self.emit_val(TokenKind::Text, Cow::Borrowed(slice));
         } else {
             self.ignore();
         }
@@ -351,12 +397,11 @@ impl Lexer {
         }
 
         // Detect whether close has trim marker
-        let right_trim = format!("-{}", self.right_delim);
         let close_trims;
-        if self.starts_with(&right_trim) {
-            self.skip(right_trim.len());
+        if self.starts_with(&self.right_trim) {
+            self.skip(self.right_trim.len());
             close_trims = true;
-        } else if self.starts_with(&self.right_delim.clone()) {
+        } else if self.starts_with(self.right_delim) {
             self.skip(self.right_delim.len());
             close_trims = false;
         } else {
@@ -390,16 +435,14 @@ impl Lexer {
             }
 
             // Check for right delimiter (with optional trim)
-            let right_trim = format!("-{}", self.right_delim);
-            if self.starts_with(&right_trim) {
-                self.skip(right_trim.len());
+            if self.starts_with(&self.right_trim) {
+                self.skip(self.right_trim.len());
                 self.ignore();
                 self.emit(TokenKind::RightTrimDelim);
                 return Ok(());
             }
 
-            let rd = self.right_delim.clone();
-            if self.starts_with(&rd) {
+            if self.starts_with(self.right_delim) {
                 let rd_len = self.right_delim.len();
                 self.skip(rd_len);
                 self.ignore();
@@ -498,12 +541,16 @@ impl Lexer {
                     self.next_char();
                 } // skip escaped char
                 Some('"') => {
-                    let raw: String = self.input[self.start..self.pos].iter().collect();
+                    let raw = self.current_str();
                     // Strip surrounding quotes for the value
                     let inner = &raw[1..raw.len() - 1];
-                    // Process escape sequences
-                    let unescaped = unescape(inner)?;
-                    self.emit_val(TokenKind::String, unescaped);
+                    // Only allocate when the literal actually contains escapes.
+                    let val = if inner.contains('\\') {
+                        Cow::Owned(unescape(inner)?)
+                    } else {
+                        Cow::Borrowed(inner)
+                    };
+                    self.emit_val(TokenKind::String, val);
                     return Ok(());
                 }
                 _ => {}
@@ -517,9 +564,9 @@ impl Lexer {
             match self.next_char() {
                 None => return Err(self.error("unterminated raw string")),
                 Some('`') => {
-                    let raw: String = self.input[self.start..self.pos].iter().collect();
-                    let inner = raw[1..raw.len() - 1].to_string();
-                    self.emit_val(TokenKind::String, inner);
+                    let raw = self.current_str();
+                    let inner = &raw[1..raw.len() - 1];
+                    self.emit_val(TokenKind::String, Cow::Borrowed(inner));
                     return Ok(());
                 }
                 _ => {}
@@ -579,17 +626,18 @@ impl Lexer {
                     // Check for legacy octal: 0 followed only by [0-7_]
                     // (e.g., 0377 → 255). If a dot, 'e'/'E', or digit 8-9
                     // follows, fall through to decimal instead.
+                    let bytes = self.input.as_bytes();
                     let mut look = self.pos;
                     let mut has_octal_digits = false;
                     let mut is_legacy_octal = true;
-                    while look < self.input.len() {
-                        let ch = self.input[look];
-                        if ('0'..='7').contains(&ch) {
+                    while look < bytes.len() {
+                        let b = bytes[look];
+                        if (b'0'..=b'7').contains(&b) {
                             has_octal_digits = true;
                             look += 1;
-                        } else if ch == '_' {
+                        } else if b == b'_' {
                             look += 1;
-                        } else if ch == '.' || ch == 'e' || ch == 'E' || ch == '8' || ch == '9' {
+                        } else if matches!(b, b'.' | b'e' | b'E' | b'8' | b'9') {
                             is_legacy_octal = false;
                             break;
                         } else {
@@ -603,8 +651,8 @@ impl Lexer {
                         {
                             self.next_char();
                         }
-                        let raw: String = self.input[self.start..self.pos].iter().collect();
-                        let clean: String = raw.chars().filter(|c| *c != '_').collect();
+                        let raw = self.current_str();
+                        let clean = strip_underscores(raw);
                         let (negative, digits) = if let Some(d) = clean.strip_prefix("-0") {
                             (true, d)
                         } else if let Some(d) = clean.strip_prefix("+0") {
@@ -612,12 +660,12 @@ impl Lexer {
                         } else if let Some(d) = clean.strip_prefix('0') {
                             (false, d)
                         } else {
-                            (false, clean.as_str())
+                            (false, clean.as_ref())
                         };
                         match i64::from_str_radix(digits, 8) {
                             Ok(n) => {
                                 let val = if negative { -n } else { n };
-                                self.emit_val(TokenKind::Number, val.to_string());
+                                self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
                             }
                             Err(_) => return Err(self.error("invalid octal number")),
                         }
@@ -650,8 +698,8 @@ impl Lexer {
             return Err(self.error("invalid hex number"));
         }
         // Emit as number but we need to convert to decimal for the value
-        let raw: String = self.input[self.start..self.pos].iter().collect();
-        let clean: String = raw.chars().filter(|c| *c != '_').collect();
+        let raw = self.current_str();
+        let clean = strip_underscores(raw);
         // Parse hex int
         let negative = clean.starts_with('-');
         let hex_str = if negative {
@@ -669,7 +717,7 @@ impl Lexer {
         match i64::from_str_radix(hex_str, 16) {
             Ok(n) => {
                 let val = if negative { -n } else { n };
-                self.emit_val(TokenKind::Number, val.to_string());
+                self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
             }
             Err(_) => return Err(self.error("invalid hex number")),
         }
@@ -702,11 +750,11 @@ impl Lexer {
             }
         }
         // For hex floats, just emit the raw value. Rust can parse them with special handling
-        let raw: String = self.input[self.start..self.pos].iter().collect();
-        let clean: String = raw.chars().filter(|c| *c != '_').collect();
+        let raw = self.current_str();
+        let clean = strip_underscores(raw);
         // Parse hex float manually: use the format 0xHEX.HEXpEXP
         match crate::go::parse_hex_float(&clean) {
-            Some(f) => self.emit_val(TokenKind::Number, format!("{}", f)),
+            Some(f) => self.emit_val(TokenKind::Number, Cow::Owned(format!("{}", f))),
             None => return Err(self.error("invalid hex float")),
         }
         Ok(())
@@ -732,15 +780,15 @@ impl Lexer {
         if !has_digits {
             return Err(self.error(format!("invalid base-{} number", base)));
         }
-        let raw: String = self.input[self.start..self.pos].iter().collect();
-        let clean: String = raw.chars().filter(|c| *c != '_').collect();
+        let raw = self.current_str();
+        let clean = strip_underscores(raw);
         let negative = clean.starts_with('-');
         let prefix_len = if negative { 3 } else { 2 }; // skip sign + 0x/0o/0b
         let digits = &clean[prefix_len..];
         match i64::from_str_radix(digits, base) {
             Ok(n) => {
                 let val = if negative { -n } else { n };
-                self.emit_val(TokenKind::Number, val.to_string());
+                self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
             }
             Err(_) => return Err(self.error(format!("invalid base-{} number", base))),
         }
@@ -752,8 +800,9 @@ impl Lexer {
         let mut has_exp = false;
         let mut has_digits = self
             .input
+            .as_bytes()
             .get(self.pos.saturating_sub(1))
-            .is_some_and(char::is_ascii_digit);
+            .is_some_and(u8::is_ascii_digit);
 
         while let Some(ch) = self.peek() {
             if ch.is_ascii_digit() {
@@ -780,10 +829,9 @@ impl Lexer {
             return Err(self.error("invalid number"));
         }
 
-        let raw = self.current_val();
-        // Strip underscores for the value
-        let clean: String = raw.chars().filter(|c| *c != '_').collect();
-        self.emit_val(TokenKind::Number, clean);
+        let raw = self.current_str();
+        // Strip underscores for the value; borrow when the literal has none.
+        self.emit_val(TokenKind::Number, strip_underscores(raw));
         Ok(())
     }
 
@@ -887,7 +935,7 @@ impl Lexer {
         }
 
         // Emit as a number (Go treats char constants as their Unicode code point)
-        self.emit_val(TokenKind::Char, (ch as u32).to_string());
+        self.emit_val(TokenKind::Char, Cow::Owned((ch as u32).to_string()));
         Ok(())
     }
 
@@ -899,8 +947,7 @@ impl Lexer {
                 break;
             }
         }
-        let val = self.current_val();
-        let kind = match val.as_str() {
+        let kind = match self.current_str() {
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "end" => TokenKind::End,
@@ -981,11 +1028,11 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    fn lex(input: &str) -> Vec<Token> {
+    fn lex(input: &str) -> Vec<Token<'_>> {
         Lexer::new(input, "{{", "}}").tokenize().unwrap()
     }
 
-    fn kinds(tokens: &[Token]) -> Vec<TokenKind> {
+    fn kinds(tokens: &[Token<'_>]) -> Vec<TokenKind> {
         tokens.iter().map(|t| t.kind.clone()).collect()
     }
 

@@ -8,7 +8,6 @@
 //! The top-level enum is [`Node`], with expression-level atoms in [`Expr`].
 
 use alloc::boxed::Box;
-use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -18,11 +17,7 @@ use alloc::vec::Vec;
 /// the originating source location.
 #[derive(Debug, Clone, Copy)]
 pub struct Pos {
-    /// Character offset from the start of the template source.
-    ///
-    /// This is a character index into the source string (not a byte offset),
-    /// matching the lexer's internal `Vec<char>` representation. For ASCII-only
-    /// templates, character offsets equal byte offsets.
+    /// Byte offset from the start of the template source.
     pub offset: usize,
     /// 1-based line number (tracked by the lexer).
     pub line: usize,
@@ -94,7 +89,10 @@ pub struct TextNode {
     /// Source position of the text.
     pub pos: Pos,
     /// The literal text content (after any whitespace trimming by the lexer).
-    pub text: String,
+    ///
+    /// Stored as [`Arc<str>`] so AST clones (e.g., when `{{block}}` duplicates
+    /// its body into the template definition map) only bump a refcount.
+    pub text: Arc<str>,
 }
 
 /// A `{{ pipeline }}` action that evaluates and prints.
@@ -126,7 +124,7 @@ pub struct PipeNode {
     /// Variable names being declared or assigned (e.g., `["$x"]` or `["$i", "$v"]`).
     ///
     /// Empty when the pipeline has no variable binding.
-    pub decl: Vec<String>,
+    pub decl: Vec<Arc<str>>,
     /// The sequence of commands in the pipeline, left to right.
     pub commands: Vec<CommandNode>,
     /// `true` for assignment (`=`), `false` for declaration (`:=`).
@@ -148,6 +146,19 @@ pub struct CommandNode {
     pub args: Vec<Expr>,
 }
 
+/// A parsed numeric literal — either an integer or a floating-point value.
+///
+/// Produced by the parser from [`TokenKind::Number`](crate::parse::lexer::TokenKind)
+/// and [`TokenKind::Char`](crate::parse::lexer::TokenKind) tokens. Character
+/// literals are stored as `Int` holding the Unicode code point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Number {
+    /// An integer literal (decimal, hex, octal, binary, or char code point).
+    Int(i64),
+    /// A floating-point literal (decimal float or hex float).
+    Float(f64),
+}
+
 /// An expression, the atomic building blocks of commands.
 ///
 /// Each variant carries a [`Pos`] for error reporting.
@@ -159,17 +170,17 @@ pub enum Expr {
     /// Field access on dot: `.Name`, `.User.Email`.
     ///
     /// The vector contains the chain of field names (e.g., `["User", "Email"]`).
-    Field(Pos, Vec<String>),
+    Field(Pos, Vec<Arc<str>>),
 
     /// Variable access: `$x`, or chained: `$x.Name`.
     ///
     /// Fields: `(pos, variable_name, field_chain)`.
-    Variable(Pos, String, Vec<String>),
+    Variable(Pos, Arc<str>, Vec<Arc<str>>),
 
     /// A function or method identifier (e.g., `printf`, `len`).
     ///
     /// Resolved to a [`Func`](crate::Func) during execution.
-    Identifier(Pos, String),
+    Identifier(Pos, Arc<str>),
 
     /// A string literal (`"hello"` or `` `raw` ``).
     ///
@@ -177,12 +188,12 @@ pub enum Expr {
     /// [`Value::String`](crate::Value::String) via a refcount bump.
     String(Pos, Arc<str>),
 
-    /// A number literal, stored as its string representation.
+    /// A numeric literal, already parsed to an `i64` or `f64`.
     ///
-    /// Parsed to [`Value::Int`](crate::Value::Int) or
-    /// [`Value::Float`](crate::Value::Float) during execution.
-    /// Hex, octal, and binary literals are converted to decimal by the lexer.
-    Number(Pos, String),
+    /// Hex, octal, binary, decimal, and character literals are all normalized
+    /// to this form at parse time. The executor consumes the parsed value
+    /// directly, avoiding a second `str::parse` on every evaluation.
+    Number(Pos, Number),
 
     /// A boolean literal (`true` or `false`).
     Bool(Pos, bool),
@@ -196,7 +207,7 @@ pub enum Expr {
     /// Chained field access on an expression result: `(expr).Field` or `func.Field`.
     ///
     /// Fields: `(pos, inner_expression, field_chain)`.
-    Chain(Pos, Box<Expr>, Vec<String>),
+    Chain(Pos, Box<Expr>, Vec<Arc<str>>),
 }
 
 impl Expr {
@@ -259,7 +270,7 @@ pub struct TemplateNode {
     /// Source position of the `template` keyword.
     pub pos: Pos,
     /// The name of the template to invoke (from a `{{define}}` or `{{block}}`).
-    pub name: String,
+    pub name: Arc<str>,
     /// Optional pipeline whose result becomes dot inside the invoked template.
     ///
     /// `None` when invoked without arguments: `{{template "name"}}`.
@@ -275,7 +286,7 @@ pub struct DefineNode {
     /// Source position of the `define` keyword.
     pub pos: Pos,
     /// The name of the defined template.
-    pub name: String,
+    pub name: Arc<str>,
     /// The body of the defined template.
     pub body: ListNode,
 }

@@ -283,7 +283,7 @@ impl Template {
 
         self.tree = Some(tree);
         for def in defines {
-            self.defines.insert(def.name.clone(), def.body);
+            self.defines.insert(def.name.to_string(), def.body);
         }
 
         Ok(self)
@@ -303,7 +303,7 @@ impl Template {
         let (_, defines) = parser.parse()?;
 
         for def in defines {
-            self.defines.insert(def.name.clone(), def.body);
+            self.defines.insert(def.name.to_string(), def.body);
         }
 
         Ok(self)
@@ -347,7 +347,7 @@ impl Template {
             self.defines.insert(basename.to_string(), tree);
 
             for def in defines {
-                self.defines.insert(def.name.clone(), def.body);
+                self.defines.insert(def.name.to_string(), def.body);
             }
         }
         Ok(self)
@@ -371,7 +371,7 @@ impl Template {
     ///     pos: Pos::new(0, 1),
     ///     nodes: vec![Node::Text(TextNode {
     ///         pos: Pos::new(0, 1),
-    ///         text: "injected".to_string(),
+    ///         text: "injected".into(),
     ///     })],
     /// };
     ///

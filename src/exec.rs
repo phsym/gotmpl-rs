@@ -30,7 +30,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::error::{Result, TemplateError};
 use crate::funcs::Func;
-use crate::parse::{BranchNode, CommandNode, Expr, ListNode, Node, PipeNode, TemplateNode};
+use crate::parse::{BranchNode, CommandNode, Expr, ListNode, Node, Number, PipeNode, TemplateNode};
 use crate::value::Value;
 
 /// Maximum recursion depth for `{{template}}` calls.
@@ -483,8 +483,8 @@ impl<'a> Executor<'a> {
 
         let tree = self
             .templates
-            .get(&tmpl.name)
-            .ok_or_else(|| TemplateError::UndefinedTemplate(tmpl.name.clone()))?
+            .get(tmpl.name.as_ref())
+            .ok_or_else(|| TemplateError::UndefinedTemplate(tmpl.name.to_string()))?
             .clone();
 
         self.vars.push();
@@ -531,7 +531,7 @@ impl<'a> Executor<'a> {
         // If the first arg is an identifier, it's a function call
         if let Expr::Identifier(_, name) = first {
             // Special-case and/or for short-circuit evaluation
-            if name == "and" || name == "or" {
+            if name.as_ref() == "and" || name.as_ref() == "or" {
                 return self.eval_short_circuit(dot, name, &cmd.args[1..], piped);
             }
             return self.eval_function_call(dot, name, &cmd.args[1..], piped);
@@ -542,7 +542,7 @@ impl<'a> Executor<'a> {
         if let Expr::Chain(_, inner, fields) = first
             && let Expr::Identifier(_, name) = inner.as_ref()
         {
-            if name == "and" || name == "or" {
+            if name.as_ref() == "and" || name.as_ref() == "or" {
                 let mut val = self.eval_short_circuit(dot, name, &cmd.args[1..], piped)?;
                 for field in fields {
                     val = self.field_access(&val, field)?;
@@ -706,7 +706,7 @@ impl<'a> Executor<'a> {
                     .vars
                     .get(name)
                     .cloned()
-                    .ok_or_else(|| TemplateError::UndefinedVariable(name.clone()))?;
+                    .ok_or_else(|| TemplateError::UndefinedVariable(name.to_string()))?;
                 let mut result = val;
                 for field in fields {
                     result = self.field_access(&result, field)?;
@@ -716,17 +716,10 @@ impl<'a> Executor<'a> {
 
             Expr::String(_, s) => Ok(Value::String(Arc::clone(s))),
 
-            Expr::Number(_, s) => {
-                if s.contains('.') || s.contains('e') || s.contains('E') {
-                    Ok(Value::Float(s.parse::<f64>().map_err(|_| {
-                        TemplateError::Exec(format!("invalid float: {}", s))
-                    })?))
-                } else {
-                    Ok(Value::Int(s.parse::<i64>().map_err(|_| {
-                        TemplateError::Exec(format!("invalid integer: {}", s))
-                    })?))
-                }
-            }
+            Expr::Number(_, n) => match *n {
+                Number::Int(i) => Ok(Value::Int(i)),
+                Number::Float(f) => Ok(Value::Float(f)),
+            },
 
             Expr::Bool(_, b) => Ok(Value::Bool(*b)),
             Expr::Nil(_) => Ok(Value::Nil),
@@ -735,10 +728,10 @@ impl<'a> Executor<'a> {
 
             Expr::Identifier(_, name) => {
                 // Bare identifier, could be a zero-arg function call
-                if let Some(func) = self.funcs.get(name.as_str()) {
+                if let Some(func) = self.funcs.get(name.as_ref()) {
                     return self.invoke_func(name, func, &[]);
                 }
-                Err(TemplateError::UndefinedFunction(name.clone()).into())
+                Err(TemplateError::UndefinedFunction(name.to_string()).into())
             }
 
             Expr::Chain(_, inner, fields) => {
@@ -777,7 +770,7 @@ mod tests {
         let funcs = builtins();
         let mut templates: BTreeMap<String, ListNode> = BTreeMap::new();
         for def in &defines {
-            templates.insert(def.name.clone(), def.body.clone());
+            templates.insert(def.name.to_string(), def.body.clone());
         }
 
         let mut executor = Executor::new(&funcs, &templates);
