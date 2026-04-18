@@ -203,104 +203,145 @@ pub(crate) fn sprintf(fmt_str: &str, args: &[Value]) -> Result<String> {
                 }
                 result.push_str(&spec.pad(&s, false));
             }
-            'd' => {
-                let n = arg.as_int().unwrap_or(0);
-                let s = spec.format_signed(n);
-                result.push_str(&spec.pad(&s, true));
-            }
-            'f' => {
-                let f = arg.as_float().unwrap_or(0.0);
-                let prec = spec.precision.unwrap_or(6);
-                let s = if spec.plus {
-                    if f >= 0.0 {
-                        format!("+{:.prec$}", f)
+            'd' => match arg.as_int() {
+                Some(n) => {
+                    let s = spec.format_signed(n);
+                    result.push_str(&spec.pad(&s, true));
+                }
+                None => write_bad_verb(&mut result, verb, arg),
+            },
+            'f' => match arg.as_float() {
+                Some(f) => {
+                    let prec = spec.precision.unwrap_or(6);
+                    let s = if spec.plus {
+                        if f >= 0.0 {
+                            format!("+{:.prec$}", f)
+                        } else {
+                            format!("{:.prec$}", f)
+                        }
+                    } else if spec.space {
+                        if f >= 0.0 {
+                            format!(" {:.prec$}", f)
+                        } else {
+                            format!("{:.prec$}", f)
+                        }
                     } else {
                         format!("{:.prec$}", f)
-                    }
-                } else if spec.space {
-                    if f >= 0.0 {
-                        format!(" {:.prec$}", f)
+                    };
+                    result.push_str(&spec.pad(&s, true));
+                }
+                None => write_bad_verb(&mut result, verb, arg),
+            },
+            'e' | 'E' => match arg.as_float() {
+                Some(f) => {
+                    let prec = spec.precision.unwrap_or(6);
+                    let raw = if verb == 'e' {
+                        format!("{:.prec$e}", f)
                     } else {
-                        format!("{:.prec$}", f)
-                    }
-                } else {
-                    format!("{:.prec$}", f)
-                };
-                result.push_str(&spec.pad(&s, true));
-            }
-            'e' | 'E' => {
-                let f = arg.as_float().unwrap_or(0.0);
-                let prec = spec.precision.unwrap_or(6);
-                let raw = if verb == 'e' {
-                    format!("{:.prec$e}", f)
-                } else {
-                    format!("{:.prec$E}", f)
-                };
-                let s = go_normalize_sci(&raw);
-                let s = apply_float_sign(s, f, &spec);
-                result.push_str(&spec.pad(&s, true));
-            }
-            'g' | 'G' => {
-                let f = arg.as_float().unwrap_or(0.0);
-                let s = if f.is_nan() || f.is_infinite() {
-                    format!("{}", f)
-                } else if let Some(prec) = spec.precision {
-                    format_g_with_precision(f, prec.max(1), verb == 'G')
-                } else {
-                    format_g_default(f, verb == 'G')
-                };
-                let s = apply_float_sign(s, f, &spec);
-                result.push_str(&spec.pad(&s, true));
-            }
+                        format!("{:.prec$E}", f)
+                    };
+                    let s = go_normalize_sci(&raw);
+                    let s = apply_float_sign(s, f, &spec);
+                    result.push_str(&spec.pad(&s, true));
+                }
+                None => write_bad_verb(&mut result, verb, arg),
+            },
+            'g' | 'G' => match arg.as_float() {
+                Some(f) => {
+                    let s = if f.is_nan() || f.is_infinite() {
+                        format!("{}", f)
+                    } else if let Some(prec) = spec.precision {
+                        format_g_with_precision(f, prec.max(1), verb == 'G')
+                    } else {
+                        format_g_default(f, verb == 'G')
+                    };
+                    let s = apply_float_sign(s, f, &spec);
+                    result.push_str(&spec.pad(&s, true));
+                }
+                None => write_bad_verb(&mut result, verb, arg),
+            },
             'v' => {
                 let s = format!("{}", arg);
                 result.push_str(&spec.pad(&s, false));
             }
-            'q' => {
-                let raw = match arg {
-                    Value::String(s) => s,
-                    _ => "",
-                };
-                let display;
-                let raw = if !matches!(arg, Value::String(_)) {
-                    display = format!("{}", arg);
-                    display.as_str()
-                } else {
-                    raw
-                };
-                let s = if spec.hash {
-                    go_backquote(raw).unwrap_or_else(|| go_quote(raw))
-                } else {
-                    go_quote(raw)
-                };
-                result.push_str(&spec.pad(&s, false));
-            }
-            't' => {
-                let s = match arg {
-                    Value::Bool(b) => format!("{}", b),
-                    other => format!("{}", other),
-                };
-                result.push_str(&spec.pad(&s, false));
-            }
-            'x' | 'X' | 'o' | 'b' => {
-                let n = arg.as_int().unwrap_or(0);
-                let s = format_int_base(n, &verb.to_string(), &spec);
-                result.push_str(&spec.pad(&s, true));
-            }
-            'c' => {
-                let n = arg.as_int().unwrap_or(0);
-                if let Some(c) = char::from_u32(n as u32) {
-                    result.push(c);
+            'q' => match arg {
+                Value::String(s) => {
+                    let formatted = if spec.hash {
+                        go_backquote(s).unwrap_or_else(|| go_quote(s))
+                    } else {
+                        go_quote(s)
+                    };
+                    result.push_str(&spec.pad(&formatted, false));
                 }
-            }
-            _ => {
-                result.push('%');
-                result.push(verb);
-            }
+                Value::Int(n) => {
+                    // Go's %q on an int emits a single-quoted rune literal.
+                    if let Some(c) = u32::try_from(*n).ok().and_then(char::from_u32) {
+                        let s = format!("'{}'", c.escape_default());
+                        result.push_str(&spec.pad(&s, false));
+                    } else {
+                        write_bad_verb(&mut result, verb, arg);
+                    }
+                }
+                _ => write_bad_verb(&mut result, verb, arg),
+            },
+            't' => match arg {
+                Value::Bool(b) => {
+                    let s = if *b { "true" } else { "false" };
+                    result.push_str(&spec.pad(s, false));
+                }
+                _ => write_bad_verb(&mut result, verb, arg),
+            },
+            'x' | 'X' | 'o' | 'b' => match arg {
+                Value::String(s) if verb == 'x' || verb == 'X' => {
+                    let formatted = format_string_hex(s, verb == 'X', &spec);
+                    result.push_str(&spec.pad(&formatted, false));
+                }
+                _ => match arg.as_int() {
+                    Some(n) => {
+                        let s = format_int_base(n, &verb.to_string(), &spec);
+                        result.push_str(&spec.pad(&s, true));
+                    }
+                    None => write_bad_verb(&mut result, verb, arg),
+                },
+            },
+            'c' => match arg.as_int() {
+                Some(n) => match u32::try_from(n).ok().and_then(char::from_u32) {
+                    Some(c) => result.push(c),
+                    None => result.push('\u{FFFD}'),
+                },
+                None => write_bad_verb(&mut result, verb, arg),
+            },
+            _ => write_bad_verb(&mut result, verb, arg),
         }
     }
 
     Ok(result)
+}
+
+/// Emit Go's `%!verb(type=value)` marker for a type-mismatched or unknown verb.
+fn write_bad_verb(out: &mut String, verb: char, arg: &Value) {
+    write!(out, "%!{}({}=", verb, arg.type_name()).ok();
+    match arg {
+        Value::String(s) => out.push_str(s),
+        other => write!(out, "{}", other).unwrap_or(()),
+    }
+    out.push(')');
+}
+
+/// `%x` / `%X` on strings: hex-encode each byte.
+fn format_string_hex(s: &str, upper: bool, spec: &FmtSpec) -> String {
+    let mut out = String::with_capacity(s.len() * 2);
+    for b in s.as_bytes() {
+        if upper {
+            write!(out, "{:02X}", b).ok();
+        } else {
+            write!(out, "{:02x}", b).ok();
+        }
+    }
+    if let Some(prec) = spec.precision {
+        out.truncate(prec);
+    }
+    out
 }
 
 // ─── Quoting ────────────────────────────────────────────────────────────
@@ -1306,8 +1347,8 @@ mod tests {
     }
 
     #[test]
-    fn sprintf_t_non_bool() {
-        assert_eq!(sf("%t", &[Value::Int(42)]), "42");
+    fn sprintf_t_non_bool_emits_bad_verb() {
+        assert_eq!(sf("%t", &[Value::Int(42)]), "%!t(int=42)");
     }
 
     // ─── sprintf: %x / %X / %o / %b ────────────────────────────────
@@ -1393,8 +1434,24 @@ mod tests {
     }
 
     #[test]
-    fn sprintf_unknown_verb() {
-        assert_eq!(sf("%z", &[Value::Int(1)]), "%z");
+    fn sprintf_unknown_verb_emits_bad_verb() {
+        assert_eq!(sf("%z", &[Value::Int(1)]), "%!z(int=1)");
+    }
+
+    #[test]
+    fn sprintf_d_non_int_emits_bad_verb() {
+        assert_eq!(
+            sf("%d", &[Value::String("abc".into())]),
+            "%!d(string=abc)"
+        );
+    }
+
+    #[test]
+    fn sprintf_f_non_numeric_emits_bad_verb() {
+        assert_eq!(
+            sf("%f", &[Value::String("abc".into())]),
+            "%!f(string=abc)"
+        );
     }
 
     // ─── FmtSpec::pad ───────────────────────────────────────────────
