@@ -59,9 +59,10 @@ pub enum MissingKey {
     /// Return [`Value::Nil`] for missing keys (the default).
     #[default]
     Invalid,
-    /// Return [`Value::Nil`] for missing keys (same as `Invalid`).
+    /// Return [`Value::Nil`] for missing keys. Kept as a distinct variant
+    /// to mirror Go's `{{options "missingkey=zero"}}` directive.
     ZeroValue,
-    /// Return a [`TemplateError::Exec`] for missing keys.
+    /// Return a [`TemplateError::MissingKey`] for missing keys.
     Error,
 }
 
@@ -708,9 +709,10 @@ impl<'a> Executor<'a> {
         match val.field(name) {
             Some(v) => Ok(v.clone()),
             None if matches!(val, Value::Map(_)) => match self.missing_key {
-                MissingKey::Error => {
-                    Err(TemplateError::Exec(format!("map has no entry for key {:?}", name)).into())
+                MissingKey::Error => Err(TemplateError::MissingKey {
+                    key: name.to_string(),
                 }
+                .into()),
                 _ => Ok(Value::Nil),
             },
             None if matches!(val, Value::Nil) => Ok(Value::Nil),
