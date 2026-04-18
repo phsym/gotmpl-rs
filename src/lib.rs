@@ -99,7 +99,7 @@ pub type FuncMap = BTreeMap<String, ValueFunc>;
 pub struct Template {
     name: String,
     tree: Option<ListNode>,
-    defines: BTreeMap<String, ListNode>,
+    defines: BTreeMap<String, Arc<ListNode>>,
     funcs: BTreeMap<String, ValueFunc>,
     left_delim: String,
     right_delim: String,
@@ -297,7 +297,7 @@ impl Template {
 
         self.tree = Some(tree);
         for def in defines {
-            self.defines.insert(def.name.to_string(), def.body);
+            self.defines.insert(def.name.to_string(), Arc::new(def.body));
         }
 
         Ok(self)
@@ -317,7 +317,7 @@ impl Template {
         let (_, defines) = parser.parse()?;
 
         for def in defines {
-            self.defines.insert(def.name.to_string(), def.body);
+            self.defines.insert(def.name.to_string(), Arc::new(def.body));
         }
 
         Ok(self)
@@ -361,10 +361,10 @@ impl Template {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(filename);
-            self.defines.insert(basename.to_string(), tree);
+            self.defines.insert(basename.to_string(), Arc::new(tree));
 
             for def in defines {
-                self.defines.insert(def.name.to_string(), def.body);
+                self.defines.insert(def.name.to_string(), Arc::new(def.body));
             }
         }
         Ok(self)
@@ -402,7 +402,7 @@ impl Template {
     /// ```
     #[must_use]
     pub fn add_parse_tree(mut self, name: &str, tree: ListNode) -> Self {
-        self.defines.insert(name.to_string(), tree);
+        self.defines.insert(name.to_string(), Arc::new(tree));
         self
     }
 
@@ -453,7 +453,7 @@ impl Template {
         let mut executor = Executor::new(&self.funcs, &self.defines);
         executor.set_missing_key(self.missing_key);
         executor.set_max_range_iters(self.max_range_iters);
-        executor.execute(writer, tree, data)
+        executor.execute(writer, tree.as_ref(), data)
     }
 
     /// Execute the template, writing output to the given [`io::Write`](std::io::Write) destination.
@@ -551,7 +551,7 @@ impl Template {
     /// assert!(tmpl.lookup("footer").is_none());
     /// ```
     pub fn lookup(&self, name: &str) -> Option<&ListNode> {
-        self.defines.get(name)
+        self.defines.get(name).map(Arc::as_ref)
     }
 
     /// Returns the names of all defined templates.

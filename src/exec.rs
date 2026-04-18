@@ -196,7 +196,7 @@ pub(crate) const DEFAULT_MAX_RANGE_ITERS: u64 = 10_000_000;
 /// Created internally by [`Template::execute`](crate::Template::execute).
 pub struct Executor<'a> {
     funcs: &'a BTreeMap<String, ValueFunc>,
-    templates: &'a BTreeMap<String, ListNode>,
+    templates: &'a BTreeMap<String, Arc<ListNode>>,
     vars: VarScope,
     depth: usize,
     missing_key: MissingKey,
@@ -279,7 +279,7 @@ impl<'a> Executor<'a> {
     /// `{{define}}` blocks.
     pub fn new(
         funcs: &'a BTreeMap<String, ValueFunc>,
-        templates: &'a BTreeMap<String, ListNode>,
+        templates: &'a BTreeMap<String, Arc<ListNode>>,
     ) -> Self {
         Executor {
             funcs,
@@ -525,11 +525,11 @@ impl<'a> Executor<'a> {
             dot.clone()
         };
 
-        let tree = self
-            .templates
-            .get(tmpl.name.as_ref())
-            .ok_or_else(|| TemplateError::UndefinedTemplate(tmpl.name.to_string()))?
-            .clone();
+        let tree = Arc::clone(
+            self.templates
+                .get(tmpl.name.as_ref())
+                .ok_or_else(|| TemplateError::UndefinedTemplate(tmpl.name.to_string()))?,
+        );
 
         self.vars.push();
         self.vars.set("$", new_dot.clone());
@@ -821,9 +821,9 @@ mod tests {
         let (tree, defines) = parser.parse().unwrap();
 
         let funcs = builtins();
-        let mut templates: BTreeMap<String, ListNode> = BTreeMap::new();
+        let mut templates: BTreeMap<String, Arc<ListNode>> = BTreeMap::new();
         for def in &defines {
-            templates.insert(def.name.to_string(), def.body.clone());
+            templates.insert(def.name.to_string(), Arc::new(def.body.clone()));
         }
 
         let mut executor = Executor::new(&funcs, &templates);
