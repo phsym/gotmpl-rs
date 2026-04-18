@@ -192,15 +192,14 @@ impl Value {
     pub fn index(&self, idx: &Value) -> Result<Value> {
         match (self, idx) {
             (Value::List(v), Value::Int(i)) => {
-                let i = *i as usize;
-                if i >= v.len() {
-                    return Err(crate::error::TemplateError::Exec(format!(
-                        "index out of range [{}] with length {}",
-                        i,
-                        v.len()
-                    )));
+                if *i < 0 {
+                    return Err(crate::error::TemplateError::IndexOutOfRange { index: *i });
                 }
-                Ok(v[i].clone())
+                let idx = *i as usize;
+                if idx >= v.len() {
+                    return Err(crate::error::TemplateError::IndexOutOfRange { index: *i });
+                }
+                Ok(v[idx].clone())
             }
             (Value::List(_), _) => Err(crate::error::TemplateError::Exec(format!(
                 "cannot index list with type {}",
@@ -432,8 +431,6 @@ impl PartialOrd for Value {
     }
 }
 
-// ─── ToValue trait ───────────────────────────────────────────────────────
-
 /// Trait for converting Rust types into template [`Value`]s.
 ///
 /// This is the Rust equivalent of Go's ability to pass any type to
@@ -462,8 +459,6 @@ impl ToValue for Value {
         self.clone()
     }
 }
-
-// ─── Primitive scalar impls ──────────────────────────────────────────────
 
 impl ToValue for bool {
     fn to_value(&self) -> Value {
@@ -495,8 +490,6 @@ impl ToValue for f64 {
     }
 }
 
-// ─── String-like impls ──────────────────────────────────────────────────
-
 impl ToValue for str {
     fn to_value(&self) -> Value {
         Value::String(Arc::from(self))
@@ -515,8 +508,6 @@ impl ToValue for alloc::borrow::Cow<'_, str> {
     }
 }
 
-// ─── Reference / wrapper impls ──────────────────────────────────────────
-
 impl<T: ToValue + ?Sized> ToValue for &T {
     fn to_value(&self) -> Value {
         (*self).to_value()
@@ -533,71 +524,58 @@ impl<T: ToValue> ToValue for Option<T> {
     }
 }
 
-// ─── List-like collection impls ─────────────────────────────────────────
+fn list_from_iter<'a, T: ToValue + 'a, I: IntoIterator<Item = &'a T>>(iter: I) -> Value {
+    Value::List(
+        iter.into_iter()
+            .map(ToValue::to_value)
+            .collect::<Vec<_>>()
+            .into(),
+    )
+}
+
+fn map_from_iter_str<'a, T: ToValue + 'a, I: IntoIterator<Item = (&'a str, &'a T)>>(
+    iter: I,
+) -> Value {
+    Value::Map(Arc::new(
+        iter.into_iter()
+            .map(|(k, v)| (Arc::from(k), v.to_value()))
+            .collect(),
+    ))
+}
 
 impl<T: ToValue> ToValue for [T] {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
 impl<T: ToValue, const N: usize> ToValue for [T; N] {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
 impl<T: ToValue> ToValue for Vec<T> {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
 impl<T: ToValue> ToValue for alloc::collections::VecDeque<T> {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
 impl<T: ToValue> ToValue for alloc::collections::LinkedList<T> {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
 impl<T: ToValue> ToValue for alloc::collections::BTreeSet<T> {
     fn to_value(&self) -> Value {
-        Value::List(
-            self.iter()
-                .map(ToValue::to_value)
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        list_from_iter(self.iter())
     }
 }
 
@@ -611,51 +589,31 @@ impl<T: ToValue> ToValue for std::collections::HashSet<T> {
     }
 }
 
-// ─── Map-like collection impls ──────────────────────────────────────────
-
 impl<T: ToValue> ToValue for BTreeMap<String, T> {
     fn to_value(&self) -> Value {
-        Value::Map(Arc::new(
-            self.iter()
-                .map(|(k, v)| (Arc::from(k.as_str()), v.to_value()))
-                .collect(),
-        ))
+        map_from_iter_str(self.iter().map(|(k, v)| (k.as_str(), v)))
     }
 }
 
 impl<T: ToValue> ToValue for BTreeMap<&str, T> {
     fn to_value(&self) -> Value {
-        Value::Map(Arc::new(
-            self.iter()
-                .map(|(k, v)| (Arc::from(*k), v.to_value()))
-                .collect(),
-        ))
+        map_from_iter_str(self.iter().map(|(k, v)| (*k, v)))
     }
 }
 
 #[cfg(feature = "std")]
 impl<T: ToValue> ToValue for std::collections::HashMap<String, T> {
     fn to_value(&self) -> Value {
-        Value::Map(Arc::new(
-            self.iter()
-                .map(|(k, v)| (Arc::from(k.as_str()), v.to_value()))
-                .collect(),
-        ))
+        map_from_iter_str(self.iter().map(|(k, v)| (k.as_str(), v)))
     }
 }
 
 #[cfg(feature = "std")]
 impl<T: ToValue> ToValue for std::collections::HashMap<&str, T> {
     fn to_value(&self) -> Value {
-        Value::Map(Arc::new(
-            self.iter()
-                .map(|(k, v)| (Arc::from(*k), v.to_value()))
-                .collect(),
-        ))
+        map_from_iter_str(self.iter().map(|(k, v)| (*k, v)))
     }
 }
-
-// ─── From conversions for common types ─────────────────────────────────
 
 impl From<&str> for Value {
     fn from(s: &str) -> Self {
@@ -731,8 +689,6 @@ impl From<std::collections::HashMap<String, Value>> for Value {
         ))
     }
 }
-
-// ─── Convenience macro for building Value::Map literals ──────────────────
 
 /// Creates a [`Value::Map`] from key-value pairs, similar to Go's map literals.
 ///

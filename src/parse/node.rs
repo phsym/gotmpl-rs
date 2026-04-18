@@ -179,7 +179,7 @@ pub enum Expr {
 
     /// A function or method identifier (e.g., `printf`, `len`).
     ///
-    /// Resolved to a [`Func`](crate::Func) during execution.
+    /// Resolved to a [`ValueFunc`](crate::ValueFunc) during execution.
     Identifier(Pos, Arc<str>),
 
     /// A string literal (`"hello"` or `` `raw` ``).

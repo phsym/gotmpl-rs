@@ -39,10 +39,18 @@ fn parse_number(s: &str) -> Option<Number> {
 /// assert_eq!(tree.nodes.len(), 3); // Text, Action, Text
 /// assert!(defines.is_empty());
 /// ```
+/// Maximum nesting depth (for `{{if}}`/`{{with}}`/`{{range}}`/`{{block}}`
+/// bodies and parenthesised pipelines) allowed during parsing. Prevents
+/// attacker-controlled templates from blowing the thread stack. Chosen to
+/// stay well under Rust's default 2 MB thread stack given ~13 KB per
+/// recursive parser frame in debug builds.
+const MAX_PARSE_DEPTH: usize = 100;
+
 pub struct Parser<'a> {
     tokens: Vec<Token<'a>>,
     pos: usize,
     source: &'a str,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -61,7 +69,24 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             source,
+            depth: 0,
         })
+    }
+
+    fn enter(&mut self) -> Result<()> {
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            return Err(TemplateError::Parse {
+                line: 0,
+                col: 0,
+                message: alloc::format!("template nesting depth exceeded {}", MAX_PARSE_DEPTH),
+            });
+        }
+        Ok(())
+    }
+
+    fn leave(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
     }
 
     /// Parse the entire template into an AST.
@@ -80,8 +105,7 @@ impl<'a> Parser<'a> {
         Ok((list, defines))
     }
 
-    // ─── Token navigation ────────────────────────────────────────────
-
+    // Token navigation
     fn peek(&self) -> &Token<'a> {
         &self.tokens[self.pos]
     }
@@ -135,9 +159,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // ─── parse_list: the core loop ──────────────────────────────────
-
+    // parse_list: the core loop
     fn parse_list(&mut self, defines: &mut Vec<DefineNode>) -> Result<ListNode> {
+        self.enter()?;
         let pos = self.cur_pos();
         let mut nodes = Vec::new();
 
@@ -207,21 +231,26 @@ impl<'a> Parser<'a> {
                     }
                 }
                 _ => {
+                    self.leave();
                     return Err(self.error(format!("unexpected token: {:?}", self.peek().kind)));
                 }
             }
         }
 
+        self.leave();
         Ok(ListNode { pos, nodes })
     }
 
-    // ─── Control structure parsers ──────────────────────────────────
-
-    fn parse_branch(&mut self, defines: &mut Vec<DefineNode>) -> Result<BranchNode> {
+    // Control structure parsers
+    fn parse_branch(
+        &mut self,
+        defines: &mut Vec<DefineNode>,
+        allow_multi_decl: bool,
+    ) -> Result<BranchNode> {
         let pos = self.cur_pos();
         self.next();
 
-        let pipe = self.parse_pipeline(true)?;
+        let pipe = self.parse_pipeline_full(true, allow_multi_decl)?;
         self.expect_close_delim()?;
 
         let body = self.parse_list(defines)?;
@@ -261,15 +290,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_if(&mut self, defines: &mut Vec<DefineNode>) -> Result<Node> {
-        Ok(Node::If(self.parse_branch(defines)?))
+        Ok(Node::If(self.parse_branch(defines, false)?))
     }
 
     fn parse_range(&mut self, defines: &mut Vec<DefineNode>) -> Result<Node> {
-        Ok(Node::Range(self.parse_branch(defines)?))
+        Ok(Node::Range(self.parse_branch(defines, true)?))
     }
 
     fn parse_with(&mut self, defines: &mut Vec<DefineNode>) -> Result<Node> {
-        Ok(Node::With(self.parse_branch(defines)?))
+        Ok(Node::With(self.parse_branch(defines, false)?))
     }
 
     fn parse_define(&mut self, defines: &mut Vec<DefineNode>) -> Result<DefineNode> {
@@ -349,9 +378,16 @@ impl<'a> Parser<'a> {
         Ok((tmpl, define))
     }
 
-    // ─── Pipeline and command parsing ───────────────────────────────
-
+    // Pipeline and command parsing
     fn parse_pipeline(&mut self, allow_decl: bool) -> Result<PipeNode> {
+        self.parse_pipeline_full(allow_decl, false)
+    }
+
+    fn parse_pipeline_full(
+        &mut self,
+        allow_decl: bool,
+        allow_multi_decl: bool,
+    ) -> Result<PipeNode> {
         let pos = self.cur_pos();
         let mut decl = Vec::new();
         let mut is_assign = false;
@@ -380,6 +416,13 @@ impl<'a> Parser<'a> {
             } else {
                 self.pos = saved;
             }
+        }
+
+        if !allow_multi_decl && decl.len() > 1 {
+            return Err(self.error(format!(
+                "cannot assign {} variables outside a range pipeline",
+                decl.len()
+            )));
         }
 
         let mut commands = Vec::new();
@@ -414,7 +457,10 @@ impl<'a> Parser<'a> {
                 TokenKind::LeftParen => {
                     let paren_pos = self.cur_pos();
                     self.next();
-                    let pipe = self.parse_pipeline(false)?;
+                    self.enter()?;
+                    let pipe_result = self.parse_pipeline(false);
+                    self.leave();
+                    let pipe = pipe_result?;
                     self.expect(TokenKind::RightParen)?;
                     let rparen = &self.tokens[self.pos - 1];
                     let mut chain_end = rparen.pos + 1;
@@ -551,8 +597,7 @@ impl<'a> Parser<'a> {
             .collect()
     }
 
-    // ─── Delimiter helpers ──────────────────────────────────────────
-
+    // Delimiter helpers
     fn expect_close_delim(&mut self) -> Result<()> {
         let tok = self.next();
         match tok.kind {

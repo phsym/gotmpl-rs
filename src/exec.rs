@@ -29,15 +29,17 @@ use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::error::{Result, TemplateError};
-use crate::funcs::Func;
 use crate::parse::{BranchNode, CommandNode, Expr, ListNode, Node, Number, PipeNode, TemplateNode};
 use crate::value::Value;
+use crate::value::ValueFunc;
 
-/// Maximum recursion depth for `{{template}}` calls.
+/// Maximum total recursion depth across `{{template}}` invocations and
+/// nested `{{if}}`/`{{with}}`/`{{range}}` bodies during execution.
 ///
-/// Go uses 100,000 but Rust's default stack is smaller. 1,000 is safe and
-/// still far beyond any reasonable template nesting.
-const MAX_EXEC_DEPTH: usize = 1_000;
+/// Go uses 100,000; Rust's default thread stack is smaller (2 MB for test
+/// threads). 200 gives comfortable headroom on a 2 MB stack and is far
+/// beyond any reasonable template nesting.
+const MAX_EXEC_DEPTH: usize = 200;
 
 /// Controls behavior when accessing a missing key on a [`Value::Map`].
 ///
@@ -57,9 +59,10 @@ pub enum MissingKey {
     /// Return [`Value::Nil`] for missing keys (the default).
     #[default]
     Invalid,
-    /// Return [`Value::Nil`] for missing keys (same as `Invalid`).
+    /// Return [`Value::Nil`] for missing keys. Kept as a distinct variant
+    /// to mirror Go's `{{options "missingkey=zero"}}` directive.
     ZeroValue,
-    /// Return a [`TemplateError::Exec`] for missing keys.
+    /// Return a [`TemplateError::MissingKey`] for missing keys.
     Error,
 }
 
@@ -88,7 +91,7 @@ impl core::str::FromStr for MissingKey {
     }
 }
 
-// ─── Internal control-flow signaling ────────────────────────────────────
+// Internal control-flow signaling
 //
 // `{{break}}` and `{{continue}}` are not errors, they're control-flow
 // signals caught by the range walker. We keep them out of the public
@@ -181,6 +184,10 @@ impl VarScope {
     }
 }
 
+/// Default per-execution iteration budget across all `{{range}}` loops.
+/// Caps attacker-controlled `{{range 10000000000}}` / nested-range DoS.
+pub(crate) const DEFAULT_MAX_RANGE_ITERS: u64 = 10_000_000;
+
 /// The template execution context.
 ///
 /// Walks the AST produced by the [`Parser`](crate::parse::Parser), evaluating
@@ -188,11 +195,12 @@ impl VarScope {
 ///
 /// Created internally by [`Template::execute`](crate::Template::execute).
 pub struct Executor<'a> {
-    funcs: &'a BTreeMap<String, Func>,
-    templates: &'a BTreeMap<String, ListNode>,
+    funcs: &'a BTreeMap<String, ValueFunc>,
+    templates: &'a BTreeMap<String, Arc<ListNode>>,
     vars: VarScope,
     depth: usize,
     missing_key: MissingKey,
+    range_iters_remaining: u64,
 }
 
 /// Returns a short human-readable name for an expression, used in error messages.
@@ -219,6 +227,10 @@ fn expr_name(expr: &Expr) -> &'static str {
 macro_rules! range_loop {
     ($self:expr, $w:expr, $branch:expr, $iter:expr) => {
         for (idx_val, item) in $iter {
+            if $self.range_iters_remaining == 0 {
+                return Err(TemplateError::RangeIterLimit.into());
+            }
+            $self.range_iters_remaining -= 1;
             $self.vars.push();
             if $branch.pipe.is_assign {
                 // Assignment form ($v = range ...): modify existing variables
@@ -266,8 +278,8 @@ impl<'a> Executor<'a> {
     /// user-defined functions. The `templates` map holds named templates from
     /// `{{define}}` blocks.
     pub fn new(
-        funcs: &'a BTreeMap<String, Func>,
-        templates: &'a BTreeMap<String, ListNode>,
+        funcs: &'a BTreeMap<String, ValueFunc>,
+        templates: &'a BTreeMap<String, Arc<ListNode>>,
     ) -> Self {
         Executor {
             funcs,
@@ -275,12 +287,19 @@ impl<'a> Executor<'a> {
             vars: VarScope::new(),
             depth: 0,
             missing_key: MissingKey::default(),
+            range_iters_remaining: DEFAULT_MAX_RANGE_ITERS,
         }
     }
 
     /// Set the [`MissingKey`] behavior for this executor.
     pub fn set_missing_key(&mut self, mk: MissingKey) {
         self.missing_key = mk;
+    }
+
+    /// Set the total number of `{{range}}` iterations allowed for this
+    /// execution (across all nested ranges). Zero disables the limit.
+    pub fn set_max_range_iters(&mut self, n: u64) {
+        self.range_iters_remaining = if n == 0 { u64::MAX } else { n };
     }
 
     /// Execute the template tree with the given data, writing output to `writer`.
@@ -308,8 +327,7 @@ impl<'a> Executor<'a> {
         })
     }
 
-    // ─── AST walker ──────────────────────────────────────────────────
-
+    // AST walker
     fn walk<W: Write>(&mut self, w: &mut W, list: &ListNode, dot: &Value) -> ExecResult<()> {
         for node in &list.nodes {
             self.walk_node(w, node, dot)?;
@@ -329,10 +347,10 @@ impl<'a> Executor<'a> {
                 if action.pipe.decl.is_empty() {
                     // Go's template engine prints "<no value>" for nil/missing
                     // values, distinct from fmt.Sprint(nil) which prints "<nil>".
-                    if matches!(val, Value::Nil) {
-                        w.write_str("<no value>")?;
-                    } else {
-                        write!(w, "{}", val)?;
+                    match val {
+                        Value::Nil => w.write_str("<no value>")?,
+                        Value::String(s) => w.write_str(&s)?,
+                        other => write!(w, "{}", other)?,
                     }
                 }
                 Ok(())
@@ -348,23 +366,33 @@ impl<'a> Executor<'a> {
         }
     }
 
-    // ─── Control flow ────────────────────────────────────────────────
+    // Control flow
+    fn check_depth(&self) -> ExecResult<()> {
+        if self.depth > MAX_EXEC_DEPTH {
+            return Err(TemplateError::RecursionLimit.into());
+        }
+        Ok(())
+    }
 
     fn walk_if<W: Write>(&mut self, w: &mut W, branch: &BranchNode, dot: &Value) -> ExecResult<()> {
-        let val = self.eval_pipeline(dot, &branch.pipe)?;
-        if val.is_truthy() {
-            self.vars.push();
-            let result = self.walk(w, &branch.body, dot);
-            self.vars.pop();
-            result
-        } else if let Some(ref else_body) = branch.else_body {
-            self.vars.push();
-            let result = self.walk(w, else_body, dot);
-            self.vars.pop();
-            result
-        } else {
-            Ok(())
-        }
+        self.depth += 1;
+        let depth_ok = self.check_depth();
+        self.vars.push();
+        let result = depth_ok.and_then(|()| match self.eval_pipeline(dot, &branch.pipe) {
+            Ok(val) => {
+                if val.is_truthy() {
+                    self.walk(w, &branch.body, dot)
+                } else if let Some(ref else_body) = branch.else_body {
+                    self.walk(w, else_body, dot)
+                } else {
+                    Ok(())
+                }
+            }
+            Err(e) => Err(e),
+        });
+        self.vars.pop();
+        self.depth -= 1;
+        result
     }
 
     fn walk_with<W: Write>(
@@ -373,21 +401,24 @@ impl<'a> Executor<'a> {
         branch: &BranchNode,
         dot: &Value,
     ) -> ExecResult<()> {
-        let val = self.eval_pipeline(dot, &branch.pipe)?;
-        if val.is_truthy() {
-            // With sets dot to the pipeline value
-            self.vars.push();
-            let result = self.walk(w, &branch.body, &val);
-            self.vars.pop();
-            result
-        } else if let Some(ref else_body) = branch.else_body {
-            self.vars.push();
-            let result = self.walk(w, else_body, dot);
-            self.vars.pop();
-            result
-        } else {
-            Ok(())
-        }
+        self.depth += 1;
+        let depth_ok = self.check_depth();
+        self.vars.push();
+        let result = depth_ok.and_then(|()| match self.eval_pipeline(dot, &branch.pipe) {
+            Ok(val) => {
+                if val.is_truthy() {
+                    self.walk(w, &branch.body, &val)
+                } else if let Some(ref else_body) = branch.else_body {
+                    self.walk(w, else_body, dot)
+                } else {
+                    Ok(())
+                }
+            }
+            Err(e) => Err(e),
+        });
+        self.vars.pop();
+        self.depth -= 1;
+        result
     }
 
     fn walk_range<W: Write>(
@@ -396,7 +427,24 @@ impl<'a> Executor<'a> {
         branch: &BranchNode,
         dot: &Value,
     ) -> ExecResult<()> {
-        let val = self.eval_pipeline(dot, &branch.pipe)?;
+        self.depth += 1;
+        let result = self
+            .check_depth()
+            .and_then(|()| self.walk_range_inner(w, branch, dot));
+        self.depth -= 1;
+        result
+    }
+
+    fn walk_range_inner<W: Write>(
+        &mut self,
+        w: &mut W,
+        branch: &BranchNode,
+        dot: &Value,
+    ) -> ExecResult<()> {
+        // `range` binds its own per-iteration vars via `range_loop!`; use the
+        // decl-free evaluator so pipe.decl names do not leak into the outer
+        // scope or get pre-bound to the pipeline's final value.
+        let val = self.eval_pipeline_value(dot, &branch.pipe)?;
 
         match &val {
             Value::List(items) if items.is_empty() => {
@@ -452,7 +500,7 @@ impl<'a> Executor<'a> {
                 }
             }
             other => {
-                return Err(TemplateError::NotIterable(format!("{}", other)).into());
+                return Err(TemplateError::NotIterable(other.type_name().to_string()).into());
             }
         }
 
@@ -466,57 +514,75 @@ impl<'a> Executor<'a> {
         dot: &Value,
     ) -> ExecResult<()> {
         self.depth += 1;
-        if self.depth > MAX_EXEC_DEPTH {
-            self.depth -= 1;
-            return Err(TemplateError::Exec(format!(
-                "exceeded maximum template call depth ({})",
-                MAX_EXEC_DEPTH
-            ))
-            .into());
-        }
+        let result = self
+            .check_depth()
+            .and_then(|()| self.walk_template_inner(w, tmpl, dot));
+        self.depth -= 1;
+        result
+    }
 
+    fn walk_template_inner<W: Write>(
+        &mut self,
+        w: &mut W,
+        tmpl: &TemplateNode,
+        dot: &Value,
+    ) -> ExecResult<()> {
         let new_dot = if let Some(ref pipe) = tmpl.pipe {
             self.eval_pipeline(dot, pipe)?
         } else {
             dot.clone()
         };
 
-        let tree = self
-            .templates
-            .get(tmpl.name.as_ref())
-            .ok_or_else(|| TemplateError::UndefinedTemplate(tmpl.name.to_string()))?
-            .clone();
+        let tree = Arc::clone(
+            self.templates
+                .get(tmpl.name.as_ref())
+                .ok_or_else(|| TemplateError::UndefinedTemplate(tmpl.name.to_string()))?,
+        );
 
         self.vars.push();
         self.vars.set("$", new_dot.clone());
         let result = self.walk(w, &tree, &new_dot);
         self.vars.pop();
-        self.depth -= 1;
         result
     }
 
-    // ─── Pipeline and expression evaluation ──────────────────────────
-
-    fn eval_pipeline(&mut self, dot: &Value, pipe: &PipeNode) -> ExecResult<Value> {
+    // Pipeline and expression evaluation
+    fn eval_pipeline_value(&mut self, dot: &Value, pipe: &PipeNode) -> ExecResult<Value> {
         let mut val = Value::Nil;
-
         for (i, cmd) in pipe.commands.iter().enumerate() {
-            // For piped commands, the previous result becomes the last argument
-            let prev = if i > 0 { Some(val.clone()) } else { None };
+            // Move the previous stage's result rather than cloning — it is
+            // only used by the next command, and any downstream need for it
+            // is already covered by the new `val` we're about to assign.
+            let prev = if i > 0 {
+                Some(core::mem::replace(&mut val, Value::Nil))
+            } else {
+                None
+            };
             val = self.eval_command(dot, cmd, prev)?;
         }
+        Ok(val)
+    }
 
-        // Handle variable declarations
-        if !pipe.decl.is_empty() {
-            for var_name in &pipe.decl {
+    fn eval_pipeline(&mut self, dot: &Value, pipe: &PipeNode) -> ExecResult<Value> {
+        let val = self.eval_pipeline_value(dot, pipe)?;
+        match pipe.decl.len() {
+            0 => {}
+            1 => {
+                let name = &pipe.decl[0];
                 if pipe.is_assign {
-                    self.vars.assign(var_name, val.clone());
+                    self.vars.assign(name, val.clone());
                 } else {
-                    self.vars.set(var_name, val.clone());
+                    self.vars.set(name, val.clone());
                 }
             }
+            n => {
+                return Err(TemplateError::Exec(format!(
+                    "cannot assign {} variables outside a range pipeline",
+                    n
+                ))
+                .into());
+            }
         }
-
         Ok(val)
     }
 
@@ -656,9 +722,10 @@ impl<'a> Executor<'a> {
         match val.field(name) {
             Some(v) => Ok(v.clone()),
             None if matches!(val, Value::Map(_)) => match self.missing_key {
-                MissingKey::Error => {
-                    Err(TemplateError::Exec(format!("map has no entry for key {:?}", name)).into())
+                MissingKey::Error => Err(TemplateError::MissingKey {
+                    key: name.to_string(),
                 }
+                .into()),
                 _ => Ok(Value::Nil),
             },
             None if matches!(val, Value::Nil) => Ok(Value::Nil),
@@ -672,20 +739,19 @@ impl<'a> Executor<'a> {
     }
 
     #[cfg(feature = "std")]
-    fn invoke_func(&self, name: &str, func: &Func, args: &[Value]) -> ExecResult<Value> {
+    fn invoke_func(&self, name: &str, func: &ValueFunc, args: &[Value]) -> ExecResult<Value> {
         match catch_unwind(AssertUnwindSafe(|| func(args))) {
             Ok(result) => result.map_err(ExecSignal::from),
-            Err(payload) => Err(TemplateError::Exec(format!(
-                "error calling {}: {}",
-                name,
-                panic_payload_to_string(payload)
-            ))
+            Err(payload) => Err(TemplateError::FuncPanic {
+                name: name.to_string(),
+                message: panic_payload_to_string(payload),
+            }
             .into()),
         }
     }
 
     #[cfg(not(feature = "std"))]
-    fn invoke_func(&self, _name: &str, func: &Func, args: &[Value]) -> ExecResult<Value> {
+    fn invoke_func(&self, _name: &str, func: &ValueFunc, args: &[Value]) -> ExecResult<Value> {
         func(args).map_err(ExecSignal::from)
     }
 
@@ -768,9 +834,9 @@ mod tests {
         let (tree, defines) = parser.parse().unwrap();
 
         let funcs = builtins();
-        let mut templates: BTreeMap<String, ListNode> = BTreeMap::new();
+        let mut templates: BTreeMap<String, Arc<ListNode>> = BTreeMap::new();
         for def in &defines {
-            templates.insert(def.name.to_string(), def.body.clone());
+            templates.insert(def.name.to_string(), Arc::new(def.body.clone()));
         }
 
         let mut executor = Executor::new(&funcs, &templates);

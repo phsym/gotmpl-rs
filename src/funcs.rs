@@ -1,7 +1,7 @@
 //! Built-in template functions, equivalent to Go's `text/template` builtins.
 //!
 //! In Go, template functions are stored in a `FuncMap` and called via reflection.
-//! In Rust, we use boxed closures with the signature [`Func`].
+//! In Rust, we use boxed closures with the signature [`ValueFunc`].
 //!
 //! All built-in functions are registered automatically when creating a
 //! [`Template`](crate::Template). Custom functions can be added via
@@ -16,6 +16,21 @@
 //! | Output | `print`, `printf`, `println` |
 //! | Data | `len`, `index`, `slice`, `call` |
 //! | Escaping | `html`, `js`, `urlquery` |
+//!
+//! # Escape-function security notes
+//!
+//! The escape builtins match Go's `text/template` parity exactly, which is
+//! **not** enough for all HTML/JS contexts:
+//!
+//! - `html` does **not** escape backticks and is only safe inside
+//!   double-quoted attribute values or text nodes — never in unquoted
+//!   attributes, `<script>` blocks, or inline event handlers.
+//! - `js` does **not** escape U+2028 / U+2029 (line / paragraph separator),
+//!   which terminate string literals when embedded in `<script>` tags.
+//! - `urlquery` percent-encodes for query strings; it is not a replacement
+//!   for full URL-construction logic when building paths.
+//!
+//! For context-aware escaping use a dedicated `html/template`-style crate.
 
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -27,29 +42,16 @@ use core::fmt::Write;
 
 use crate::error::{Result, TemplateError};
 use crate::go;
-use crate::value::Value;
-
-/// The function type used by the template engine.
-///
-/// All template functions, both built-in and user-defined, share
-/// this signature: they receive arguments as a [`Value`] slice and return a
-/// [`Result<Value>`](crate::error::Result).
-///
-/// Uses [`Arc`] so that functions can be shared across cloned templates.
-/// Register custom functions via [`Template::func`](crate::Template::func).
-pub type Func = Arc<dyn Fn(&[Value]) -> Result<Value> + Send + Sync>;
+use crate::value::{Value, ValueFunc};
 
 /// Returns a [`BTreeMap`] containing all built-in template functions.
 ///
-/// This is called automatically by [`Template::new`](crate::Template::new).
-/// The returned map can be extended with custom functions via
-/// [`Template::func`](crate::Template::func).
-///
-/// See the module source for the full list of built-in functions.
-pub fn builtins() -> BTreeMap<String, Func> {
-    let mut m: BTreeMap<String, Func> = BTreeMap::new();
+/// Called automatically by [`Template::new`](crate::Template::new); extend the
+/// result with [`Template::func`](crate::Template::func) for custom functions.
+pub fn builtins() -> BTreeMap<String, ValueFunc> {
+    let mut m: BTreeMap<String, ValueFunc> = BTreeMap::new();
 
-    // ─── Comparison operators ────────────────────────────────────────
+    // Comparison operators
     // Go's eq can take 2+ args: eq x y z means x==y || x==z
 
     m.insert(
@@ -114,7 +116,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
         }),
     );
 
-    // ─── Logic ───────────────────────────────────────────────────────
+    // Logic
     // and: returns first falsy arg, or last arg if all truthy
     // or:  returns first truthy arg, or last arg if all falsy
     //
@@ -132,12 +134,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
                     return Ok(arg.clone());
                 }
             }
-            #[allow(
-                clippy::unwrap_used,
-                reason = "check_min_args guarantees args is non-empty"
-            )]
-            let last = args.last().unwrap().clone();
-            Ok(last)
+            Ok(args.last().cloned().unwrap_or(Value::Nil))
         }),
     );
 
@@ -150,12 +147,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
                     return Ok(arg.clone());
                 }
             }
-            #[allow(
-                clippy::unwrap_used,
-                reason = "check_min_args guarantees args is non-empty"
-            )]
-            let last = args.last().unwrap().clone();
-            Ok(last)
+            Ok(args.last().cloned().unwrap_or(Value::Nil))
         }),
     );
 
@@ -167,9 +159,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
         }),
     );
 
-    // ─── Output formatting ──────────────────────────────────────────
-    // Go's fmt.Sprint adds spaces between adjacent non-string operands.
-
+    // Output formatting
     m.insert(
         "print".into(),
         Arc::new(|args: &[Value]| {
@@ -210,8 +200,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
         }),
     );
 
-    // ─── Data access ─────────────────────────────────────────────────
-
+    // Data access
     m.insert(
         "len".into(),
         Arc::new(|args: &[Value]| {
@@ -332,8 +321,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
         }),
     );
 
-    // ─── HTML/JS/URL escaping ────────────────────────────────────────
-
+    // HTML/JS/URL escaping
     m.insert(
         "html".into(),
         Arc::new(|args: &[Value]| {
@@ -364,8 +352,7 @@ pub fn builtins() -> BTreeMap<String, Func> {
     m
 }
 
-// ─── Argument validation helpers ─────────────────────────────────────────
-
+// Argument validation helpers
 fn check_args(name: &str, args: &[Value], expected: usize) -> Result<()> {
     if args.len() != expected {
         return Err(TemplateError::ArgCount {

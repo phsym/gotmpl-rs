@@ -27,15 +27,27 @@ use core::fmt::Write;
 use crate::error::Result;
 use crate::value::Value;
 
-// ─── fmt.Sprint spacing ─────────────────────────────────────────────────
-
+// fmt.Sprint spacing
 /// Returns `true` when Go's `fmt.Sprint` would insert a space between two
 /// adjacent arguments (i.e. neither is a string).
 pub(crate) fn needs_space(prev: &Value, next: &Value) -> bool {
     !matches!(prev, Value::String(_)) && !matches!(next, Value::String(_))
 }
 
-// ─── sprintf ────────────────────────────────────────────────────────────
+// sprintf
+/// Maximum allowed printf width or precision. Larger values are clamped to
+/// this cap to prevent attacker-controlled format strings from triggering
+/// multi-gigabyte padding allocations. Also stays below Rust's internal
+/// formatter count limit (u16::MAX), which panics on larger widths.
+pub(crate) const PRINTF_MAX_LEN: usize = u16::MAX as usize;
+
+fn clamp_fmt_len(n: usize) -> usize {
+    if n > PRINTF_MAX_LEN {
+        PRINTF_MAX_LEN
+    } else {
+        n
+    }
+}
 
 /// Parsed printf format specifier (`flags`, `width`, `precision`).
 ///
@@ -93,7 +105,7 @@ impl FmtSpec {
             w.push(c);
         }
         if !w.is_empty() {
-            spec.width = w.parse().ok();
+            spec.width = w.parse().ok().map(clamp_fmt_len);
         }
         // Precision
         if chars.peek() == Some(&'.') {
@@ -105,7 +117,7 @@ impl FmtSpec {
             spec.precision = Some(if p.is_empty() {
                 0
             } else {
-                p.parse().unwrap_or(0)
+                clamp_fmt_len(p.parse().unwrap_or(0))
             });
         }
         spec
@@ -203,108 +215,155 @@ pub(crate) fn sprintf(fmt_str: &str, args: &[Value]) -> Result<String> {
                 }
                 result.push_str(&spec.pad(&s, false));
             }
-            'd' => {
-                let n = arg.as_int().unwrap_or(0);
-                let s = spec.format_signed(n);
-                result.push_str(&spec.pad(&s, true));
-            }
-            'f' => {
-                let f = arg.as_float().unwrap_or(0.0);
-                let prec = spec.precision.unwrap_or(6);
-                let s = if spec.plus {
-                    if f >= 0.0 {
-                        format!("+{:.prec$}", f)
+            'd' => match arg.as_int() {
+                Some(n) => {
+                    let s = spec.format_signed(n);
+                    result.push_str(&spec.pad(&s, true));
+                }
+                None => write_bad_verb(&mut result, verb, arg),
+            },
+            'f' => match arg.as_float() {
+                Some(f) => {
+                    let prec = spec.precision.unwrap_or(6);
+                    let s = if spec.plus {
+                        if f >= 0.0 {
+                            format!("+{:.prec$}", f)
+                        } else {
+                            format!("{:.prec$}", f)
+                        }
+                    } else if spec.space {
+                        if f >= 0.0 {
+                            format!(" {:.prec$}", f)
+                        } else {
+                            format!("{:.prec$}", f)
+                        }
                     } else {
                         format!("{:.prec$}", f)
-                    }
-                } else if spec.space {
-                    if f >= 0.0 {
-                        format!(" {:.prec$}", f)
+                    };
+                    result.push_str(&spec.pad(&s, true));
+                }
+                None => write_bad_verb(&mut result, verb, arg),
+            },
+            'e' | 'E' => match arg.as_float() {
+                Some(f) => {
+                    let prec = spec.precision.unwrap_or(6);
+                    let raw = if verb == 'e' {
+                        format!("{:.prec$e}", f)
                     } else {
-                        format!("{:.prec$}", f)
-                    }
-                } else {
-                    format!("{:.prec$}", f)
-                };
-                result.push_str(&spec.pad(&s, true));
-            }
-            'e' | 'E' => {
-                let f = arg.as_float().unwrap_or(0.0);
-                let prec = spec.precision.unwrap_or(6);
-                let raw = if verb == 'e' {
-                    format!("{:.prec$e}", f)
-                } else {
-                    format!("{:.prec$E}", f)
-                };
-                let s = go_normalize_sci(&raw);
-                let s = apply_float_sign(s, f, &spec);
-                result.push_str(&spec.pad(&s, true));
-            }
-            'g' | 'G' => {
-                let f = arg.as_float().unwrap_or(0.0);
-                let s = if f.is_nan() || f.is_infinite() {
-                    format!("{}", f)
-                } else if let Some(prec) = spec.precision {
-                    format_g_with_precision(f, prec.max(1), verb == 'G')
-                } else {
-                    format_g_default(f, verb == 'G')
-                };
-                let s = apply_float_sign(s, f, &spec);
-                result.push_str(&spec.pad(&s, true));
-            }
+                        format!("{:.prec$E}", f)
+                    };
+                    let s = go_normalize_sci(&raw);
+                    let s = apply_float_sign(s, f, &spec);
+                    result.push_str(&spec.pad(&s, true));
+                }
+                None => write_bad_verb(&mut result, verb, arg),
+            },
+            'g' | 'G' => match arg.as_float() {
+                Some(f) => {
+                    let s = if f.is_nan() || f.is_infinite() {
+                        format!("{}", f)
+                    } else if let Some(prec) = spec.precision {
+                        format_g_with_precision(f, prec.max(1), verb == 'G')
+                    } else {
+                        format_g_default(f, verb == 'G')
+                    };
+                    let s = apply_float_sign(s, f, &spec);
+                    result.push_str(&spec.pad(&s, true));
+                }
+                None => write_bad_verb(&mut result, verb, arg),
+            },
             'v' => {
                 let s = format!("{}", arg);
                 result.push_str(&spec.pad(&s, false));
             }
-            'q' => {
-                let raw = match arg {
-                    Value::String(s) => s,
-                    _ => "",
-                };
-                let display;
-                let raw = if !matches!(arg, Value::String(_)) {
-                    display = format!("{}", arg);
-                    display.as_str()
-                } else {
-                    raw
-                };
-                let s = if spec.hash {
-                    go_backquote(raw).unwrap_or_else(|| go_quote(raw))
-                } else {
-                    go_quote(raw)
-                };
-                result.push_str(&spec.pad(&s, false));
-            }
-            't' => {
-                let s = match arg {
-                    Value::Bool(b) => format!("{}", b),
-                    other => format!("{}", other),
-                };
-                result.push_str(&spec.pad(&s, false));
-            }
-            'x' | 'X' | 'o' | 'b' => {
-                let n = arg.as_int().unwrap_or(0);
-                let s = format_int_base(n, &verb.to_string(), &spec);
-                result.push_str(&spec.pad(&s, true));
-            }
-            'c' => {
-                let n = arg.as_int().unwrap_or(0);
-                if let Some(c) = char::from_u32(n as u32) {
-                    result.push(c);
+            'q' => match arg {
+                Value::String(s) => {
+                    let formatted = if spec.hash {
+                        go_backquote(s).unwrap_or_else(|| go_quote(s))
+                    } else {
+                        go_quote(s)
+                    };
+                    result.push_str(&spec.pad(&formatted, false));
                 }
-            }
-            _ => {
-                result.push('%');
-                result.push(verb);
-            }
+                Value::Int(n) => {
+                    // Go's %q on an int emits a single-quoted rune literal.
+                    if let Some(c) = u32::try_from(*n).ok().and_then(char::from_u32) {
+                        let s = format!("'{}'", c.escape_default());
+                        result.push_str(&spec.pad(&s, false));
+                    } else {
+                        write_bad_verb(&mut result, verb, arg);
+                    }
+                }
+                _ => write_bad_verb(&mut result, verb, arg),
+            },
+            't' => match arg {
+                Value::Bool(b) => {
+                    let s = if *b { "true" } else { "false" };
+                    result.push_str(&spec.pad(s, false));
+                }
+                _ => write_bad_verb(&mut result, verb, arg),
+            },
+            'x' | 'X' | 'o' | 'b' => match arg {
+                Value::String(s) if verb == 'x' || verb == 'X' => {
+                    let formatted = format_string_hex(s, verb == 'X', &spec);
+                    result.push_str(&spec.pad(&formatted, false));
+                }
+                _ => match arg.as_int() {
+                    Some(n) => {
+                        let s = format_int_base(n, &verb.to_string(), &spec);
+                        result.push_str(&spec.pad(&s, true));
+                    }
+                    None => write_bad_verb(&mut result, verb, arg),
+                },
+            },
+            'c' => match arg.as_int() {
+                Some(n) => match u32::try_from(n).ok().and_then(char::from_u32) {
+                    Some(c) => result.push(c),
+                    None => result.push('\u{FFFD}'),
+                },
+                None => write_bad_verb(&mut result, verb, arg),
+            },
+            _ => write_bad_verb(&mut result, verb, arg),
         }
     }
 
     Ok(result)
 }
 
-// ─── Quoting ────────────────────────────────────────────────────────────
+/// Emit Go's `%!verb(type=value)` marker for a type-mismatched or unknown verb.
+fn write_bad_verb(out: &mut String, verb: char, arg: &Value) {
+    let _ = write!(out, "%!{}({}=", verb, arg.type_name());
+    match arg {
+        Value::String(s) => out.push_str(s),
+        other => {
+            let _ = write!(out, "{}", other);
+        }
+    }
+    out.push(')');
+}
 
+/// `%x` / `%X` on strings: hex-encode each byte.
+///
+/// Go's precision on `%.Nx` for strings limits the number of *input bytes*
+/// consumed, yielding `2 * N` hex characters — not `N` hex characters.
+fn format_string_hex(s: &str, upper: bool, spec: &FmtSpec) -> String {
+    let bytes = s.as_bytes();
+    let take = spec
+        .precision
+        .map(|p| p.min(bytes.len()))
+        .unwrap_or(bytes.len());
+    let mut out = String::with_capacity(take * 2);
+    for b in &bytes[..take] {
+        let _ = if upper {
+            write!(out, "{:02X}", b)
+        } else {
+            write!(out, "{:02x}", b)
+        };
+    }
+    out
+}
+
+// Quoting
 /// Produce a Go-syntax double-quoted string literal (like `strconv.Quote`).
 ///
 /// Escapes backslash, double-quote, newline, tab, carriage-return, bell,
@@ -349,8 +408,7 @@ fn go_backquote(s: &str) -> Option<String> {
     Some(format!("`{}`", s))
 }
 
-// ─── Scientific notation normalization ──────────────────────────────────
-
+// Scientific notation normalization
 /// Normalize Rust's scientific notation to Go's format.
 ///
 /// Go always includes an explicit sign and at least 2 digits in the exponent:
@@ -398,7 +456,17 @@ fn strip_trailing_zeros_sci(s: &str) -> String {
     }
 }
 
-// ─── %g formatting ──────────────────────────────────────────────────────
+// %g formatting
+/// Decimal exponent of `f` as reported by its shortest scientific form.
+///
+/// Avoids the `log10().floor()` round-off that misclassifies values right at
+/// a power-of-ten boundary (e.g. `999999.999…` rounding up to `1e6`).
+fn decimal_exp(f: f64) -> i32 {
+    let s = format!("{:e}", f.abs());
+    s.find('e')
+        .and_then(|i| s[i + 1..].parse::<i32>().ok())
+        .unwrap_or(0)
+}
 
 /// Format a float with Go's `%g` default precision (shortest representation).
 ///
@@ -408,7 +476,7 @@ fn format_g_default(f: f64, upper: bool) -> String {
     if f == 0.0 {
         return (if f.is_sign_negative() { "-0" } else { "0" }).to_string();
     }
-    let exp = f.abs().log10().floor() as i32;
+    let exp = decimal_exp(f);
     if !(-4..6).contains(&exp) {
         let raw = format!("{:e}", f);
         let s = go_normalize_sci(&raw);
@@ -426,7 +494,7 @@ fn format_g_with_precision(f: f64, prec: usize, upper: bool) -> String {
     if f == 0.0 {
         return (if f.is_sign_negative() { "-0" } else { "0" }).to_string();
     }
-    let exp = f.abs().log10().floor() as i32;
+    let exp = decimal_exp(f);
     if exp < -4 || exp >= prec as i32 {
         let e_prec = prec.saturating_sub(1);
         let raw = format!("{:.prec$e}", f, prec = e_prec);
@@ -455,8 +523,7 @@ fn apply_float_sign(s: String, f: f64, spec: &FmtSpec) -> String {
     }
 }
 
-// ─── Integer base formatting ────────────────────────────────────────────
-
+// Integer base formatting
 /// Format a signed integer in a non-decimal base, using Go's conventions
 /// (sign is separate from magnitude: `-0xff`, not two's complement).
 fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> String {
@@ -494,8 +561,7 @@ fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> String {
     }
 }
 
-// ─── Escaping functions ─────────────────────────────────────────────────
-
+// Escaping functions
 /// HTML-escape a string, replacing `&`, `<`, `>`, `"`, `'`, and NUL bytes.
 ///
 /// Matches Go's `template.HTMLEscapeString`. NUL bytes are replaced with the
@@ -563,8 +629,7 @@ pub fn url_encode(s: &str) -> String {
     out
 }
 
-// ─── Hex float parsing ──────────────────────────────────────────────────
-
+// Hex float parsing
 /// Parse a hex float literal like `0x1.Fp10` or `-0x1p-2`.
 ///
 /// Used by the lexer to convert Go's hex-float syntax into an `f64`.
@@ -592,8 +657,8 @@ pub(crate) fn parse_hex_float(s: &str) -> Option<f64> {
         } else {
             u64::from_str_radix(frac_part, 16).ok()?
         };
-        let frac_bits = frac_part.len() as u32 * 4;
-        int_val as f64 + frac_val as f64 / (1u64 << frac_bits) as f64
+        let frac_bits = frac_part.len() as i32 * 4;
+        int_val as f64 + frac_val as f64 / (2f64).powi(frac_bits)
     } else {
         u64::from_str_radix(mantissa_str, 16).ok()? as f64
     };
@@ -616,8 +681,7 @@ mod tests {
         sprintf(fmt, args).unwrap()
     }
 
-    // ─── needs_space ────────────────────────────────────────────────
-
+    // needs_space
     #[test]
     fn needs_space_two_ints() {
         assert!(needs_space(&Value::Int(1), &Value::Int(2)));
@@ -642,8 +706,7 @@ mod tests {
         assert!(needs_space(&Value::Bool(true), &Value::Bool(false)));
     }
 
-    // ─── go_quote ───────────────────────────────────────────────────
-
+    // go_quote
     #[test]
     fn quote_simple() {
         assert_eq!(go_quote("hello"), r#""hello""#);
@@ -683,8 +746,7 @@ mod tests {
         assert_eq!(go_quote("caf\u{00e9}"), "\"caf\u{00e9}\"");
     }
 
-    // ─── go_backquote ───────────────────────────────────────────────
-
+    // go_backquote
     #[test]
     fn backquote_simple() {
         assert_eq!(go_backquote("hello"), Some("`hello`".into()));
@@ -713,8 +775,7 @@ mod tests {
         assert_eq!(go_backquote(""), Some("``".into()));
     }
 
-    // ─── go_normalize_sci ───────────────────────────────────────────
-
+    // go_normalize_sci
     #[test]
     fn normalize_positive_single_digit_exp() {
         assert_eq!(go_normalize_sci("1.5e0"), "1.5e+00");
@@ -756,8 +817,7 @@ mod tests {
         assert_eq!(go_normalize_sci("1.5e+2"), "1.5e+02");
     }
 
-    // ─── strip_trailing_zeros ───────────────────────────────────────
-
+    // strip_trailing_zeros
     #[test]
     fn strip_zeros_basic() {
         assert_eq!(strip_trailing_zeros("1.50000"), "1.5");
@@ -780,8 +840,7 @@ mod tests {
         assert_eq!(strip_trailing_zeros("5.000"), "5");
     }
 
-    // ─── strip_trailing_zeros_sci ───────────────────────────────────
-
+    // strip_trailing_zeros_sci
     #[test]
     fn strip_zeros_sci_basic() {
         assert_eq!(strip_trailing_zeros_sci("1.50000e+02"), "1.5e+02");
@@ -798,8 +857,7 @@ mod tests {
         assert_eq!(strip_trailing_zeros_sci("1.50000E+02"), "1.5E+02");
     }
 
-    // ─── format_g_default ───────────────────────────────────────────
-
+    // format_g_default
     #[test]
     fn g_default_zero() {
         assert_eq!(format_g_default(0.0, false), "0");
@@ -835,8 +893,7 @@ mod tests {
         assert_eq!(format_g_default(1e7, true), "1E+07");
     }
 
-    // ─── format_g_with_precision ────────────────────────────────────
-
+    // format_g_with_precision
     #[test]
     fn g_prec_basic() {
         assert_eq!(format_g_with_precision(3.5, 4, false), "3.5");
@@ -871,8 +928,7 @@ mod tests {
         assert_eq!(format_g_with_precision(1e7, 4, true), "1E+07");
     }
 
-    // ─── format_int_base ────────────────────────────────────────────
-
+    // format_int_base
     #[test]
     fn int_base_hex() {
         let spec = FmtSpec {
@@ -935,8 +991,7 @@ mod tests {
         assert_eq!(format_int_base(-255, "x", &spec), "-0xff");
     }
 
-    // ─── html_escape ────────────────────────────────────────────────
-
+    // html_escape
     #[test]
     fn html_basic() {
         assert_eq!(html_escape("<b>hi</b>"), "&lt;b&gt;hi&lt;/b&gt;");
@@ -967,8 +1022,7 @@ mod tests {
         assert_eq!(html_escape(""), "");
     }
 
-    // ─── js_escape ──────────────────────────────────────────────────
-
+    // js_escape
     #[test]
     fn js_basic() {
         assert_eq!(js_escape("It'd be nice."), "It\\'d be nice.");
@@ -1009,8 +1063,7 @@ mod tests {
         assert_eq!(js_escape(""), "");
     }
 
-    // ─── url_encode ─────────────────────────────────────────────────
-
+    // url_encode
     #[test]
     fn url_basic() {
         assert_eq!(url_encode("hello world"), "hello%20world");
@@ -1045,8 +1098,7 @@ mod tests {
         assert_eq!(url_encode(""), "");
     }
 
-    // ─── parse_hex_float ────────────────────────────────────────────
-
+    // parse_hex_float
     #[test]
     fn hex_float_basic() {
         assert_eq!(parse_hex_float("0x1.ep+2"), Some(7.5));
@@ -1088,8 +1140,7 @@ mod tests {
         assert_eq!(parse_hex_float(""), None);
     }
 
-    // ─── sprintf: %s ────────────────────────────────────────────────
-
+    // sprintf: %s
     #[test]
     fn sprintf_s_basic() {
         assert_eq!(sf("%s", &[Value::String("hello".into())]), "hello");
@@ -1114,8 +1165,7 @@ mod tests {
         assert_eq!(sf("%.10s", &[Value::String("hi".into())]), "hi");
     }
 
-    // ─── sprintf: %d ────────────────────────────────────────────────
-
+    // sprintf: %d
     #[test]
     fn sprintf_d_basic() {
         assert_eq!(sf("%d", &[Value::Int(42)]), "42");
@@ -1152,8 +1202,7 @@ mod tests {
         assert_eq!(sf("%+06d", &[Value::Int(42)]), "+00042");
     }
 
-    // ─── sprintf: %f ────────────────────────────────────────────────
-
+    // sprintf: %f
     #[test]
     fn sprintf_f_default_precision() {
         assert_eq!(sf("%f", &[Value::Float(1.5)]), "1.500000");
@@ -1178,8 +1227,7 @@ mod tests {
         assert_eq!(sf("% f", &[Value::Float(-1.5)]), "-1.500000");
     }
 
-    // ─── sprintf: %e / %E ───────────────────────────────────────────
-
+    // sprintf: %e / %E
     #[test]
     fn sprintf_e_default() {
         assert_eq!(sf("%e", &[Value::Float(1.5)]), "1.500000e+00");
@@ -1209,8 +1257,7 @@ mod tests {
         assert_eq!(sf("%e", &[Value::Float(0.0)]), "0.000000e+00");
     }
 
-    // ─── sprintf: %g / %G ───────────────────────────────────────────
-
+    // sprintf: %g / %G
     #[test]
     fn sprintf_g_default() {
         assert_eq!(sf("%g", &[Value::Float(3.5)]), "3.5");
@@ -1260,8 +1307,7 @@ mod tests {
         assert_eq!(sf("%g", &[Value::Float(-0.0)]), "-0");
     }
 
-    // ─── sprintf: %v ────────────────────────────────────────────────
-
+    // sprintf: %v
     #[test]
     fn sprintf_v() {
         assert_eq!(sf("%v", &[Value::Int(42)]), "42");
@@ -1270,8 +1316,7 @@ mod tests {
         assert_eq!(sf("%v", &[Value::Nil]), "<nil>");
     }
 
-    // ─── sprintf: %q ────────────────────────────────────────────────
-
+    // sprintf: %q
     #[test]
     fn sprintf_q_basic() {
         assert_eq!(sf("%q", &[Value::String("hello".into())]), r#""hello""#);
@@ -1297,8 +1342,7 @@ mod tests {
         assert_eq!(sf("%#q", &[Value::String("a\nb".into())]), r#""a\nb""#);
     }
 
-    // ─── sprintf: %t ────────────────────────────────────────────────
-
+    // sprintf: %t
     #[test]
     fn sprintf_t() {
         assert_eq!(sf("%t", &[Value::Bool(true)]), "true");
@@ -1306,12 +1350,11 @@ mod tests {
     }
 
     #[test]
-    fn sprintf_t_non_bool() {
-        assert_eq!(sf("%t", &[Value::Int(42)]), "42");
+    fn sprintf_t_non_bool_emits_bad_verb() {
+        assert_eq!(sf("%t", &[Value::Int(42)]), "%!t(int=42)");
     }
 
-    // ─── sprintf: %x / %X / %o / %b ────────────────────────────────
-
+    // sprintf: %x / %X / %o / %b
     #[test]
     fn sprintf_x_basic() {
         assert_eq!(sf("%x", &[Value::Int(255)]), "ff");
@@ -1346,16 +1389,14 @@ mod tests {
         assert_eq!(sf("%#b", &[Value::Int(10)]), "0b1010");
     }
 
-    // ─── sprintf: %c ────────────────────────────────────────────────
-
+    // sprintf: %c
     #[test]
     fn sprintf_c() {
         assert_eq!(sf("%c", &[Value::Int(65)]), "A");
         assert_eq!(sf("%c", &[Value::Int(0x1F600)]), "\u{1F600}"); // 😀
     }
 
-    // ─── sprintf: %% and mixed ──────────────────────────────────────
-
+    // sprintf: %% and mixed
     #[test]
     fn sprintf_percent_literal() {
         assert_eq!(sf("100%%", &[]), "100%");
@@ -1393,12 +1434,59 @@ mod tests {
     }
 
     #[test]
-    fn sprintf_unknown_verb() {
-        assert_eq!(sf("%z", &[Value::Int(1)]), "%z");
+    fn sprintf_huge_width_is_clamped() {
+        // Without clamping this would try to allocate >100 GB.
+        let out = sf("%999999999999d", &[Value::Int(1)]);
+        assert!(out.len() <= PRINTF_MAX_LEN + 16, "got len {}", out.len());
     }
 
-    // ─── FmtSpec::pad ───────────────────────────────────────────────
+    #[test]
+    fn sprintf_huge_precision_is_clamped() {
+        let out = sf("%.999999999999f", &[Value::Float(1.0)]);
+        assert!(out.len() <= PRINTF_MAX_LEN + 16, "got len {}", out.len());
+    }
 
+    #[test]
+    fn sprintf_unknown_verb_emits_bad_verb() {
+        assert_eq!(sf("%z", &[Value::Int(1)]), "%!z(int=1)");
+    }
+
+    #[test]
+    fn sprintf_d_non_int_emits_bad_verb() {
+        assert_eq!(sf("%d", &[Value::String("abc".into())]), "%!d(string=abc)");
+    }
+
+    #[test]
+    fn sprintf_f_non_numeric_emits_bad_verb() {
+        assert_eq!(sf("%f", &[Value::String("abc".into())]), "%!f(string=abc)");
+    }
+
+    // sprintf: %x / %X on strings (Go parity: precision limits input bytes)
+    #[test]
+    fn sprintf_x_string_full() {
+        assert_eq!(sf("%x", &[Value::String("abc".into())]), "616263");
+    }
+
+    #[test]
+    fn sprintf_x_string_precision_limits_input_bytes() {
+        // Go: fmt.Sprintf("%.2x", "abc") == "6162" (2 bytes → 4 hex chars).
+        assert_eq!(sf("%.2x", &[Value::String("abc".into())]), "6162");
+        assert_eq!(sf("%.3x", &[Value::String("abc".into())]), "616263");
+        assert_eq!(sf("%.0x", &[Value::String("abc".into())]), "");
+    }
+
+    #[test]
+    fn sprintf_x_string_uppercase_verb() {
+        assert_eq!(sf("%X", &[Value::String("abc".into())]), "616263");
+    }
+
+    #[test]
+    fn sprintf_x_string_precision_over_length_is_capped() {
+        // Precision larger than the string length just emits the whole string.
+        assert_eq!(sf("%.99x", &[Value::String("ab".into())]), "6162");
+    }
+
+    // FmtSpec::pad
     #[test]
     fn pad_no_width() {
         let spec = FmtSpec {
@@ -1498,8 +1586,7 @@ mod tests {
         assert_eq!(spec.pad("hello", false), "hello");
     }
 
-    // ─── FmtSpec::format_signed ─────────────────────────────────────
-
+    // FmtSpec::format_signed
     #[test]
     fn format_signed_plain() {
         let spec = FmtSpec {

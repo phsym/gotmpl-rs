@@ -17,6 +17,16 @@ use alloc::vec::Vec;
 
 use crate::error::{Result, TemplateError};
 
+/// Build an integer-literal lex error message that distinguishes an
+/// overflow from a syntax error, using `ParseIntError::kind()`.
+fn int_parse_msg(kind: &str, err: &core::num::ParseIntError) -> String {
+    use core::num::IntErrorKind::*;
+    match err.kind() {
+        PosOverflow | NegOverflow => format!("{} integer literal overflows i64", kind),
+        _ => format!("invalid {} number", kind),
+    }
+}
+
 fn strip_underscores(raw: &str) -> Cow<'_, str> {
     if raw.contains('_') {
         Cow::Owned(raw.replace('_', ""))
@@ -25,8 +35,7 @@ fn strip_underscores(raw: &str) -> Cow<'_, str> {
     }
 }
 
-// ─── Token types ─────────────────────────────────────────────────────────
-
+// Token types
 /// The kind of a lexed [`Token`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
@@ -122,8 +131,7 @@ impl Token<'_> {
     }
 }
 
-// ─── Lexer ───────────────────────────────────────────────────────────────
-
+// Lexer
 /// Tokenizer for Go template source text.
 ///
 /// Converts a raw template string into a [`Vec<Token>`] via [`tokenize`](Self::tokenize).
@@ -171,8 +179,7 @@ impl<'a> Lexer<'a> {
         Ok(self.tokens)
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────────
-
+    // Helpers
     fn starts_with(&self, prefix: &str) -> bool {
         self.input.as_bytes()[self.pos..].starts_with(prefix.as_bytes())
     }
@@ -268,8 +275,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // ─── State: Scanning text outside delimiters ─────────────────────
-
+    // State: Scanning text outside delimiters
     fn lex_text(&mut self) -> Result<()> {
         // Track whether the last action ended with a trim marker (-}})
         // so we can trim leading whitespace from the next text.
@@ -423,8 +429,7 @@ impl<'a> Lexer<'a> {
         Ok(Some(open_was_trim || close_trims))
     }
 
-    // ─── State: Scanning inside {{ ... }} ────────────────────────────
-
+    // State: Scanning inside {{ ... }}
     fn lex_inside(&mut self) -> Result<()> {
         loop {
             self.skip_whitespace();
@@ -530,8 +535,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // ─── Individual token scanners ───────────────────────────────────
-
+    // Individual token scanners
     fn lex_quoted_string(&mut self) -> Result<()> {
         self.next_char(); // consume opening "
         loop {
@@ -667,7 +671,7 @@ impl<'a> Lexer<'a> {
                                 let val = if negative { -n } else { n };
                                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
                             }
-                            Err(_) => return Err(self.error("invalid octal number")),
+                            Err(e) => return Err(self.error(int_parse_msg("octal", &e))),
                         }
                         return Ok(());
                     }
@@ -719,7 +723,7 @@ impl<'a> Lexer<'a> {
                 let val = if negative { -n } else { n };
                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
             }
-            Err(_) => return Err(self.error("invalid hex number")),
+            Err(e) => return Err(self.error(int_parse_msg("hex", &e))),
         }
         Ok(())
     }
@@ -785,12 +789,17 @@ impl<'a> Lexer<'a> {
         let negative = clean.starts_with('-');
         let prefix_len = if negative { 3 } else { 2 }; // skip sign + 0x/0o/0b
         let digits = &clean[prefix_len..];
+        let kind = match base {
+            2 => "binary",
+            8 => "octal",
+            _ => "integer",
+        };
         match i64::from_str_radix(digits, base) {
             Ok(n) => {
                 let val = if negative { -n } else { n };
                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
             }
-            Err(_) => return Err(self.error(format!("invalid base-{} number", base))),
+            Err(e) => return Err(self.error(int_parse_msg(kind, &e))),
         }
         Ok(())
     }
@@ -967,8 +976,7 @@ impl<'a> Lexer<'a> {
     }
 }
 
-// ─── String escape processing ────────────────────────────────────────────
-
+// String escape processing
 fn unescape(s: &str) -> Result<String> {
     let mut result = String::new();
     let mut chars = s.chars();

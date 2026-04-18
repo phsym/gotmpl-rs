@@ -33,11 +33,10 @@ pub(crate) mod go;
 pub mod parse;
 pub(crate) mod value;
 
-// ─── Public re-exports ──────────────────────────────────────────────────
+// Public re-exports
 // All user-facing types are available at the crate root.
 
 pub use error::{Result, TemplateError};
-pub use funcs::Func;
 use funcs::builtins;
 pub use go::{html_escape, js_escape, url_encode};
 pub use value::{ToValue, Value, ValueFunc};
@@ -71,7 +70,7 @@ use parse::{ListNode, Parser};
 ///     Ok(Value::Int(args[0].as_int().unwrap_or(0) * 2))
 /// }));
 /// ```
-pub type FuncMap = BTreeMap<String, Func>;
+pub type FuncMap = BTreeMap<String, ValueFunc>;
 
 /// A parsed, ready-to-execute template.
 ///
@@ -100,11 +99,12 @@ pub type FuncMap = BTreeMap<String, Func>;
 pub struct Template {
     name: String,
     tree: Option<ListNode>,
-    defines: BTreeMap<String, ListNode>,
-    funcs: BTreeMap<String, Func>,
+    defines: BTreeMap<String, Arc<ListNode>>,
+    funcs: BTreeMap<String, ValueFunc>,
     left_delim: String,
     right_delim: String,
     missing_key: MissingKey,
+    max_range_iters: u64,
 }
 
 /// Adapter that bridges [`std::io::Write`] to [`core::fmt::Write`].
@@ -159,7 +159,17 @@ impl Template {
             left_delim: "{{".to_string(),
             right_delim: "}}".to_string(),
             missing_key: MissingKey::default(),
+            max_range_iters: exec::DEFAULT_MAX_RANGE_ITERS,
         }
+    }
+
+    /// Set the total number of `{{range}}` iterations allowed per execution
+    /// (across all nested ranges). Defaults to 10,000,000. Set to `0` to
+    /// disable the cap entirely (at your own risk with untrusted templates).
+    #[must_use]
+    pub fn max_range_iters(mut self, n: u64) -> Self {
+        self.max_range_iters = n;
+        self
     }
 
     /// Set custom action delimiters (default: `"{{"` and `"}}"`).
@@ -179,6 +189,7 @@ impl Template {
     ///     .unwrap();
     /// assert_eq!(result, "Hello, World!");
     /// ```
+    #[must_use]
     pub fn delims(mut self, left: &str, right: &str) -> Self {
         self.left_delim = left.to_string();
         self.right_delim = right.to_string();
@@ -199,6 +210,7 @@ impl Template {
     ///     .execute_to_string(&tmap! { "X" => 1i64 });
     /// assert!(result.is_err());
     /// ```
+    #[must_use]
     pub fn missing_key(mut self, mk: MissingKey) -> Self {
         self.missing_key = mk;
         self
@@ -228,6 +240,7 @@ impl Template {
     ///     .unwrap();
     /// assert_eq!(result, "42");
     /// ```
+    #[must_use]
     pub fn func(
         mut self,
         name: &str,
@@ -261,6 +274,7 @@ impl Template {
     ///     .unwrap();
     /// assert_eq!(result, "Hello, World!");
     /// ```
+    #[must_use]
     pub fn funcs(mut self, func_map: FuncMap) -> Self {
         self.funcs.extend(func_map);
         self
@@ -283,7 +297,8 @@ impl Template {
 
         self.tree = Some(tree);
         for def in defines {
-            self.defines.insert(def.name.to_string(), def.body);
+            self.defines
+                .insert(def.name.to_string(), Arc::new(def.body));
         }
 
         Ok(self)
@@ -303,7 +318,8 @@ impl Template {
         let (_, defines) = parser.parse()?;
 
         for def in defines {
-            self.defines.insert(def.name.to_string(), def.body);
+            self.defines
+                .insert(def.name.to_string(), Arc::new(def.body));
         }
 
         Ok(self)
@@ -332,9 +348,11 @@ impl Template {
     #[cfg(feature = "std")]
     pub fn parse_files(mut self, filenames: &[&str]) -> Result<Self> {
         for filename in filenames {
-            let content = std::fs::read_to_string(filename).map_err(|e| {
-                error::TemplateError::Exec(format!("parse_files: {}: {}", filename, e))
-            })?;
+            let content =
+                std::fs::read_to_string(filename).map_err(|e| error::TemplateError::ReadFile {
+                    path: filename.to_string(),
+                    source: e,
+                })?;
 
             let parser = Parser::new(&content, &self.left_delim, &self.right_delim)?;
             let (tree, defines) = parser.parse()?;
@@ -344,10 +362,11 @@ impl Template {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(filename);
-            self.defines.insert(basename.to_string(), tree);
+            self.defines.insert(basename.to_string(), Arc::new(tree));
 
             for def in defines {
-                self.defines.insert(def.name.to_string(), def.body);
+                self.defines
+                    .insert(def.name.to_string(), Arc::new(def.body));
             }
         }
         Ok(self)
@@ -383,8 +402,9 @@ impl Template {
     ///     .unwrap();
     /// assert_eq!(result, "injected");
     /// ```
+    #[must_use]
     pub fn add_parse_tree(mut self, name: &str, tree: ListNode) -> Self {
-        self.defines.insert(name.to_string(), tree);
+        self.defines.insert(name.to_string(), Arc::new(tree));
         self
     }
 
@@ -407,6 +427,7 @@ impl Template {
 
         let mut executor = Executor::new(&self.funcs, &self.defines);
         executor.set_missing_key(self.missing_key);
+        executor.set_max_range_iters(self.max_range_iters);
         executor.execute(writer, tree, data)
     }
 
@@ -433,7 +454,8 @@ impl Template {
 
         let mut executor = Executor::new(&self.funcs, &self.defines);
         executor.set_missing_key(self.missing_key);
-        executor.execute(writer, tree, data)
+        executor.set_max_range_iters(self.max_range_iters);
+        executor.execute(writer, tree.as_ref(), data)
     }
 
     /// Execute the template, writing output to the given [`io::Write`](std::io::Write) destination.
@@ -531,7 +553,7 @@ impl Template {
     /// assert!(tmpl.lookup("footer").is_none());
     /// ```
     pub fn lookup(&self, name: &str) -> Option<&ListNode> {
-        self.defines.get(name)
+        self.defines.get(name).map(Arc::as_ref)
     }
 
     /// Returns the names of all defined templates.
@@ -617,6 +639,7 @@ impl Template {
     /// assert_eq!(original.execute_to_string(&tmap!{}).unwrap(), "original");
     /// assert_eq!(cloned.execute_to_string(&tmap!{}).unwrap(), "cloned");
     /// ```
+    #[must_use]
     pub fn clone_template(&self) -> Self {
         Template {
             name: self.name.clone(),
@@ -626,12 +649,12 @@ impl Template {
             left_delim: self.left_delim.clone(),
             right_delim: self.right_delim.clone(),
             missing_key: self.missing_key,
+            max_range_iters: self.max_range_iters,
         }
     }
 }
 
-// ─── Convenience constructors ────────────────────────────────────────────
-
+// Convenience constructors
 /// Parse and execute a template in one shot.
 ///
 /// This is a convenience function for simple cases where you don't need
@@ -658,21 +681,21 @@ pub fn execute(template_src: &str, data: &Value) -> Result<String> {
 
 /// Reports whether a [`Value`] is "true" according to Go's template truthiness rules.
 ///
-/// Equivalent to Go's `template.IsTrue()`. Returns `(truth, ok)` where `ok`
-/// indicates whether the truthiness check is meaningful for this type
-/// (always `true` for our [`Value`] enum).
+/// Equivalent to Go's `template.IsTrue()` but without the second "ok" tuple
+/// slot — every [`Value`] variant is always meaningful for truthiness, so
+/// Go's `(true, true)` / `(false, true)` pattern collapsed to a single bool.
 ///
 /// # Examples
 ///
 /// ```
 /// use gotmpl::{is_true, Value};
 ///
-/// assert_eq!(is_true(&Value::Bool(true)), (true, true));
-/// assert_eq!(is_true(&Value::Int(0)), (false, true));
-/// assert_eq!(is_true(&Value::Nil), (false, true));
+/// assert!(is_true(&Value::Bool(true)));
+/// assert!(!is_true(&Value::Int(0)));
+/// assert!(!is_true(&Value::Nil));
 /// ```
-pub fn is_true(val: &Value) -> (bool, bool) {
-    (val.is_truthy(), true)
+pub fn is_true(val: &Value) -> bool {
+    val.is_truthy()
 }
 
 #[cfg(test)]
@@ -958,9 +981,16 @@ mod tests {
     #[cfg(feature = "std")]
     fn test_parse_files_not_found() {
         let result = Template::new("t").parse_files(&["/nonexistent/file.html"]);
-        assert!(result.is_err());
         let err = result.err().unwrap();
-        assert!(err.to_string().contains("parse_files"));
+        assert!(
+            matches!(
+                err,
+                error::TemplateError::ReadFile { ref path, .. }
+                    if path == "/nonexistent/file.html"
+            ),
+            "expected ReadFile error, got {:?}",
+            err
+        );
     }
 
     #[test]
@@ -981,10 +1011,10 @@ mod tests {
 
     #[test]
     fn test_is_true() {
-        assert_eq!(is_true(&Value::Bool(true)), (true, true));
-        assert_eq!(is_true(&Value::Bool(false)), (false, true));
-        assert_eq!(is_true(&Value::Int(0)), (false, true));
-        assert_eq!(is_true(&Value::Int(1)), (true, true));
-        assert_eq!(is_true(&Value::Nil), (false, true));
+        assert!(is_true(&Value::Bool(true)));
+        assert!(!is_true(&Value::Bool(false)));
+        assert!(!is_true(&Value::Int(0)));
+        assert!(is_true(&Value::Int(1)));
+        assert!(!is_true(&Value::Nil));
     }
 }

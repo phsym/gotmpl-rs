@@ -17,7 +17,7 @@ extern crate alloc;
 use gotmpl::Value;
 use gotmpl::{Template, tmap};
 
-// ─── Go cross-check ─────────────────────────────────────────────────────
+// Go cross-check
 //
 // When the `go-crosscheck` feature is enabled, every call to `ok()` also
 // executes the same template through Go's text/template and asserts that
@@ -158,8 +158,7 @@ mod go_crosscheck {
     }
 }
 
-// ─── Helper ──────────────────────────────────────────────────────────────
-
+// Helper
 fn run(input: &str, data: &Value) -> core::result::Result<String, String> {
     Template::new("test")
         .func("add", |args| {
@@ -238,8 +237,7 @@ fn fail(input: &str, data: &Value) {
     }
 }
 
-// ─── Trivial cases ───────────────────────────────────────────────────────
-
+// Trivial cases
 #[test]
 fn test_empty() {
     ok("", &Value::Nil, "");
@@ -250,8 +248,7 @@ fn test_text() {
     ok("some text", &Value::Nil, "some text");
 }
 
-// ─── Fields of maps ─────────────────────────────────────────────────────
-
+// Fields of maps
 #[test]
 fn test_field_x() {
     let data = tmap! { "X" => "x" };
@@ -280,8 +277,7 @@ fn test_map_two() {
     ok("{{.MSI.two}}", &data, "2");
 }
 
-// ─── Dot of various types ───────────────────────────────────────────────
-
+// Dot of various types
 #[test]
 fn test_dot_int() {
     ok("<{{.}}>", &Value::Int(13), "<13>");
@@ -308,8 +304,7 @@ fn test_dot_list() {
     ok("<{{.}}>", &data, "<[-1 -2 -3]>");
 }
 
-// ─── Variables ──────────────────────────────────────────────────────────
-
+// Variables
 #[test]
 fn test_dollar_int() {
     ok("{{$}}", &Value::Int(123), "123");
@@ -339,8 +334,7 @@ fn test_simple_assignment() {
     ok("{{$x := 2}}{{$x = 3}}{{$x}}", &data, "3");
 }
 
-// ─── If ─────────────────────────────────────────────────────────────────
-
+// If
 #[test]
 fn test_if_true() {
     ok("{{if true}}TRUE{{end}}", &Value::Nil, "TRUE");
@@ -464,8 +458,7 @@ fn test_if_else_chain() {
     );
 }
 
-// ─── Print / Printf / Println ───────────────────────────────────────────
-
+// Print / Printf / Println
 #[test]
 fn test_print() {
     ok(r#"{{print "hello, print"}}"#, &Value::Nil, "hello, print");
@@ -577,8 +570,7 @@ fn test_adjacent_field_chain_still_works() {
     ok(r#"{{printf "%s" .U.V.W}}"#, &data, "deep");
 }
 
-// ─── HTML ───────────────────────────────────────────────────────────────
-
+// HTML
 #[test]
 fn test_html_escape() {
     ok(
@@ -597,8 +589,7 @@ fn test_html_pipeline() {
     );
 }
 
-// ─── JavaScript ─────────────────────────────────────────────────────────
-
+// JavaScript
 #[test]
 fn test_js_escape() {
     ok(
@@ -608,8 +599,7 @@ fn test_js_escape() {
     );
 }
 
-// ─── URL query ──────────────────────────────────────────────────────────
-
+// URL query
 #[test]
 fn test_urlquery() {
     ok(
@@ -619,8 +609,7 @@ fn test_urlquery() {
     );
 }
 
-// ─── Booleans: not, and, or ─────────────────────────────────────────────
-
+// Booleans: not, and, or
 #[test]
 fn test_not() {
     ok("{{not true}} {{not false}}", &Value::Nil, "false true");
@@ -691,8 +680,7 @@ fn test_boolean_if_pipe() {
     );
 }
 
-// ─── Indexing ───────────────────────────────────────────────────────────
-
+// Indexing
 #[test]
 fn test_slice_index_0() {
     let data = tmap! { "SI" => vec![3i64, 4, 5] };
@@ -719,8 +707,7 @@ fn test_index_nil_fails() {
     fail("{{index nil 1}}", &Value::Nil);
 }
 
-// ─── Slicing ────────────────────────────────────────────────────────────
-
+// Slicing
 #[test]
 fn test_slice_1() {
     let data = tmap! { "SI" => vec![3i64, 4, 5] };
@@ -799,8 +786,7 @@ fn test_string_slice_mid_char_utf8_fails() {
     fail("{{slice .S 0 4}}", &data); // 4 is inside 'é'
 }
 
-// ─── Len ────────────────────────────────────────────────────────────────
-
+// Len
 #[test]
 fn test_len_slice() {
     let data = tmap! { "SI" => vec![3i64, 4, 5] };
@@ -815,8 +801,7 @@ fn test_len_map() {
     ok("{{len .MSI}}", &data, "3");
 }
 
-// ─── With ───────────────────────────────────────────────────────────────
-
+// With
 #[test]
 fn test_with_true() {
     ok("{{with true}}{{.}}{{end}}", &Value::Nil, "true");
@@ -902,8 +887,7 @@ fn test_with_else_with_chain() {
     );
 }
 
-// ─── Range ──────────────────────────────────────────────────────────────
-
+// Range
 #[test]
 fn test_range_list() {
     let data = tmap! { "SI" => vec![3i64, 4, 5] };
@@ -982,8 +966,7 @@ fn test_range_nil_count() {
     );
 }
 
-// ─── Pipelines ──────────────────────────────────────────────────────────
-
+// Pipelines
 #[test]
 fn test_pipeline_printf() {
     ok(r#"{{"output" | printf "%s"}}"#, &Value::Nil, "output");
@@ -998,8 +981,7 @@ fn test_pipeline_chain() {
     );
 }
 
-// ─── Parenthesized expressions ──────────────────────────────────────────
-
+// Parenthesized expressions
 #[test]
 fn test_parens_in_pipeline() {
     ok(
@@ -1009,8 +991,7 @@ fn test_parens_in_pipeline() {
     );
 }
 
-// ─── Comparison operators ───────────────────────────────────────────────
-
+// Comparison operators
 #[test]
 fn test_eq_true() {
     ok("{{eq true true}}", &Value::Nil, "true");
@@ -1105,8 +1086,7 @@ fn test_ge() {
     ok(r#"{{ge "xyz" "xy"}}"#, &Value::Nil, "true");
 }
 
-// ─── Or as if ───────────────────────────────────────────────────────────
-
+// Or as if
 #[test]
 fn test_or_as_if_true() {
     let data = tmap! { "SI" => vec![3i64, 4, 5] };
@@ -1123,8 +1103,7 @@ fn test_or_as_if_false() {
     );
 }
 
-// ─── Nested assignment ──────────────────────────────────────────────────
-
+// Nested assignment
 #[test]
 fn test_nested_assignment() {
     ok(
@@ -1134,8 +1113,7 @@ fn test_nested_assignment() {
     );
 }
 
-// ─── Define and template ────────────────────────────────────────────────
-
+// Define and template
 #[test]
 fn test_define_and_template() {
     let data = Value::String("hello".into());
@@ -1146,8 +1124,7 @@ fn test_define_and_template() {
     );
 }
 
-// ─── Block ──────────────────────────────────────────────────────────────
-
+// Block
 #[test]
 fn test_block() {
     let data = Value::String("hello".into());
@@ -1158,8 +1135,7 @@ fn test_block() {
     );
 }
 
-// ─── Custom delimiters ──────────────────────────────────────────────────
-
+// Custom delimiters
 #[test]
 fn test_delims() {
     let data = tmap! { "Str" => "Hello, world" };
@@ -1184,8 +1160,7 @@ fn test_delims_pipe() {
     assert_eq!(result, "Hello, world");
 }
 
-// ─── Trim markers ───────────────────────────────────────────────────────
-
+// Trim markers
 #[test]
 fn test_trim_left() {
     ok("  {{- .}}", &Value::String("hello".into()), "hello");
@@ -1210,8 +1185,7 @@ fn test_trim_newlines() {
     );
 }
 
-// ─── Bug fixes (from Go's exec_test.go) ─────────────────────────────────
-
+// Bug fixes (from Go's exec_test.go)
 #[test]
 fn test_bug4_nil_in_if() {
     // Nil interface values in if.
@@ -1227,8 +1201,7 @@ fn test_bug9_lowercase_map_key() {
     ok("{{.cause}}", &m.into(), "neglect");
 }
 
-// ─── Pipelines with print functions ─────────────────────────────────────
-
+// Pipelines with print functions
 #[test]
 fn test_final_for_printf() {
     // "x" | printf should work (piped arg becomes the format arg)
@@ -1249,8 +1222,7 @@ fn test_onearg_pipe() {
     ok(r#"{{"aaa" | oneArg}}"#, &Value::Nil, "oneArg=aaa");
 }
 
-// ─── Makemap function ───────────────────────────────────────────────────
-
+// Makemap function
 #[test]
 fn test_makemap() {
     ok(
@@ -1260,15 +1232,13 @@ fn test_makemap() {
     );
 }
 
-// ─── MapOfThree ─────────────────────────────────────────────────────────
-
+// MapOfThree
 #[test]
 fn test_map_of_three() {
     ok("{{mapOfThree.three}}", &Value::Nil, "3");
 }
 
-// ─── Complex nested templates ───────────────────────────────────────────
-
+// Complex nested templates
 #[test]
 fn test_nested_define_and_template() {
     let data = tmap! { "Name" => "World" };
@@ -1279,8 +1249,7 @@ fn test_nested_define_and_template() {
     );
 }
 
-// ─── Range with map, checking that dot is set correctly ─────────────────
-
+// Range with map, checking that dot is set correctly
 #[test]
 fn test_range_map_values() {
     let data = tmap! {
@@ -1289,24 +1258,21 @@ fn test_range_map_values() {
     ok("{{range .MSIone}}-{{.}}-{{end}}", &data, "-1-");
 }
 
-// ─── Pipeline chaining with len ─────────────────────────────────────────
-
+// Pipeline chaining with len
 #[test]
 fn test_pipeline_len() {
     let data = tmap! { "Items" => vec!["a".to_string(), "bb".to_string(), "ccc".to_string()] };
     ok(r#"{{.Items | len | printf "%d items"}}"#, &data, "3 items");
 }
 
-// ─── Nested if ──────────────────────────────────────────────────────────
-
+// Nested if
 #[test]
 fn test_nested_if() {
     let data = tmap! { "A" => true, "B" => true };
     ok("{{if .A}}{{if .B}}both{{end}}{{end}}", &data, "both");
 }
 
-// ─── Dollar in range ────────────────────────────────────────────────────
-
+// Dollar in range
 #[test]
 fn test_dollar_in_range() {
     let data = tmap! {
@@ -1321,8 +1287,7 @@ fn test_dollar_in_range() {
     );
 }
 
-// ─── Deep nesting ───────────────────────────────────────────────────────
-
+// Deep nesting
 #[test]
 fn test_deeply_nested_field() {
     let data = tmap! {
@@ -1337,8 +1302,7 @@ fn test_deeply_nested_field() {
     ok("{{.A.B.C.D}}", &data, "deep");
 }
 
-// ─── Declare in range ───────────────────────────────────────────────────
-
+// Declare in range
 #[test]
 fn test_declare_in_range() {
     let data = tmap! { "PSI" => vec![21i64, 22, 23] };
@@ -1353,8 +1317,7 @@ fn test_declare_in_range() {
 // NEW TESTS: covering all fixes from the review
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ─── Fix #1: print spacing (Go's fmt.Sprint behavior) ──────────────────
-
+// Fix #1: print spacing (Go's fmt.Sprint behavior)
 #[test]
 fn test_print_two_ints_space() {
     // Go's fmt.Sprint adds spaces between non-string adjacent operands
@@ -1382,8 +1345,7 @@ fn test_print_multi_ints() {
     ok("{{print 1 2 3}}", &Value::Nil, "1 2 3");
 }
 
-// ─── Fix #3: printf %f with 6 decimal places ──────────────────────────
-
+// Fix #3: printf %f with 6 decimal places
 #[test]
 fn test_printf_float_default() {
     ok(r#"{{printf "%f" 1.5}}"#, &Value::Nil, "1.500000");
@@ -1399,8 +1361,7 @@ fn test_printf_float_zero() {
     ok(r#"{{printf "%f" 0.0}}"#, &Value::Nil, "0.000000");
 }
 
-// ─── Fix #4: call builtin ────────────────────────────────────────────
-
+// Fix #4: call builtin
 #[test]
 fn test_call_nil_errors() {
     let data = tmap! { "F" => Value::Nil };
@@ -1411,8 +1372,7 @@ fn test_call_nil_errors() {
     assert!(result.is_err());
 }
 
-// ─── Fix #5: JS escape includes = ─────────────────────────────────────
-
+// Fix #5: JS escape includes =
 #[test]
 fn test_js_escape_equals() {
     ok(r#"{{js "a=b"}}"#, &Value::Nil, r"a\u003Db");
@@ -1423,24 +1383,21 @@ fn test_js_escape_control_chars() {
     ok(r#"{{js "\t\n"}}"#, &Value::Nil, r"\u0009\u000A");
 }
 
-// ─── Fix #6: HTML escape NUL byte ─────────────────────────────────────
-
+// Fix #6: HTML escape NUL byte
 #[test]
 fn test_html_nul_byte() {
     let data = Value::String("a\0b".into());
     ok("{{html .}}", &data, "a\u{FFFD}b");
 }
 
-// ─── Fix #7: missingkey option ─────────────────────────────────────────
-
+// Fix #7: missingkey option
 #[test]
 fn test_missingkey_default_returns_nil() {
     let data = tmap! { "X" => 1i64 };
     ok("{{.Y}}", &data, "<no value>");
 }
 
-// ─── Fix #10: and/or short-circuit ────────────────────────────────────
-
+// Fix #10: and/or short-circuit
 #[test]
 fn test_or_short_circuit_basic() {
     // or should return first truthy value without evaluating the rest
@@ -1463,8 +1420,7 @@ fn test_and_all_truthy() {
     ok(r#"{{and 1 true "x"}}"#, &Value::Nil, "x");
 }
 
-// ─── Fix #11: comments ───────────────────────────────────────────────
-
+// Fix #11: comments
 #[test]
 fn test_comment_simple() {
     ok("hello{{/* comment */}} world", &Value::Nil, "hello world");
@@ -1495,8 +1451,7 @@ fn test_comment_between_actions() {
     ok("{{.X}}{{/* sep */}}{{.Y}}", &data, "ab");
 }
 
-// ─── Fix #12: break/continue in range ─────────────────────────────────
-
+// Fix #12: break/continue in range
 #[test]
 fn test_range_break() {
     let data = tmap! { "SI" => vec![1i64, 2, 3, 4, 5] };
@@ -1552,8 +1507,7 @@ fn test_range_break_in_map() {
     assert_eq!(result, "a=1 ");
 }
 
-// ─── Fix #13: hex/octal/binary number literals ────────────────────────
-
+// Fix #13: hex/octal/binary number literals
 #[test]
 fn test_hex_literal() {
     ok("{{0xFF}}", &Value::Nil, "255");
@@ -1594,8 +1548,7 @@ fn test_decimal_underscore() {
     ok("{{1_000}}", &Value::Nil, "1000");
 }
 
-// ─── Fix #14: char literal with escapes ───────────────────────────────
-
+// Fix #14: char literal with escapes
 #[test]
 fn test_char_literal() {
     // 'a' = 97
@@ -1608,15 +1561,13 @@ fn test_char_literal_newline() {
     ok("{{printf \"%d\" '\\n'}}", &Value::Nil, "10");
 }
 
-// ─── Additional Go test coverage: range over nil ──────────────────────
-
+// Additional Go test coverage: range over nil
 #[test]
 fn test_range_nil() {
     ok("{{range .X}}{{.}}{{else}}empty{{end}}", &tmap! {}, "empty");
 }
 
-// ─── Additional Go test coverage: range over integer ──────────────────
-
+// Additional Go test coverage: range over integer
 #[test]
 fn test_range_int() {
     ok("{{range $i := 5}}{{$i}} {{end}}", &Value::Nil, "0 1 2 3 4 ");
@@ -1627,16 +1578,14 @@ fn test_range_int_zero() {
     ok("{{range 0}}x{{else}}empty{{end}}", &Value::Nil, "empty");
 }
 
-// ─── Additional Go test coverage: nil pipeline ────────────────────────
-
+// Additional Go test coverage: nil pipeline
 #[test]
 fn test_nil_pipeline() {
     let data = tmap! {};
     ok("{{$x := .Missing}}{{$x}}", &data, "<no value>");
 }
 
-// ─── Additional Go test coverage: template with no args ───────────────
-
+// Additional Go test coverage: template with no args
 #[test]
 fn test_template_no_args() {
     ok(
@@ -1646,8 +1595,7 @@ fn test_template_no_args() {
     );
 }
 
-// ─── Additional Go test coverage: empty define ────────────────────────
-
+// Additional Go test coverage: empty define
 #[test]
 fn test_empty_define() {
     ok(
@@ -1657,8 +1605,7 @@ fn test_empty_define() {
     );
 }
 
-// ─── Additional Go test coverage: nested variable scope isolation ─────
-
+// Additional Go test coverage: nested variable scope isolation
 #[test]
 fn test_variable_scope_isolation() {
     // $x declared inside if should not leak out
@@ -1669,8 +1616,7 @@ fn test_variable_scope_isolation() {
     );
 }
 
-// ─── Additional Go test coverage: println ─────────────────────────────
-
+// Additional Go test coverage: println
 #[test]
 fn test_println() {
     ok(
@@ -1685,8 +1631,7 @@ fn test_println_empty() {
     ok("{{println}}", &Value::Nil, "\n");
 }
 
-// ─── Additional Go test coverage: printf additional verbs ─────────────
-
+// Additional Go test coverage: printf additional verbs
 #[test]
 fn test_printf_v() {
     ok(r#"{{printf "%v" 42}}"#, &Value::Nil, "42");
@@ -1707,8 +1652,7 @@ fn test_printf_o() {
     ok(r#"{{printf "%o" 8}}"#, &Value::Nil, "10");
 }
 
-// ─── Additional Go test coverage: eq with nil ─────────────────────────
-
+// Additional Go test coverage: eq with nil
 #[test]
 fn test_eq_nil() {
     ok("{{eq nil nil}}", &Value::Nil, "true");
@@ -1719,8 +1663,7 @@ fn test_ne_nil() {
     ok("{{ne nil 1}}", &Value::Nil, "true");
 }
 
-// ─── Additional Go test coverage: variable assignment in nested scope ──
-
+// Additional Go test coverage: variable assignment in nested scope
 #[test]
 fn test_nested_assignment_in_range() {
     ok(
@@ -1730,8 +1673,7 @@ fn test_nested_assignment_in_range() {
     );
 }
 
-// ─── Range assignment form ($v = range ...) ─────────────────────────
-
+// Range assignment form ($v = range ...)
 #[test]
 fn test_range_assign_single_var() {
     // $v is declared before the range; the range assignment form modifies it
@@ -1780,8 +1722,7 @@ fn test_range_assign_single_var_in_body() {
     );
 }
 
-// ─── Additional Go test coverage: else if with variable ───────────────
-
+// Additional Go test coverage: else if with variable
 #[test]
 fn test_else_if_chain_complex() {
     ok(
@@ -1791,16 +1732,14 @@ fn test_else_if_chain_complex() {
     );
 }
 
-// ─── Additional: slice with 1 arg (whole slice) ──────────────────────
-
+// Additional: slice with 1 arg (whole slice)
 #[test]
 fn test_slice_whole() {
     let data = tmap! { "SI" => vec![1i64, 2, 3] };
     ok("{{slice .SI}}", &data, "[1 2 3]");
 }
 
-// ─── Additional Go test coverage: custom delimiters with Unicode ──────
-
+// Additional Go test coverage: custom delimiters with Unicode
 #[test]
 fn test_delims_angle_brackets() {
     let data = tmap! { "X" => "hello" };
@@ -1825,8 +1764,7 @@ fn test_delims_unicode() {
     assert_eq!(result, "hello");
 }
 
-// ─── Additional Go test coverage: JS escaping comprehensive ──────────
-
+// Additional Go test coverage: JS escaping comprehensive
 #[test]
 fn test_js_escape_backslash() {
     ok(r#"{{js "a\\b"}}"#, &Value::Nil, r"a\\b");
@@ -1847,8 +1785,7 @@ fn test_js_escape_ampersand() {
     ok(r#"{{js "a&b"}}"#, &Value::Nil, r"a\u0026b");
 }
 
-// ─── Additional Go test coverage: incompatible comparisons error ─────
-
+// Additional Go test coverage: incompatible comparisons error
 #[test]
 fn test_eq_int_float() {
     fail("{{eq 1 1.0}}", &Value::Nil);
@@ -1864,8 +1801,7 @@ fn test_gt_float_int() {
     fail("{{gt 2.5 2}}", &Value::Nil);
 }
 
-// ─── Additional Go test coverage: index errors ─────────────────────────
-
+// Additional Go test coverage: index errors
 #[test]
 fn test_index_out_of_range() {
     // Go returns a template execution error on out-of-bounds list index.
@@ -1873,15 +1809,13 @@ fn test_index_out_of_range() {
     fail("{{index .SI 99}}", &data);
 }
 
-// ─── Additional Go test coverage: len of string ──────────────────────
-
+// Additional Go test coverage: len of string
 #[test]
 fn test_len_string() {
     ok(r#"{{len "hello"}}"#, &Value::Nil, "5");
 }
 
-// ─── Error cases ─────────────────────────────────────────────────────
-
+// Error cases
 #[test]
 fn test_len_of_int_fails() {
     fail("{{len 42}}", &Value::Nil);
@@ -1916,8 +1850,9 @@ fn test_function_panic_is_exec_error() {
     match result {
         Ok(exec_result) => {
             let err = exec_result.expect_err("expected execution error");
-            assert!(err.to_string().contains("error calling boom"));
-            assert!(err.to_string().contains("boom panic"));
+            let s = err.to_string();
+            assert!(s.contains("boom") && s.contains("panicked"), "got: {s}");
+            assert!(s.contains("boom panic"), "got: {s}");
         }
         Err(_) => panic!("panic escaped template execution"),
     }
@@ -1943,16 +1878,14 @@ fn test_range_over_bool_fails() {
 // Additional tests ported from Go's exec_test.go and multi_test.go
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ─── Go exec_test.go: trivial cases ────────────────────────────────────
-
+// Go exec_test.go: trivial cases
 #[test]
 fn test_nil_action() {
     // Go: nil is not a command — bare {{nil}} errors
     fail("{{nil}}", &Value::Nil);
 }
 
-// ─── Go exec_test.go: ideal constants ──────────────────────────────────
-
+// Go exec_test.go: ideal constants
 #[test]
 fn test_ideal_int() {
     ok("{{3}}", &Value::Nil, "3");
@@ -1968,8 +1901,7 @@ fn test_ideal_exp_float() {
     ok("{{1e1}}", &Value::Nil, "10");
 }
 
-// ─── Go exec_test.go: map field access with NO key ────────────────────
-
+// Go exec_test.go: map field access with NO key
 #[test]
 fn test_map_no_key() {
     // Accessing a missing key returns nil (default missingkey behavior)
@@ -1977,8 +1909,7 @@ fn test_map_no_key() {
     ok("{{.MSI.NO}}", &data, "<no value>");
 }
 
-// ─── Go exec_test.go: dot of various types (extended) ─────────────────
-
+// Go exec_test.go: dot of various types (extended)
 #[test]
 fn test_dot_nil() {
     ok("<{{.}}>", &Value::Nil, "<<no value>>");
@@ -1991,16 +1922,14 @@ fn test_dot_map() {
     ok("<{{.}}>", &data, "<map[a:1 b:2]>");
 }
 
-// ─── Go exec_test.go: pipeline func ───────────────────────────────────
-
+// Go exec_test.go: pipeline func
 #[test]
 fn test_pipeline_func() {
     let data = tmap! { "X" => "xyz" };
     ok("{{.X | printf \"%s\"}}", &data, "xyz");
 }
 
-// ─── Go exec_test.go: more if cases ──────────────────────────────────
-
+// Go exec_test.go: more if cases
 #[test]
 fn test_if_nil() {
     // Go: nil is not a command (even in if/with/range condition)
@@ -2035,8 +1964,7 @@ fn test_if_dollar_x_with_dollar_x_int() {
     );
 }
 
-// ─── Go exec_test.go: print with numbers ─────────────────────────────
-
+// Go exec_test.go: print with numbers
 #[test]
 fn test_print_123() {
     ok("{{print 123}}", &Value::Nil, "123");
@@ -2047,8 +1975,7 @@ fn test_print_nil() {
     ok("{{print nil}}", &Value::Nil, "<nil>");
 }
 
-// ─── Go exec_test.go: printf lots ────────────────────────────────────
-
+// Go exec_test.go: printf lots
 #[test]
 fn test_printf_lots() {
     ok(
@@ -2058,16 +1985,14 @@ fn test_printf_lots() {
     );
 }
 
-// ─── Go exec_test.go: html edge cases ───────────────────────────────
-
+// Go exec_test.go: html edge cases
 #[test]
 fn test_html_ps() {
     let data = tmap! { "PS" => "<p>hi</p>" };
     ok("{{html .PS}}", &data, "&lt;p&gt;hi&lt;/p&gt;");
 }
 
-// ─── Go exec_test.go: or / and short-circuit with pipes ─────────────
-
+// Go exec_test.go: or / and short-circuit with pipes
 #[test]
 fn test_or_short_circuit() {
     ok("{{or 0 1 2}}", &Value::Nil, "1");
@@ -2088,8 +2013,7 @@ fn test_and_short_circuit2() {
     ok("{{and 1 1 0}}", &Value::Nil, "0");
 }
 
-// ─── Go exec_test.go: double index ──────────────────────────────────
-
+// Go exec_test.go: double index
 #[test]
 fn test_double_index() {
     // index .SI 0 means .SI[0]
@@ -2103,24 +2027,21 @@ fn test_double_index() {
     ok("{{index .Nested 1 0}}", &data, "30");
 }
 
-// ─── Go exec_test.go: with $x struct.U.V ────────────────────────────
-
+// Go exec_test.go: with $x struct.U.V
 #[test]
 fn test_with_dollar_x_nested() {
     let data = tmap! { "U" => tmap! { "V" => "v" } };
     ok("{{with $x := .U.V}}{{$x}}{{end}}", &data, "v");
 }
 
-// ─── Go exec_test.go: range with $x PSI ─────────────────────────────
-
+// Go exec_test.go: range with $x PSI
 #[test]
 fn test_range_dollar_x_psi() {
     let data = tmap! { "PSI" => vec![21i64, 22, 23] };
     ok("{{range $x := .PSI}}<{{$x}}>{{end}}", &data, "<21><22><23>");
 }
 
-// ─── Go exec_test.go: range bool ────────────────────────────────────
-
+// Go exec_test.go: range bool
 #[test]
 fn test_range_bool_list() {
     let data = tmap! {
@@ -2130,8 +2051,7 @@ fn test_range_bool_list() {
     ok("{{range .SB}}-{{.}}-{{end}}", &data, "-true--false--true-");
 }
 
-// ─── Go exec_test.go: range map (all keys) ──────────────────────────
-
+// Go exec_test.go: range map (all keys)
 #[test]
 fn test_range_map_full() {
     let data = tmap! {
@@ -2165,8 +2085,7 @@ fn test_range_empty_map_else() {
     );
 }
 
-// ─── Go exec_test.go: range int variants ────────────────────────────
-
+// Go exec_test.go: range int variants
 #[test]
 fn test_range_int_5() {
     ok("{{range 5}}-{{.}}-{{end}}", &Value::Nil, "-0--1--2--3--4-");
@@ -2183,8 +2102,7 @@ fn test_range_int_negative() {
     ok("{{range -1}}x{{else}}empty{{end}}", &Value::Nil, "empty");
 }
 
-// ─── Go exec_test.go: nested assignment changes last declaration ────
-
+// Go exec_test.go: nested assignment changes last declaration
 #[test]
 fn test_nested_assignment_changes_last_decl() {
     ok(
@@ -2194,8 +2112,7 @@ fn test_nested_assignment_changes_last_decl() {
     );
 }
 
-// ─── Go exec_test.go: more comparison tests ─────────────────────────
-
+// Go exec_test.go: more comparison tests
 #[test]
 fn test_eq_nil_nil() {
     ok("{{eq nil nil}}", &Value::Nil, "true");
@@ -2241,8 +2158,7 @@ fn test_ge_mixed_float_int() {
     fail("{{ge 1.5 2}}", &Value::Nil);
 }
 
-// ─── Go exec_test.go: comparison in pipelines ───────────────────────
-
+// Go exec_test.go: comparison in pipelines
 #[test]
 fn test_eq_in_if() {
     ok("{{if eq 1 1}}yes{{else}}no{{end}}", &Value::Nil, "yes");
@@ -2257,8 +2173,7 @@ fn test_ne_in_if() {
     );
 }
 
-// ─── Go exec_test.go: cute examples (or as if) ─────────────────────
-
+// Go exec_test.go: cute examples (or as if)
 #[test]
 fn test_or_as_if_true_inline() {
     ok(r#"{{or .X "default"}}"#, &tmap! { "X" => "value" }, "value");
@@ -2269,8 +2184,7 @@ fn test_or_as_if_false_inline() {
     ok(r#"{{or .X "default"}}"#, &tmap! { "X" => "" }, "default");
 }
 
-// ─── Go exec_test.go: more with cases ───────────────────────────────
-
+// Go exec_test.go: more with cases
 #[test]
 fn test_with_empty_map() {
     let data = tmap! {
@@ -2291,8 +2205,7 @@ fn test_with_map() {
     ok("{{with .MSI}}{{.one}}{{else}}empty{{end}}", &data, "1");
 }
 
-// ─── Go exec_test.go: numbers (literal formats) ────────────────────
-
+// Go exec_test.go: numbers (literal formats)
 #[test]
 fn test_decimal() {
     ok("{{print 1234}}", &Value::Nil, "1234");
@@ -2343,8 +2256,7 @@ fn test_float_underscore() {
     ok("{{print 1_0.2_5}}", &Value::Nil, "10.25");
 }
 
-// ─── Go multi_test.go: invoke template with different dot types ─────
-
+// Go multi_test.go: invoke template with different dot types
 #[test]
 fn test_invoke_dot_int() {
     let data = tmap! { "I" => 17i64 };
@@ -2375,8 +2287,7 @@ fn test_invoke_nested_int() {
     );
 }
 
-// ─── Go multi_test.go: template with no args ────────────────────────
-
+// Go multi_test.go: template with no args
 #[test]
 fn test_invoke_no_args() {
     ok(
@@ -2386,8 +2297,7 @@ fn test_invoke_no_args() {
     );
 }
 
-// ─── Go multi_test.go: testFunc ─────────────────────────────────────
-
+// Go multi_test.go: testFunc
 #[test]
 fn test_one_arg_literal() {
     ok(r#"{{oneArg "joe"}}"#, &Value::Nil, "oneArg=joe");
@@ -2402,8 +2312,7 @@ fn test_one_arg_dot() {
     );
 }
 
-// ─── Go multi_test.go: redefinition ─────────────────────────────────
-
+// Go multi_test.go: redefinition
 #[test]
 fn test_redefinition() {
     // Redefining a template multiple times should use the last definition
@@ -2414,16 +2323,14 @@ fn test_redefinition() {
     assert_eq!(result, "second");
 }
 
-// ─── Go multi_test.go: empty template ───────────────────────────────
-
+// Go multi_test.go: empty template
 #[test]
 fn test_execute_empty_template() {
     let tmpl = Template::new("empty").parse("").unwrap();
     assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "");
 }
 
-// ─── Go exec_test.go: TestMessageForExecuteEmpty ────────────────────
-
+// Go exec_test.go: TestMessageForExecuteEmpty
 #[test]
 fn test_message_for_unparsed_template() {
     let tmpl = Template::new("unparsed");
@@ -2438,8 +2345,7 @@ fn test_message_for_unparsed_template() {
     );
 }
 
-// ─── Go exec_test.go: TestBlock with override ───────────────────────
-
+// Go exec_test.go: TestBlock with override
 #[test]
 fn test_block_override() {
     use gotmpl::parse::{ListNode, Node, Pos, TextNode};
@@ -2471,8 +2377,7 @@ fn test_block_override() {
     );
 }
 
-// ─── Go exec_test.go: ExecuteTemplate ───────────────────────────────
-
+// Go exec_test.go: ExecuteTemplate
 #[test]
 fn test_execute_template_with_data() {
     let tmpl = Template::new("root")
@@ -2493,8 +2398,7 @@ fn test_execute_template_undefined_fails() {
     assert!(err.is_err());
 }
 
-// ─── Go exec_test.go: Lookup / Templates / DefinedTemplates ────────
-
+// Go exec_test.go: Lookup / Templates / DefinedTemplates
 #[test]
 fn test_lookup_defined() {
     let tmpl = Template::new("t")
@@ -2524,8 +2428,7 @@ fn test_defined_templates_string() {
     assert!(s.starts_with("; defined templates are:"));
 }
 
-// ─── Go exec_test.go: Clone independence ────────────────────────────
-
+// Go exec_test.go: Clone independence
 #[test]
 fn test_clone_independence() {
     use gotmpl::parse::{ListNode, Node, Pos, TextNode};
@@ -2561,8 +2464,7 @@ fn test_clone_independence() {
     assert_eq!(clone2.execute_to_string(&Value::Nil).unwrap(), "clone2");
 }
 
-// ─── Go exec_test.go: comments in various positions ─────────────────
-
+// Go exec_test.go: comments in various positions
 #[test]
 fn test_comment_standalone() {
     ok("{{/* only comment */}}", &Value::Nil, "");
@@ -2589,8 +2491,7 @@ fn test_comment_trim_surrounding_whitespace() {
     ok("a  {{- /* comment */ -}}  b", &Value::Nil, "ab");
 }
 
-// ─── Go exec_test.go: parenthesized expressions (extended) ─────────
-
+// Go exec_test.go: parenthesized expressions (extended)
 #[test]
 fn test_parens_dollar_in_paren() {
     let data = tmap! { "X" => "x" };
@@ -2602,8 +2503,7 @@ fn test_parens_spaces_and_args() {
     ok(r#"{{printf "%d %d" ( 1 ) ( 2 )}}"#, &Value::Nil, "1 2");
 }
 
-// ─── Go exec_test.go: break/continue with else ─────────────────────
-
+// Go exec_test.go: break/continue with else
 #[test]
 fn test_range_int_break_else() {
     ok(
@@ -2622,8 +2522,7 @@ fn test_range_int_continue_else() {
     );
 }
 
-// ─── Go exec_test.go: call builtin (extended) ──────────────────────
-
+// Go exec_test.go: call builtin (extended)
 #[test]
 fn test_call_with_args() {
     use alloc::sync::Arc;
@@ -2649,8 +2548,7 @@ fn test_call_non_function_fails() {
     fail("{{call 42}}", &Value::Nil);
 }
 
-// ─── Go exec_test.go: len of nothing (error) ───────────────────────
-
+// Go exec_test.go: len of nothing (error)
 #[test]
 fn test_len_of_nil_fails() {
     fail("{{len nil}}", &Value::Nil);
@@ -2661,8 +2559,7 @@ fn test_len_of_int_fails2() {
     fail("{{len 42}}", &Value::Nil);
 }
 
-// ─── Go exec_test.go: slice edge cases ──────────────────────────────
-
+// Go exec_test.go: slice edge cases
 #[test]
 fn test_slice_out_of_range() {
     let data = tmap! { "SI" => vec![1i64, 2, 3] };
@@ -2675,8 +2572,7 @@ fn test_slice_inverted_range() {
     fail("{{slice .SI 2 1}}", &data);
 }
 
-// ─── Go exec_test.go: deeply nested template calls ──────────────────
-
+// Go exec_test.go: deeply nested template calls
 #[test]
 fn test_template_chain() {
     ok(
@@ -2686,15 +2582,13 @@ fn test_template_chain() {
     );
 }
 
-// ─── Go exec_test.go: printf %% escape ─────────────────────────────
-
+// Go exec_test.go: printf %% escape
 #[test]
 fn test_printf_percent_escape() {
     ok(r#"{{printf "100%%"}}"#, &Value::Nil, "100%");
 }
 
-// ─── Go exec_test.go: index of map with string key from variable ───
-
+// Go exec_test.go: index of map with string key from variable
 #[test]
 fn test_index_map_with_variable_key() {
     let data = tmap! {
@@ -2703,8 +2597,7 @@ fn test_index_map_with_variable_key() {
     ok(r#"{{$key := "k"}}{{index .M $key}}"#, &data, "found");
 }
 
-// ─── Go exec_test.go: $ in range points to root data ───────────────
-
+// Go exec_test.go: $ in range points to root data
 #[test]
 fn test_dollar_in_range_points_to_root() {
     let data = tmap! {
@@ -2718,16 +2611,14 @@ fn test_dollar_in_range_points_to_root() {
     );
 }
 
-// ─── Go exec_test.go: multiline templates ───────────────────────────
-
+// Go exec_test.go: multiline templates
 #[test]
 fn test_multiline_template() {
     let tmpl = "line1\n{{if true}}line2\n{{end}}line3";
     ok(tmpl, &Value::Nil, "line1\nline2\nline3");
 }
 
-// ─── Go exec_test.go: empty range with declared variable ───────────
-
+// Go exec_test.go: empty range with declared variable
 #[test]
 fn test_range_empty_with_decl() {
     let data = tmap! { "SIEmpty" => Vec::<i64>::new() };
@@ -2738,8 +2629,7 @@ fn test_range_empty_with_decl() {
     );
 }
 
-// ─── Go exec_test.go: with as if (non-nil, non-zero check) ─────────
-
+// Go exec_test.go: with as if (non-nil, non-zero check)
 #[test]
 fn test_with_as_default() {
     // Common Go pattern: {{with .Subtitle}}{{.}}{{else}}No subtitle{{end}}
@@ -2766,8 +2656,7 @@ fn test_with_as_default_with_value() {
 // flags, clone options, edge cases, piped-value-into-non-function
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ─── Block override determinism (Go's TestIssue19294) ──────────────────
-
+// Block override determinism (Go's TestIssue19294)
 #[test]
 fn test_block_override_determinism() {
     // Run multiple times to catch any non-determinism in block override
@@ -2781,8 +2670,7 @@ fn test_block_override_determinism() {
     }
 }
 
-// ─── Redefinition via multiple defines (Go's TestRedefinition) ─────────
-
+// Redefinition via multiple defines (Go's TestRedefinition)
 #[test]
 fn test_redefinition_last_wins() {
     let tmpl = Template::new("t")
@@ -2793,8 +2681,7 @@ fn test_redefinition_last_wins() {
     assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "third");
 }
 
-// ─── Empty template definitions (Go's TestEmptyTemplate) ───────────────
-
+// Empty template definitions (Go's TestEmptyTemplate)
 #[test]
 fn test_empty_define_last_wins() {
     // Non-empty then empty: last (empty) wins
@@ -2804,8 +2691,7 @@ fn test_empty_define_last_wins() {
     assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "[]");
 }
 
-// ─── Piped value into non-function errors (Go behavior) ────────────────
-
+// Piped value into non-function errors (Go behavior)
 #[test]
 fn test_pipe_into_non_function_fails() {
     // Piping into a field access should fail
@@ -2828,8 +2714,7 @@ fn test_pipe_into_dot_fails() {
     fail("{{1 | .}}", &Value::String("x".into()));
 }
 
-// ─── Printf width and flag tests ──────────────────────────────────────
-
+// Printf width and flag tests
 #[test]
 fn test_printf_width_right_aligned() {
     ok(r#"{{printf "%10d" 42}}"#, &Value::Nil, "        42");
@@ -2908,8 +2793,7 @@ fn test_printf_c_verb() {
     ok(r#"{{printf "%c" 65}}"#, &Value::Nil, "A");
 }
 
-// ─── Go bug7: $ access inside with ────────────────────────────────────
-
+// Go bug7: $ access inside with
 #[test]
 fn test_dollar_inside_with() {
     let data = tmap! { "I" => 17i64, "X" => "x" };
@@ -2935,15 +2819,13 @@ fn test_dollar_inside_range() {
     );
 }
 
-// ─── nil as function arg (Go exec_test.go: "nil call arg") ────────────
-
+// nil as function arg (Go exec_test.go: "nil call arg")
 #[test]
 fn test_nil_as_function_arg() {
     ok("{{print nil}}", &Value::Nil, "<nil>");
 }
 
-// ─── Scope isolation: variable declared in with pipeline ───────────────
-
+// Scope isolation: variable declared in with pipeline
 #[test]
 fn test_with_pipeline_var_scope() {
     // Variable from with's else branch should not leak
@@ -2954,8 +2836,7 @@ fn test_with_pipeline_var_scope() {
     );
 }
 
-// ─── Range over empty with declared variable ──────────────────────────
-
+// Range over empty with declared variable
 #[test]
 fn test_range_empty_with_two_vars() {
     let data = tmap! { "SIEmpty" => Vec::<i64>::new() };
@@ -2966,8 +2847,7 @@ fn test_range_empty_with_two_vars() {
     );
 }
 
-// ─── Nested template $ rebinding ──────────────────────────────────────
-
+// Nested template $ rebinding
 #[test]
 fn test_template_dollar_rebinding() {
     // Inside a called template, $ should refer to the dot passed to that template,
@@ -2980,8 +2860,7 @@ fn test_template_dollar_rebinding() {
     );
 }
 
-// ─── Parse error: missing end in define ───────────────────────────────
-
+// Parse error: missing end in define
 #[test]
 fn test_parse_error_unclosed_action() {
     // Unclosed action should fail at lex time
@@ -2995,8 +2874,7 @@ fn test_parse_error_malformed_define_name() {
     assert!(result.is_err());
 }
 
-// ─── Comparison edge cases ────────────────────────────────────────────
-
+// Comparison edge cases
 #[test]
 fn test_lt_uncomparable_types() {
     // Go: bools are unordered for lt/le/gt/ge.
@@ -3017,8 +2895,7 @@ fn test_eq_list_list() {
 // Additional missing Go tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ─── Legacy octal (Go compat: 0377 = 255) ─────────────────────────────
-
+// Legacy octal (Go compat: 0377 = 255)
 #[test]
 fn test_legacy_octal() {
     ok("{{0377}}", &Value::Nil, "255");
@@ -3029,8 +2906,7 @@ fn test_legacy_octal_underscore() {
     ok("{{0_3_7_7}}", &Value::Nil, "255");
 }
 
-// ─── Non-function with args (Go bug7a/b/c) ────────────────────────────
-
+// Non-function with args (Go bug7a/b/c)
 #[test]
 fn test_non_function_with_args() {
     // {{3 2}} — can't give argument to non-function <number>
@@ -3049,8 +2925,7 @@ fn test_variable_piped_not_callable() {
     fail("{{$x := 1}}{{3 | $x}}", &Value::Nil);
 }
 
-// ─── Parenthesized non-function (Go Issue 31810) ──────────────────────
-
+// Parenthesized non-function (Go Issue 31810)
 #[test]
 fn test_parenthesized_non_function_ok() {
     // {{(1)}} — ok, just returns 1
@@ -3063,8 +2938,7 @@ fn test_parenthesized_non_function_with_args_fails() {
     fail("{{(1) 2}}", &Value::Nil);
 }
 
-// ─── Nested variable scoping (Go exec_test.go) ───────────────────────
-
+// Nested variable scoping (Go exec_test.go)
 #[test]
 fn test_nested_var_scoping_deep() {
     // Inner $x := 2 shadows outer $x := 1. $x = 3 modifies the shadow,
@@ -3076,8 +2950,7 @@ fn test_nested_var_scoping_deep() {
     );
 }
 
-// ─── Range break — text after break not reached (Go exec_test.go) ────
-
+// Range break — text after break not reached (Go exec_test.go)
 #[test]
 fn test_range_break_not_reached() {
     let data = tmap! { "SI" => vec![3i64, 4, 5] };
@@ -3088,8 +2961,7 @@ fn test_range_break_not_reached() {
     );
 }
 
-// ─── Printf %g verb (Go exec_test.go) ────────────────────────────────
-
+// Printf %g verb (Go exec_test.go)
 #[test]
 fn test_printf_g_verb() {
     ok(r#"{{printf "%g" 3.5}}"#, &Value::Nil, "3.5");
@@ -3110,8 +2982,7 @@ fn test_printf_g_precision() {
     ok(r#"{{printf "%.4g" 123456.0}}"#, &Value::Nil, "1.235e+05");
 }
 
-// ─── Printf %#q verb (Go exec_test.go) ───────────────────────────────
-
+// Printf %#q verb (Go exec_test.go)
 #[test]
 fn test_printf_hash_q() {
     ok(r#"{{printf "%#q" "hello"}}"#, &Value::Nil, "`hello`");
@@ -3123,29 +2994,25 @@ fn test_printf_hash_q_with_backtick() {
     ok(r#"{{printf "%#q" "hel`lo"}}"#, &Value::Nil, r#""hel`lo""#);
 }
 
-// ─── Printf %04x (Go exec_test.go: "printf int") ────────────────────
-
+// Printf %04x (Go exec_test.go: "printf int")
 #[test]
 fn test_printf_zero_pad_hex() {
     ok(r#"{{printf "%04x" 127}}"#, &Value::Nil, "007f");
 }
 
-// ─── Printf pipe to printf (Go bug16k) ───────────────────────────────
-
+// Printf pipe to printf (Go bug16k)
 #[test]
 fn test_pipe_to_printf() {
     ok(r#"{{"aaa"|printf}}"#, &Value::Nil, "aaa");
 }
 
-// ─── Hex float literal (Go exec_test.go) ─────────────────────────────
-
+// Hex float literal (Go exec_test.go)
 #[test]
 fn test_hex_float_literal() {
     ok("{{printf \"%g\" 0x1.ep+2}}", &Value::Nil, "7.5");
 }
 
-// ─── Nil as argument to function is ok (Go exec_test.go) ─────────────
-
+// Nil as argument to function is ok (Go exec_test.go)
 #[test]
 fn test_nil_as_eq_arg() {
     // nil as function argument is fine (not as command)
@@ -3153,23 +3020,20 @@ fn test_nil_as_eq_arg() {
     ok("{{ne nil 1}}", &Value::Nil, "true");
 }
 
-// ─── Go bug14: nil field access ──────────────────────────────────────
-
+// Go bug14: nil field access
 #[test]
 fn test_nil_field_access() {
     // Accessing a field on nil returns nil (not an error in our model)
     ok("{{$x := .Missing}}{{$x}}", &tmap! {}, "<no value>");
 }
 
-// ─── Go bug10: mapOfThree in parenthesized form ─────────────────────
-
+// Go bug10: mapOfThree in parenthesized form
 #[test]
 fn test_map_of_three_parens() {
     ok("{{(mapOfThree).three}}", &Value::Nil, "3");
 }
 
-// ─── UTF-8 execution ────────────────────────────────────────────────────
-
+// UTF-8 execution
 #[test]
 fn test_utf8_text_preserved_verbatim() {
     ok(
@@ -3302,4 +3166,114 @@ fn test_utf8_custom_delimiters_preserve_unicode() {
         .execute_to_string(&data)
         .unwrap();
     assert_eq!(result, "[日本語]");
+}
+
+// Variable scoping
+#[test]
+fn test_if_decl_does_not_leak_past_end() {
+    // Per Go spec, a variable declared in a control pipeline is scoped to
+    // the block. Referencing it after `{{end}}` must fail.
+    fail("{{if $x := true}}y{{end}}{{$x}}", &Value::Nil);
+}
+
+#[test]
+fn test_with_decl_does_not_leak_past_end() {
+    let data = tmap! { "A" => 1i64 };
+    fail("{{with $x := .A}}y{{end}}{{$x}}", &data);
+}
+
+#[test]
+fn test_range_decl_does_not_leak_past_end() {
+    let data = tmap! { "L" => vec![1i64, 2, 3] };
+    fail("{{range $i, $v := .L}}{{end}}{{$i}}", &data);
+}
+
+#[test]
+fn test_multi_var_decl_outside_range_errors() {
+    // Only `range` permits multiple declaration variables.
+    fail("{{$a, $b := 5}}", &Value::Nil);
+}
+
+// Integer literals above i64 range are rejected by the lexer. Go rejects
+// the same literals too (at exec time with "overflows int"), so no parity
+// regression here.
+#[test]
+fn test_hex_literal_above_i64_max_rejected() {
+    let err = match Template::new("t").parse("{{0xFFFFFFFFFFFFFFFF}}") {
+        Ok(_) => panic!("literal above i64::MAX should have failed to parse"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("overflows"),
+        "expected overflow error, got: {err}"
+    );
+}
+
+// DoS guards
+#[test]
+fn test_deeply_nested_if_rejected_not_panic() {
+    let mut src = String::new();
+    let n = 150; // exceeds MAX_PARSE_DEPTH (100)
+    for _ in 0..n {
+        src.push_str("{{if 1}}");
+    }
+    src.push('x');
+    for _ in 0..n {
+        src.push_str("{{end}}");
+    }
+    // Must return a parse error, not stack-overflow.
+    let err = Template::new("t").parse(&src).err();
+    assert!(
+        err.as_ref()
+            .is_some_and(|e| e.to_string().contains("nesting depth")),
+        "expected depth-limit error, got {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_printf_huge_width_terminates() {
+    // u16-clamped width must not cause a panic or multi-GB allocation.
+    let r = Template::new("t")
+        .parse(r#"{{printf "%9999999999d" 0}}"#)
+        .and_then(|t| t.execute_to_string(&Value::Nil));
+    assert!(r.is_ok());
+}
+
+#[test]
+fn test_deeply_nested_parens_rejected_not_panic() {
+    // Paren nesting in a pipeline recurses through parse_command/parse_pipeline,
+    // so the depth guard must apply there too (not just to parse_list).
+    let n = 200; // exceeds MAX_PARSE_DEPTH (100)
+    let mut src = String::from("{{");
+    for _ in 0..n {
+        src.push('(');
+    }
+    src.push('1');
+    for _ in 0..n {
+        src.push(')');
+    }
+    src.push_str("}}");
+    let err = Template::new("t").parse(&src).err();
+    assert!(
+        err.as_ref()
+            .is_some_and(|e| e.to_string().contains("nesting depth")),
+        "expected depth-limit error, got {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_huge_range_rejected() {
+    // Billion-iteration range must fail fast under the iteration cap.
+    let r = Template::new("t")
+        .max_range_iters(1_000)
+        .parse("{{range 1000000000}}.{{end}}")
+        .and_then(|t| t.execute_to_string(&Value::Nil));
+    assert!(
+        r.as_ref()
+            .is_err_and(|e| e.to_string().contains("range iteration budget")),
+        "expected range-budget error, got {:?}",
+        r
+    );
 }
