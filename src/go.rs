@@ -27,16 +27,14 @@ use core::fmt::Write;
 use crate::error::Result;
 use crate::value::Value;
 
-// ─── fmt.Sprint spacing ─────────────────────────────────────────────────
-
+// fmt.Sprint spacing
 /// Returns `true` when Go's `fmt.Sprint` would insert a space between two
 /// adjacent arguments (i.e. neither is a string).
 pub(crate) fn needs_space(prev: &Value, next: &Value) -> bool {
     !matches!(prev, Value::String(_)) && !matches!(next, Value::String(_))
 }
 
-// ─── sprintf ────────────────────────────────────────────────────────────
-
+// sprintf
 /// Maximum allowed printf width or precision. Larger values are clamped to
 /// this cap to prevent attacker-controlled format strings from triggering
 /// multi-gigabyte padding allocations. Also stays below Rust's internal
@@ -358,8 +356,7 @@ fn format_string_hex(s: &str, upper: bool, spec: &FmtSpec) -> String {
     out
 }
 
-// ─── Quoting ────────────────────────────────────────────────────────────
-
+// Quoting
 /// Produce a Go-syntax double-quoted string literal (like `strconv.Quote`).
 ///
 /// Escapes backslash, double-quote, newline, tab, carriage-return, bell,
@@ -404,8 +401,7 @@ fn go_backquote(s: &str) -> Option<String> {
     Some(format!("`{}`", s))
 }
 
-// ─── Scientific notation normalization ──────────────────────────────────
-
+// Scientific notation normalization
 /// Normalize Rust's scientific notation to Go's format.
 ///
 /// Go always includes an explicit sign and at least 2 digits in the exponent:
@@ -453,8 +449,7 @@ fn strip_trailing_zeros_sci(s: &str) -> String {
     }
 }
 
-// ─── %g formatting ──────────────────────────────────────────────────────
-
+// %g formatting
 /// Decimal exponent of `f` as reported by its shortest scientific form.
 ///
 /// Avoids the `log10().floor()` round-off that misclassifies values right at
@@ -521,8 +516,7 @@ fn apply_float_sign(s: String, f: f64, spec: &FmtSpec) -> String {
     }
 }
 
-// ─── Integer base formatting ────────────────────────────────────────────
-
+// Integer base formatting
 /// Format a signed integer in a non-decimal base, using Go's conventions
 /// (sign is separate from magnitude: `-0xff`, not two's complement).
 fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> String {
@@ -560,8 +554,7 @@ fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> String {
     }
 }
 
-// ─── Escaping functions ─────────────────────────────────────────────────
-
+// Escaping functions
 /// HTML-escape a string, replacing `&`, `<`, `>`, `"`, `'`, and NUL bytes.
 ///
 /// Matches Go's `template.HTMLEscapeString`. NUL bytes are replaced with the
@@ -629,8 +622,7 @@ pub fn url_encode(s: &str) -> String {
     out
 }
 
-// ─── Hex float parsing ──────────────────────────────────────────────────
-
+// Hex float parsing
 /// Parse a hex float literal like `0x1.Fp10` or `-0x1p-2`.
 ///
 /// Used by the lexer to convert Go's hex-float syntax into an `f64`.
@@ -682,8 +674,7 @@ mod tests {
         sprintf(fmt, args).unwrap()
     }
 
-    // ─── needs_space ────────────────────────────────────────────────
-
+    // needs_space
     #[test]
     fn needs_space_two_ints() {
         assert!(needs_space(&Value::Int(1), &Value::Int(2)));
@@ -708,8 +699,7 @@ mod tests {
         assert!(needs_space(&Value::Bool(true), &Value::Bool(false)));
     }
 
-    // ─── go_quote ───────────────────────────────────────────────────
-
+    // go_quote
     #[test]
     fn quote_simple() {
         assert_eq!(go_quote("hello"), r#""hello""#);
@@ -749,8 +739,7 @@ mod tests {
         assert_eq!(go_quote("caf\u{00e9}"), "\"caf\u{00e9}\"");
     }
 
-    // ─── go_backquote ───────────────────────────────────────────────
-
+    // go_backquote
     #[test]
     fn backquote_simple() {
         assert_eq!(go_backquote("hello"), Some("`hello`".into()));
@@ -779,8 +768,7 @@ mod tests {
         assert_eq!(go_backquote(""), Some("``".into()));
     }
 
-    // ─── go_normalize_sci ───────────────────────────────────────────
-
+    // go_normalize_sci
     #[test]
     fn normalize_positive_single_digit_exp() {
         assert_eq!(go_normalize_sci("1.5e0"), "1.5e+00");
@@ -822,8 +810,7 @@ mod tests {
         assert_eq!(go_normalize_sci("1.5e+2"), "1.5e+02");
     }
 
-    // ─── strip_trailing_zeros ───────────────────────────────────────
-
+    // strip_trailing_zeros
     #[test]
     fn strip_zeros_basic() {
         assert_eq!(strip_trailing_zeros("1.50000"), "1.5");
@@ -846,8 +833,7 @@ mod tests {
         assert_eq!(strip_trailing_zeros("5.000"), "5");
     }
 
-    // ─── strip_trailing_zeros_sci ───────────────────────────────────
-
+    // strip_trailing_zeros_sci
     #[test]
     fn strip_zeros_sci_basic() {
         assert_eq!(strip_trailing_zeros_sci("1.50000e+02"), "1.5e+02");
@@ -864,8 +850,7 @@ mod tests {
         assert_eq!(strip_trailing_zeros_sci("1.50000E+02"), "1.5E+02");
     }
 
-    // ─── format_g_default ───────────────────────────────────────────
-
+    // format_g_default
     #[test]
     fn g_default_zero() {
         assert_eq!(format_g_default(0.0, false), "0");
@@ -901,8 +886,7 @@ mod tests {
         assert_eq!(format_g_default(1e7, true), "1E+07");
     }
 
-    // ─── format_g_with_precision ────────────────────────────────────
-
+    // format_g_with_precision
     #[test]
     fn g_prec_basic() {
         assert_eq!(format_g_with_precision(3.5, 4, false), "3.5");
@@ -937,8 +921,7 @@ mod tests {
         assert_eq!(format_g_with_precision(1e7, 4, true), "1E+07");
     }
 
-    // ─── format_int_base ────────────────────────────────────────────
-
+    // format_int_base
     #[test]
     fn int_base_hex() {
         let spec = FmtSpec {
@@ -1001,8 +984,7 @@ mod tests {
         assert_eq!(format_int_base(-255, "x", &spec), "-0xff");
     }
 
-    // ─── html_escape ────────────────────────────────────────────────
-
+    // html_escape
     #[test]
     fn html_basic() {
         assert_eq!(html_escape("<b>hi</b>"), "&lt;b&gt;hi&lt;/b&gt;");
@@ -1033,8 +1015,7 @@ mod tests {
         assert_eq!(html_escape(""), "");
     }
 
-    // ─── js_escape ──────────────────────────────────────────────────
-
+    // js_escape
     #[test]
     fn js_basic() {
         assert_eq!(js_escape("It'd be nice."), "It\\'d be nice.");
@@ -1075,8 +1056,7 @@ mod tests {
         assert_eq!(js_escape(""), "");
     }
 
-    // ─── url_encode ─────────────────────────────────────────────────
-
+    // url_encode
     #[test]
     fn url_basic() {
         assert_eq!(url_encode("hello world"), "hello%20world");
@@ -1111,8 +1091,7 @@ mod tests {
         assert_eq!(url_encode(""), "");
     }
 
-    // ─── parse_hex_float ────────────────────────────────────────────
-
+    // parse_hex_float
     #[test]
     fn hex_float_basic() {
         assert_eq!(parse_hex_float("0x1.ep+2"), Some(7.5));
@@ -1154,8 +1133,7 @@ mod tests {
         assert_eq!(parse_hex_float(""), None);
     }
 
-    // ─── sprintf: %s ────────────────────────────────────────────────
-
+    // sprintf: %s
     #[test]
     fn sprintf_s_basic() {
         assert_eq!(sf("%s", &[Value::String("hello".into())]), "hello");
@@ -1180,8 +1158,7 @@ mod tests {
         assert_eq!(sf("%.10s", &[Value::String("hi".into())]), "hi");
     }
 
-    // ─── sprintf: %d ────────────────────────────────────────────────
-
+    // sprintf: %d
     #[test]
     fn sprintf_d_basic() {
         assert_eq!(sf("%d", &[Value::Int(42)]), "42");
@@ -1218,8 +1195,7 @@ mod tests {
         assert_eq!(sf("%+06d", &[Value::Int(42)]), "+00042");
     }
 
-    // ─── sprintf: %f ────────────────────────────────────────────────
-
+    // sprintf: %f
     #[test]
     fn sprintf_f_default_precision() {
         assert_eq!(sf("%f", &[Value::Float(1.5)]), "1.500000");
@@ -1244,8 +1220,7 @@ mod tests {
         assert_eq!(sf("% f", &[Value::Float(-1.5)]), "-1.500000");
     }
 
-    // ─── sprintf: %e / %E ───────────────────────────────────────────
-
+    // sprintf: %e / %E
     #[test]
     fn sprintf_e_default() {
         assert_eq!(sf("%e", &[Value::Float(1.5)]), "1.500000e+00");
@@ -1275,8 +1250,7 @@ mod tests {
         assert_eq!(sf("%e", &[Value::Float(0.0)]), "0.000000e+00");
     }
 
-    // ─── sprintf: %g / %G ───────────────────────────────────────────
-
+    // sprintf: %g / %G
     #[test]
     fn sprintf_g_default() {
         assert_eq!(sf("%g", &[Value::Float(3.5)]), "3.5");
@@ -1326,8 +1300,7 @@ mod tests {
         assert_eq!(sf("%g", &[Value::Float(-0.0)]), "-0");
     }
 
-    // ─── sprintf: %v ────────────────────────────────────────────────
-
+    // sprintf: %v
     #[test]
     fn sprintf_v() {
         assert_eq!(sf("%v", &[Value::Int(42)]), "42");
@@ -1336,8 +1309,7 @@ mod tests {
         assert_eq!(sf("%v", &[Value::Nil]), "<nil>");
     }
 
-    // ─── sprintf: %q ────────────────────────────────────────────────
-
+    // sprintf: %q
     #[test]
     fn sprintf_q_basic() {
         assert_eq!(sf("%q", &[Value::String("hello".into())]), r#""hello""#);
@@ -1363,8 +1335,7 @@ mod tests {
         assert_eq!(sf("%#q", &[Value::String("a\nb".into())]), r#""a\nb""#);
     }
 
-    // ─── sprintf: %t ────────────────────────────────────────────────
-
+    // sprintf: %t
     #[test]
     fn sprintf_t() {
         assert_eq!(sf("%t", &[Value::Bool(true)]), "true");
@@ -1376,8 +1347,7 @@ mod tests {
         assert_eq!(sf("%t", &[Value::Int(42)]), "%!t(int=42)");
     }
 
-    // ─── sprintf: %x / %X / %o / %b ────────────────────────────────
-
+    // sprintf: %x / %X / %o / %b
     #[test]
     fn sprintf_x_basic() {
         assert_eq!(sf("%x", &[Value::Int(255)]), "ff");
@@ -1412,16 +1382,14 @@ mod tests {
         assert_eq!(sf("%#b", &[Value::Int(10)]), "0b1010");
     }
 
-    // ─── sprintf: %c ────────────────────────────────────────────────
-
+    // sprintf: %c
     #[test]
     fn sprintf_c() {
         assert_eq!(sf("%c", &[Value::Int(65)]), "A");
         assert_eq!(sf("%c", &[Value::Int(0x1F600)]), "\u{1F600}"); // 😀
     }
 
-    // ─── sprintf: %% and mixed ──────────────────────────────────────
-
+    // sprintf: %% and mixed
     #[test]
     fn sprintf_percent_literal() {
         assert_eq!(sf("100%%", &[]), "100%");
@@ -1486,8 +1454,7 @@ mod tests {
         assert_eq!(sf("%f", &[Value::String("abc".into())]), "%!f(string=abc)");
     }
 
-    // ─── FmtSpec::pad ───────────────────────────────────────────────
-
+    // FmtSpec::pad
     #[test]
     fn pad_no_width() {
         let spec = FmtSpec {
@@ -1587,8 +1554,7 @@ mod tests {
         assert_eq!(spec.pad("hello", false), "hello");
     }
 
-    // ─── FmtSpec::format_signed ─────────────────────────────────────
-
+    // FmtSpec::format_signed
     #[test]
     fn format_signed_plain() {
         let spec = FmtSpec {

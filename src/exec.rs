@@ -91,7 +91,7 @@ impl core::str::FromStr for MissingKey {
     }
 }
 
-// ─── Internal control-flow signaling ────────────────────────────────────
+// Internal control-flow signaling
 //
 // `{{break}}` and `{{continue}}` are not errors, they're control-flow
 // signals caught by the range walker. We keep them out of the public
@@ -327,8 +327,7 @@ impl<'a> Executor<'a> {
         })
     }
 
-    // ─── AST walker ──────────────────────────────────────────────────
-
+    // AST walker
     fn walk<W: Write>(&mut self, w: &mut W, list: &ListNode, dot: &Value) -> ExecResult<()> {
         for node in &list.nodes {
             self.walk_node(w, node, dot)?;
@@ -367,8 +366,7 @@ impl<'a> Executor<'a> {
         }
     }
 
-    // ─── Control flow ────────────────────────────────────────────────
-
+    // Control flow
     fn check_depth(&self) -> ExecResult<()> {
         if self.depth > MAX_EXEC_DEPTH {
             return Err(TemplateError::RecursionLimit.into());
@@ -541,8 +539,7 @@ impl<'a> Executor<'a> {
         result
     }
 
-    // ─── Pipeline and expression evaluation ──────────────────────────
-
+    // Pipeline and expression evaluation
     fn eval_pipeline_value(&mut self, dot: &Value, pipe: &PipeNode) -> ExecResult<Value> {
         let mut val = Value::Nil;
         for (i, cmd) in pipe.commands.iter().enumerate() {

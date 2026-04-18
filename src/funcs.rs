@@ -46,15 +46,12 @@ use crate::value::{Value, ValueFunc};
 
 /// Returns a [`BTreeMap`] containing all built-in template functions.
 ///
-/// This is called automatically by [`Template::new`](crate::Template::new).
-/// The returned map can be extended with custom functions via
-/// [`Template::func`](crate::Template::func).
-///
-/// See the module source for the full list of built-in functions.
+/// Called automatically by [`Template::new`](crate::Template::new); extend the
+/// result with [`Template::func`](crate::Template::func) for custom functions.
 pub fn builtins() -> BTreeMap<String, ValueFunc> {
     let mut m: BTreeMap<String, ValueFunc> = BTreeMap::new();
 
-    // ─── Comparison operators ────────────────────────────────────────
+    // Comparison operators
     // Go's eq can take 2+ args: eq x y z means x==y || x==z
 
     m.insert(
@@ -119,7 +116,7 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
         }),
     );
 
-    // ─── Logic ───────────────────────────────────────────────────────
+    // Logic
     // and: returns first falsy arg, or last arg if all truthy
     // or:  returns first truthy arg, or last arg if all falsy
     //
@@ -162,9 +159,7 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
         }),
     );
 
-    // ─── Output formatting ──────────────────────────────────────────
-    // Go's fmt.Sprint adds spaces between adjacent non-string operands.
-
+    // Output formatting
     m.insert(
         "print".into(),
         Arc::new(|args: &[Value]| {
@@ -205,8 +200,7 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
         }),
     );
 
-    // ─── Data access ─────────────────────────────────────────────────
-
+    // Data access
     m.insert(
         "len".into(),
         Arc::new(|args: &[Value]| {
@@ -327,8 +321,7 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
         }),
     );
 
-    // ─── HTML/JS/URL escaping ────────────────────────────────────────
-
+    // HTML/JS/URL escaping
     m.insert(
         "html".into(),
         Arc::new(|args: &[Value]| {
@@ -359,8 +352,7 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
     m
 }
 
-// ─── Argument validation helpers ─────────────────────────────────────────
-
+// Argument validation helpers
 fn check_args(name: &str, args: &[Value], expected: usize) -> Result<()> {
     if args.len() != expected {
         return Err(TemplateError::ArgCount {

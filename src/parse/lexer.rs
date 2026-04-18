@@ -25,8 +25,7 @@ fn strip_underscores(raw: &str) -> Cow<'_, str> {
     }
 }
 
-// ─── Token types ─────────────────────────────────────────────────────────
-
+// Token types
 /// The kind of a lexed [`Token`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
@@ -122,8 +121,7 @@ impl Token<'_> {
     }
 }
 
-// ─── Lexer ───────────────────────────────────────────────────────────────
-
+// Lexer
 /// Tokenizer for Go template source text.
 ///
 /// Converts a raw template string into a [`Vec<Token>`] via [`tokenize`](Self::tokenize).
@@ -171,8 +169,7 @@ impl<'a> Lexer<'a> {
         Ok(self.tokens)
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────────
-
+    // Helpers
     fn starts_with(&self, prefix: &str) -> bool {
         self.input.as_bytes()[self.pos..].starts_with(prefix.as_bytes())
     }
@@ -268,8 +265,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // ─── State: Scanning text outside delimiters ─────────────────────
-
+    // State: Scanning text outside delimiters
     fn lex_text(&mut self) -> Result<()> {
         // Track whether the last action ended with a trim marker (-}})
         // so we can trim leading whitespace from the next text.
@@ -423,8 +419,7 @@ impl<'a> Lexer<'a> {
         Ok(Some(open_was_trim || close_trims))
     }
 
-    // ─── State: Scanning inside {{ ... }} ────────────────────────────
-
+    // State: Scanning inside {{ ... }}
     fn lex_inside(&mut self) -> Result<()> {
         loop {
             self.skip_whitespace();
@@ -530,8 +525,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // ─── Individual token scanners ───────────────────────────────────
-
+    // Individual token scanners
     fn lex_quoted_string(&mut self) -> Result<()> {
         self.next_char(); // consume opening "
         loop {
@@ -982,8 +976,7 @@ impl<'a> Lexer<'a> {
     }
 }
 
-// ─── String escape processing ────────────────────────────────────────────
-
+// String escape processing
 fn unescape(s: &str) -> Result<String> {
     let mut result = String::new();
     let mut chars = s.chars();

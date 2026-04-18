@@ -105,8 +105,7 @@ impl<'a> Parser<'a> {
         Ok((list, defines))
     }
 
-    // ─── Token navigation ────────────────────────────────────────────
-
+    // Token navigation
     fn peek(&self) -> &Token<'a> {
         &self.tokens[self.pos]
     }
@@ -160,8 +159,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // ─── parse_list: the core loop ──────────────────────────────────
-
+    // parse_list: the core loop
     fn parse_list(&mut self, defines: &mut Vec<DefineNode>) -> Result<ListNode> {
         self.enter()?;
         let pos = self.cur_pos();
@@ -243,8 +241,7 @@ impl<'a> Parser<'a> {
         Ok(ListNode { pos, nodes })
     }
 
-    // ─── Control structure parsers ──────────────────────────────────
-
+    // Control structure parsers
     fn parse_branch(&mut self, defines: &mut Vec<DefineNode>) -> Result<BranchNode> {
         let pos = self.cur_pos();
         self.next();
@@ -377,8 +374,7 @@ impl<'a> Parser<'a> {
         Ok((tmpl, define))
     }
 
-    // ─── Pipeline and command parsing ───────────────────────────────
-
+    // Pipeline and command parsing
     fn parse_pipeline(&mut self, allow_decl: bool) -> Result<PipeNode> {
         let pos = self.cur_pos();
         let mut decl = Vec::new();
@@ -579,8 +575,7 @@ impl<'a> Parser<'a> {
             .collect()
     }
 
-    // ─── Delimiter helpers ──────────────────────────────────────────
-
+    // Delimiter helpers
     fn expect_close_delim(&mut self) -> Result<()> {
         let tok = self.next();
         match tok.kind {

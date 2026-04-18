@@ -33,7 +33,7 @@ pub(crate) mod go;
 pub mod parse;
 pub(crate) mod value;
 
-// ─── Public re-exports ──────────────────────────────────────────────────
+// Public re-exports
 // All user-facing types are available at the crate root.
 
 pub use error::{Result, TemplateError};
@@ -654,8 +654,7 @@ impl Template {
     }
 }
 
-// ─── Convenience constructors ────────────────────────────────────────────
-
+// Convenience constructors
 /// Parse and execute a template in one shot.
 ///
 /// This is a convenience function for simple cases where you don't need
