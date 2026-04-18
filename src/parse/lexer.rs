@@ -77,14 +77,15 @@ pub struct Token {
 }
 
 impl Token {
-    /// Compute the 1-based `(line, column)` from the byte offset and the original source.
+    /// Compute the 1-based `(line, column)` from the character offset and the original source.
+    ///
+    /// `self.pos` is a character index (into the lexer's `Vec<char>` view of
+    /// the source), so we iterate `chars()` rather than `char_indices()`;
+    /// otherwise multi-byte characters would skew the reported column.
     pub fn line_col(&self, source: &str) -> (usize, usize) {
         let mut line = 1;
         let mut col = 1;
-        for (i, ch) in source.char_indices() {
-            if i >= self.pos {
-                break;
-            }
+        for ch in source.chars().take(self.pos) {
             if ch == '\n' {
                 line += 1;
                 col = 1;

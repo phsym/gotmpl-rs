@@ -512,3 +512,192 @@ fn test_add_parse_tree_to_unparsed() {
         "hello"
     );
 }
+
+// ─── UTF-8 escape edge cases ──────────────────────────────────────────────
+//
+// Rust `&str` is always valid UTF-8, so template source can never contain
+// *raw* invalid UTF-8 bytes. The escapes below produce codepoints that either
+// fall outside the Unicode scalar-value range or are otherwise pathological.
+// These tests pin the current behavior of the escape-processing path.
+
+#[test]
+fn test_utf8_escape_lone_surrogate_is_dropped() {
+    // \uD800 is a lone high surrogate. char::from_u32 returns None, and the
+    // lexer silently skips it. Surrounding text is preserved.
+    let out = Template::new("t")
+        .parse(r#"X{{"\uD800"}}Y"#)
+        .unwrap()
+        .execute_to_string(&Value::Nil)
+        .unwrap();
+    assert_eq!(out, "XY");
+}
+
+#[test]
+fn test_utf8_escape_beyond_max_codepoint_is_dropped() {
+    // U+110000 is past the last valid Unicode codepoint.
+    let out = Template::new("t")
+        .parse(r#"A{{"\U00110000"}}B"#)
+        .unwrap()
+        .execute_to_string(&Value::Nil)
+        .unwrap();
+    assert_eq!(out, "AB");
+}
+
+#[test]
+fn test_utf8_escape_noncharacter_preserved() {
+    // U+FFFE is a Unicode noncharacter but a valid Rust `char` — it must
+    // flow through unchanged.
+    let out = Template::new("t")
+        .parse("[{{.}}]")
+        .unwrap()
+        .execute_to_string(&Value::String("\u{FFFE}".into()))
+        .unwrap();
+    assert_eq!(out, "[\u{FFFE}]");
+}
+
+#[test]
+fn test_utf8_bom_in_text_is_preserved() {
+    // A leading byte-order mark is not stripped from the template body.
+    let out = Template::new("t")
+        .parse("\u{FEFF}hello")
+        .unwrap()
+        .execute_to_string(&Value::Nil)
+        .unwrap();
+    assert_eq!(out, "\u{FEFF}hello");
+}
+
+#[test]
+fn test_utf8_invalid_hex_escape_is_dropped() {
+    // `\xZZ` has non-hex digits → from_str_radix fails → silently dropped.
+    let out = Template::new("t")
+        .parse(r#"A{{"\xZZ"}}B"#)
+        .unwrap()
+        .execute_to_string(&Value::Nil)
+        .unwrap();
+    assert_eq!(out, "AB");
+}
+
+// ─── Source-position reporting with UTF-8 prefixes ────────────────────────
+//
+// The lexer tracks positions as character indices into the source (it holds
+// the source as `Vec<char>`). Both parse errors (via `Token::line_col`) and
+// AST node offsets should report *character* columns/offsets so that a UTF-8
+// prefix doesn't skew the reported location.
+
+fn parse_err_line_col(src: &str) -> (usize, usize) {
+    use gotmpl::TemplateError;
+    match Template::new("t").parse(src).err().expect("expected parse error") {
+        TemplateError::Parse { line, col, .. } => (line, col),
+        other => panic!("expected Parse error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_error_col_ascii_baseline() {
+    // Establish what "correct" looks like with no UTF-8 involved.
+    // "{{}}" → empty command; error reported at the `}}` (end of the action).
+    let (line, col) = parse_err_line_col("{{}}");
+    assert_eq!(line, 1);
+    assert_eq!(col, 5);
+}
+
+#[test]
+fn test_parse_error_col_after_two_byte_utf8() {
+    // "é{{}}" — one multi-byte char before the action. The error column must
+    // advance by 1 per character, not per UTF-8 byte.
+    let (line, col) = parse_err_line_col("é{{}}");
+    assert_eq!(line, 1);
+    assert_eq!(
+        col, 6,
+        "column must count characters, not bytes (got {col})"
+    );
+}
+
+#[test]
+fn test_parse_error_col_after_four_byte_utf8() {
+    // "🎉{{}}" — 🎉 is a 4-byte UTF-8 sequence. Column should still be 6.
+    let (line, col) = parse_err_line_col("🎉{{}}");
+    assert_eq!(line, 1);
+    assert_eq!(
+        col, 6,
+        "4-byte UTF-8 char must count as a single column (got {col})"
+    );
+}
+
+#[test]
+fn test_parse_error_col_after_multiple_utf8_chars() {
+    // "ééé{{}}" — three 2-byte chars. Column should be 8.
+    let (line, col) = parse_err_line_col("ééé{{}}");
+    assert_eq!(line, 1);
+    assert_eq!(col, 8, "got {col}");
+}
+
+#[test]
+fn test_parse_error_line_and_col_across_newline_after_utf8() {
+    // UTF-8 on line 1, error on line 2 after another UTF-8 char.
+    // Line tracking should be unaffected; column on line 2 should count chars.
+    let (line, col) = parse_err_line_col("日本語\né{{}}");
+    assert_eq!(line, 2);
+    assert_eq!(col, 6, "got ({line}, {col})");
+}
+
+#[test]
+fn test_parse_tree_node_offsets_are_char_indices() {
+    // AST node offsets are documented (see Pos::offset) as character offsets.
+    // For source "éé{{.X}}" the `.X` action starts at char index 4, not byte 6.
+    use gotmpl::parse::{Expr, Node, Parser};
+
+    let src = "éé{{.X}}";
+    let (tree, _) = Parser::new(src, "{{", "}}").unwrap().parse().unwrap();
+
+    let action = tree
+        .nodes
+        .iter()
+        .find_map(|n| if let Node::Action(a) = n { Some(a) } else { None })
+        .expect("expected an Action node");
+
+    // The Field expression inside the action points to `.X`, whose `.` sits
+    // at character index 4 in "éé{{.X}}".
+    let field_expr = &action.pipe.commands[0].args[0];
+    assert!(matches!(field_expr, Expr::Field(_, _)));
+    assert_eq!(
+        field_expr.pos().offset,
+        4,
+        "Pos::offset must be a char index; got {}",
+        field_expr.pos().offset
+    );
+    assert_eq!(field_expr.pos().line, 1);
+}
+
+#[test]
+fn test_parse_tree_text_node_offset_after_utf8_and_newlines() {
+    // Text node after a UTF-8 line should have line=2 and offset pointing to
+    // the character index of that text in the source.
+    use gotmpl::parse::{Node, Parser};
+
+    let src = "日本語\nhello{{.}}";
+    let (tree, _) = Parser::new(src, "{{", "}}").unwrap().parse().unwrap();
+
+    // First Text node holds "日本語\nhello" and starts at char index 0.
+    // (Line for a multi-line text token follows the lexer's convention of
+    // reporting the line at emit time, so we don't pin it here.)
+    let first_text = tree
+        .nodes
+        .iter()
+        .find_map(|n| if let Node::Text(t) = n { Some(t) } else { None })
+        .expect("expected a Text node");
+    assert_eq!(first_text.pos.offset, 0);
+    assert_eq!(first_text.text, "日本語\nhello");
+
+    // The Action `{{.}}` comes after "日本語\nhello" which is 4 chars + 1 '\n'
+    // + "hello" = 9 chars. Inside the action, `.` sits right after `{{`.
+    // Source chars: 日(0) 本(1) 語(2) \n(3) h(4) e(5) l(6) l(7) o(8) {(9) {(10) .(11)
+    let action = tree
+        .nodes
+        .iter()
+        .find_map(|n| if let Node::Action(a) = n { Some(a) } else { None })
+        .expect("expected an Action node");
+    let dot_expr = &action.pipe.commands[0].args[0];
+    assert_eq!(dot_expr.pos().offset, 11, "got {}", dot_expr.pos().offset);
+    assert_eq!(dot_expr.pos().line, 2);
+}

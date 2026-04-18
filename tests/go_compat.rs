@@ -3167,3 +3167,139 @@ fn test_nil_field_access() {
 fn test_map_of_three_parens() {
     ok("{{(mapOfThree).three}}", &Value::Nil, "3");
 }
+
+// ─── UTF-8 execution ────────────────────────────────────────────────────
+
+#[test]
+fn test_utf8_text_preserved_verbatim() {
+    ok(
+        "Bonjour, ça va? — 日本語 🎉",
+        &Value::Nil,
+        "Bonjour, ça va? — 日本語 🎉",
+    );
+}
+
+#[test]
+fn test_utf8_string_literal() {
+    ok(r#"{{"café"}}"#, &Value::Nil, "café");
+}
+
+#[test]
+fn test_utf8_raw_string_literal() {
+    ok("{{`日本語`}}", &Value::Nil, "日本語");
+}
+
+#[test]
+fn test_utf8_emoji_in_data() {
+    let data = tmap! { "S" => "party 🎉 time" };
+    ok("{{.S}}", &data, "party 🎉 time");
+}
+
+#[test]
+fn test_utf8_data_string() {
+    let data = tmap! { "Name" => "José" };
+    ok("Hello, {{.Name}}!", &data, "Hello, José!");
+}
+
+#[test]
+fn test_utf8_field_name() {
+    // Go's text/template allows unicode-letter identifiers; our lexer matches
+    // via `char::is_alphabetic`, which likewise accepts letters like 'é'.
+    let data = tmap! { "Café" => "yum" };
+    ok("{{.Café}}", &data, "yum");
+}
+
+#[test]
+fn test_utf8_cjk_field_name() {
+    let data = tmap! { "名前" => "太郎" };
+    ok("{{.名前}}", &data, "太郎");
+}
+
+#[test]
+fn test_utf8_variable_name() {
+    let data = tmap! { "X" => "hi" };
+    ok("{{$café := .X}}{{$café}}", &data, "hi");
+}
+
+#[test]
+fn test_utf8_index_with_utf8_key() {
+    let data = tmap! { "m" => tmap! { "café" => "yum" } };
+    ok(r#"{{index .m "café"}}"#, &data, "yum");
+}
+
+#[test]
+fn test_utf8_printf_string_and_int() {
+    ok(
+        r#"{{printf "%s = %d" "café" 42}}"#,
+        &Value::Nil,
+        "café = 42",
+    );
+}
+
+#[test]
+fn test_utf8_len_returns_byte_length() {
+    // Go's `len` on a string returns byte length (UTF-8 bytes), not rune count.
+    // "café" = 'c'(1) + 'a'(1) + 'f'(1) + 'é'(2) = 5 bytes.
+    let data = tmap! { "S" => "café" };
+    ok("{{len .S}}", &data, "5");
+}
+
+#[test]
+fn test_utf8_len_emoji() {
+    // 🎉 = U+1F389, encoded as 4 bytes in UTF-8.
+    let data = tmap! { "S" => "🎉" };
+    ok("{{len .S}}", &data, "4");
+}
+
+#[test]
+fn test_utf8_range_over_map_utf8_keys() {
+    // Map iteration order is BTreeMap order (lexicographic on UTF-8 bytes).
+    // 'α' (U+03B1) sorts before 'β' (U+03B2).
+    let data = tmap! { "m" => tmap! { "α" => "alpha", "β" => "beta" } };
+    ok(
+        "{{range $k, $v := .m}}{{$k}}={{$v}};{{end}}",
+        &data,
+        "α=alpha;β=beta;",
+    );
+}
+
+#[test]
+fn test_utf8_unicode_escape_bmp() {
+    // \u00e9 → é, \u65e5\u672c\u8a9e → 日本語
+    ok(r#"{{"\u00e9"}}"#, &Value::Nil, "é");
+    ok(r#"{{"\u65e5\u672c\u8a9e"}}"#, &Value::Nil, "日本語");
+}
+
+#[test]
+fn test_utf8_unicode_escape_supplementary() {
+    // \U0001F600 → 😀 (outside the BMP; requires the 8-digit \U form).
+    ok(r#"{{"\U0001F600"}}"#, &Value::Nil, "😀");
+}
+
+#[test]
+fn test_utf8_multiline_with_nonascii() {
+    // Ensure lines with UTF-8 don't disturb line/newline tracking in the body.
+    ok("é\n{{.}}\n日", &Value::String("ok".into()), "é\nok\n日");
+}
+
+#[test]
+fn test_utf8_combining_marks_preserved() {
+    // 'é' as U+0065 ('e') + U+0301 (combining acute). Two chars, same visual.
+    let composed = "caf\u{00e9}"; // precomposed é
+    let decomposed = "cafe\u{0301}"; // e + combining acute
+    let data = tmap! { "A" => composed, "B" => decomposed };
+    // Both are preserved verbatim; no normalisation is applied.
+    ok("{{.A}}|{{.B}}", &data, &format!("{composed}|{decomposed}"));
+}
+
+#[test]
+fn test_utf8_custom_delimiters_preserve_unicode() {
+    let data = tmap! { "X" => "日本語" };
+    let result = Template::new("test")
+        .delims("<<", ">>")
+        .parse("[<<.X>>]")
+        .unwrap()
+        .execute_to_string(&data)
+        .unwrap();
+    assert_eq!(result, "[日本語]");
+}
