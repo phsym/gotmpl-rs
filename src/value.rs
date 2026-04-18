@@ -192,15 +192,20 @@ impl Value {
     pub fn index(&self, idx: &Value) -> Result<Value> {
         match (self, idx) {
             (Value::List(v), Value::Int(i)) => {
-                let i = *i as usize;
-                if i >= v.len() {
+                if *i < 0 {
                     return Err(crate::error::TemplateError::Exec(format!(
-                        "index out of range [{}] with length {}",
-                        i,
-                        v.len()
+                        "index out of range: {}",
+                        i
                     )));
                 }
-                Ok(v[i].clone())
+                let idx = *i as usize;
+                if idx >= v.len() {
+                    return Err(crate::error::TemplateError::Exec(format!(
+                        "index out of range: {}",
+                        i
+                    )));
+                }
+                Ok(v[idx].clone())
             }
             (Value::List(_), _) => Err(crate::error::TemplateError::Exec(format!(
                 "cannot index list with type {}",
