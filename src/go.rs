@@ -37,6 +37,16 @@ pub(crate) fn needs_space(prev: &Value, next: &Value) -> bool {
 
 // ─── sprintf ────────────────────────────────────────────────────────────
 
+/// Maximum allowed printf width or precision. Larger values are clamped to
+/// this cap to prevent attacker-controlled format strings from triggering
+/// multi-gigabyte padding allocations. Also stays below Rust's internal
+/// formatter count limit (u16::MAX), which panics on larger widths.
+pub(crate) const PRINTF_MAX_LEN: usize = u16::MAX as usize;
+
+fn clamp_fmt_len(n: usize) -> usize {
+    if n > PRINTF_MAX_LEN { PRINTF_MAX_LEN } else { n }
+}
+
 /// Parsed printf format specifier (`flags`, `width`, `precision`).
 ///
 /// Mirrors the subset of Go's `fmt` format grammar that `text/template` uses.
@@ -93,7 +103,7 @@ impl FmtSpec {
             w.push(c);
         }
         if !w.is_empty() {
-            spec.width = w.parse().ok();
+            spec.width = w.parse().ok().map(clamp_fmt_len);
         }
         // Precision
         if chars.peek() == Some(&'.') {
@@ -105,7 +115,7 @@ impl FmtSpec {
             spec.precision = Some(if p.is_empty() {
                 0
             } else {
-                p.parse().unwrap_or(0)
+                clamp_fmt_len(p.parse().unwrap_or(0))
             });
         }
         spec
@@ -1442,6 +1452,19 @@ mod tests {
     #[test]
     fn sprintf_trailing_percent() {
         assert_eq!(sf("test%", &[]), "test%");
+    }
+
+    #[test]
+    fn sprintf_huge_width_is_clamped() {
+        // Without clamping this would try to allocate >100 GB.
+        let out = sf("%999999999999d", &[Value::Int(1)]);
+        assert!(out.len() <= PRINTF_MAX_LEN + 16, "got len {}", out.len());
+    }
+
+    #[test]
+    fn sprintf_huge_precision_is_clamped() {
+        let out = sf("%.999999999999f", &[Value::Float(1.0)]);
+        assert!(out.len() <= PRINTF_MAX_LEN + 16, "got len {}", out.len());
     }
 
     #[test]
