@@ -17,6 +17,16 @@ use alloc::vec::Vec;
 
 use crate::error::{Result, TemplateError};
 
+/// Build an integer-literal lex error message that distinguishes an
+/// overflow from a syntax error, using `ParseIntError::kind()`.
+fn int_parse_msg(kind: &str, err: &core::num::ParseIntError) -> String {
+    use core::num::IntErrorKind::*;
+    match err.kind() {
+        PosOverflow | NegOverflow => format!("{} integer literal overflows i64", kind),
+        _ => format!("invalid {} number", kind),
+    }
+}
+
 fn strip_underscores(raw: &str) -> Cow<'_, str> {
     if raw.contains('_') {
         Cow::Owned(raw.replace('_', ""))
@@ -656,17 +666,12 @@ impl<'a> Lexer<'a> {
                         } else {
                             (false, clean.as_ref())
                         };
-                        match u64::from_str_radix(digits, 8) {
+                        match i64::from_str_radix(digits, 8) {
                             Ok(n) => {
-                                let signed = n as i64;
-                                let val = if negative {
-                                    signed.wrapping_neg()
-                                } else {
-                                    signed
-                                };
+                                let val = if negative { -n } else { n };
                                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
                             }
-                            Err(_) => return Err(self.error("invalid octal number")),
+                            Err(e) => return Err(self.error(int_parse_msg("octal", &e))),
                         }
                         return Ok(());
                     }
@@ -713,17 +718,12 @@ impl<'a> Lexer<'a> {
                 .trim_start_matches("0x")
                 .trim_start_matches("0X")
         };
-        match u64::from_str_radix(hex_str, 16) {
+        match i64::from_str_radix(hex_str, 16) {
             Ok(n) => {
-                let signed = n as i64;
-                let val = if negative {
-                    signed.wrapping_neg()
-                } else {
-                    signed
-                };
+                let val = if negative { -n } else { n };
                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
             }
-            Err(_) => return Err(self.error("invalid hex number")),
+            Err(e) => return Err(self.error(int_parse_msg("hex", &e))),
         }
         Ok(())
     }
@@ -789,17 +789,17 @@ impl<'a> Lexer<'a> {
         let negative = clean.starts_with('-');
         let prefix_len = if negative { 3 } else { 2 }; // skip sign + 0x/0o/0b
         let digits = &clean[prefix_len..];
-        match u64::from_str_radix(digits, base) {
+        let kind = match base {
+            2 => "binary",
+            8 => "octal",
+            _ => "integer",
+        };
+        match i64::from_str_radix(digits, base) {
             Ok(n) => {
-                let signed = n as i64;
-                let val = if negative {
-                    signed.wrapping_neg()
-                } else {
-                    signed
-                };
+                let val = if negative { -n } else { n };
                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
             }
-            Err(_) => return Err(self.error(format!("invalid base-{} number", base))),
+            Err(e) => return Err(self.error(int_parse_msg(kind, &e))),
         }
         Ok(())
     }

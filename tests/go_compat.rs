@@ -3194,27 +3194,19 @@ fn test_multi_var_decl_outside_range_errors() {
     fail("{{$a, $b := 5}}", &Value::Nil);
 }
 
-// Wide integer literals
+// Integer literals above i64 range are rejected by the lexer. Go rejects
+// the same literals too (at exec time with "overflows int"), so no parity
+// regression here.
 #[test]
-fn test_hex_literal_u64_max_wraps() {
-    // u64::MAX wraps to -1 when read as signed i64 (matches Go's typed-int
-    // conversion of the untyped hex constant).
-    ok("{{0xFFFFFFFFFFFFFFFF}}", &Value::Nil, "-1");
-}
-
-#[test]
-fn test_binary_literal_u64_max_wraps() {
-    ok(
-        &format!("{{{{{}}}}}", "0b".to_owned() + &"1".repeat(64)),
-        &Value::Nil,
-        "-1",
+fn test_hex_literal_above_i64_max_rejected() {
+    let err = match Template::new("t").parse("{{0xFFFFFFFFFFFFFFFF}}") {
+        Ok(_) => panic!("literal above i64::MAX should have failed to parse"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("overflows"),
+        "expected overflow error, got: {err}"
     );
-}
-
-#[test]
-fn test_octal_literal_upper_range() {
-    // 0o1777777777777777777777 = 2^64 - 1
-    ok("{{0o1777777777777777777777}}", &Value::Nil, "-1");
 }
 
 // DoS guards
