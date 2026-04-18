@@ -507,7 +507,7 @@ impl<'a> Executor<'a> {
                 }
             }
             other => {
-                return Err(TemplateError::NotIterable(format!("{}", other)).into());
+                return Err(TemplateError::NotIterable(other.type_name().to_string()).into());
             }
         }
 
