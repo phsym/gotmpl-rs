@@ -12,8 +12,7 @@ use alloc::sync::Arc;
 use gotmpl::Value;
 use gotmpl::{MissingKey, Template, tmap};
 
-// ─── Value::Function variant and call builtin ─────────────────────────────
-
+// Value::Function variant and call builtin
 #[test]
 fn test_call_function_value() {
     let adder: gotmpl::ValueFunc = Arc::new(|args: &[Value]| {
@@ -37,8 +36,7 @@ fn test_function_value_truthy() {
     assert!(data.is_truthy());
 }
 
-// ─── missingkey option API ────────────────────────────────────────────────
-
+// missingkey option API
 #[test]
 fn test_missingkey_error_integration() {
     let data = tmap! { "X" => 1i64 };
@@ -90,8 +88,7 @@ fn test_missingkey_display_roundtrip() {
     }
 }
 
-// ─── Max execution depth (Rust safety guard) ──────────────────────────────
-
+// Max execution depth (Rust safety guard)
 #[test]
 fn test_max_exec_depth() {
     // Recursive template should error, not stack overflow
@@ -107,8 +104,7 @@ fn test_max_exec_depth() {
     );
 }
 
-// ─── parse_additional API ─────────────────────────────────────────────────
-
+// parse_additional API
 #[test]
 fn test_parse_additional_defines() {
     let tmpl = Template::new("root")
@@ -145,8 +141,7 @@ fn test_parse_additional_syntax_error() {
     assert!(result.is_err());
 }
 
-// ─── Clone API ────────────────────────────────────────────────────────────
-
+// Clone API
 #[test]
 fn test_clone_preserves_missingkey_error() {
     let original = Template::new("t")
@@ -183,8 +178,7 @@ fn test_clone_unparsed_template() {
     assert!(cloned.execute_to_string(&Value::Nil).is_err());
 }
 
-// ─── ToValue implementations ─────────────────────────────────────────────
-
+// ToValue implementations
 #[test]
 fn test_to_value_integers() {
     use gotmpl::ToValue;
@@ -334,8 +328,7 @@ fn test_to_value_hashset() {
     );
 }
 
-// ─── From impls for Value ────────────────────────────────────────────────
-
+// From impls for Value
 #[test]
 fn test_from_str_and_string() {
     assert_eq!(Value::from("hi"), Value::String("hi".into()));
@@ -483,8 +476,7 @@ fn test_slice_full_range_shares_storage() {
     }
 }
 
-// ─── add_parse_tree API ───────────────────────────────────────────────────
-
+// add_parse_tree API
 #[test]
 fn test_add_parse_tree_to_unparsed() {
     use gotmpl::parse::{ListNode, Node, Pos, TextNode};
@@ -512,7 +504,7 @@ fn test_add_parse_tree_to_unparsed() {
     );
 }
 
-// ─── UTF-8 escape edge cases ──────────────────────────────────────────────
+// UTF-8 escape edge cases
 //
 // Rust `&str` is always valid UTF-8, so template source can never contain
 // *raw* invalid UTF-8 bytes. The escapes below produce codepoints that either
@@ -576,7 +568,7 @@ fn test_utf8_invalid_hex_escape_is_dropped() {
     assert_eq!(out, "AB");
 }
 
-// ─── Source-position reporting with UTF-8 prefixes ────────────────────────
+// Source-position reporting with UTF-8 prefixes
 //
 // The lexer tracks positions as character indices into the source (it holds
 // the source as `Vec<char>`). Both parse errors (via `Token::line_col`) and
