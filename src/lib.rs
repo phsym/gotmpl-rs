@@ -189,6 +189,7 @@ impl Template {
     ///     .unwrap();
     /// assert_eq!(result, "Hello, World!");
     /// ```
+    #[must_use]
     pub fn delims(mut self, left: &str, right: &str) -> Self {
         self.left_delim = left.to_string();
         self.right_delim = right.to_string();
@@ -209,6 +210,7 @@ impl Template {
     ///     .execute_to_string(&tmap! { "X" => 1i64 });
     /// assert!(result.is_err());
     /// ```
+    #[must_use]
     pub fn missing_key(mut self, mk: MissingKey) -> Self {
         self.missing_key = mk;
         self
@@ -238,6 +240,7 @@ impl Template {
     ///     .unwrap();
     /// assert_eq!(result, "42");
     /// ```
+    #[must_use]
     pub fn func(
         mut self,
         name: &str,
@@ -271,6 +274,7 @@ impl Template {
     ///     .unwrap();
     /// assert_eq!(result, "Hello, World!");
     /// ```
+    #[must_use]
     pub fn funcs(mut self, func_map: FuncMap) -> Self {
         self.funcs.extend(func_map);
         self
@@ -396,6 +400,7 @@ impl Template {
     ///     .unwrap();
     /// assert_eq!(result, "injected");
     /// ```
+    #[must_use]
     pub fn add_parse_tree(mut self, name: &str, tree: ListNode) -> Self {
         self.defines.insert(name.to_string(), tree);
         self
@@ -632,6 +637,7 @@ impl Template {
     /// assert_eq!(original.execute_to_string(&tmap!{}).unwrap(), "original");
     /// assert_eq!(cloned.execute_to_string(&tmap!{}).unwrap(), "cloned");
     /// ```
+    #[must_use]
     pub fn clone_template(&self) -> Self {
         Template {
             name: self.name.clone(),
