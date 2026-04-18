@@ -499,6 +499,84 @@ fn test_printf_var() {
     ok(r#"{{with $x := .I}}{{printf "%d" $x}}{{end}}"#, &data, "17");
 }
 
+#[test]
+fn test_printf_multiple_fields() {
+    let data = tmap! { "Name" => "Alice", "Age" => 30i64 };
+    ok(
+        r#"{{printf "%s is %d years old" .Name .Age}}"#,
+        &data,
+        "Alice is 30 years old",
+    );
+}
+
+#[test]
+fn test_printf_multiple_vars() {
+    let data = tmap! { "Name" => "Alice", "Age" => 30i64 };
+    ok(
+        r#"{{$n := .Name}}{{$a := .Age}}{{printf "%s is %d" $n $a}}"#,
+        &data,
+        "Alice is 30",
+    );
+}
+
+#[test]
+fn test_printf_multiple_dots() {
+    ok(r#"{{printf "%v %v" . .}}"#, &Value::Int(7), "7 7");
+}
+
+#[test]
+fn test_printf_multiple_paren_fields() {
+    let data = tmap! { "Name" => "Alice", "Age" => 30i64 };
+    ok(
+        r#"{{printf "%s is %d" (.Name) (.Age)}}"#,
+        &data,
+        "Alice is 30",
+    );
+}
+
+#[test]
+fn test_printf_three_fields() {
+    let data = tmap! { "A" => "x", "B" => "y", "C" => "z" };
+    ok(r#"{{printf "%s-%s-%s" .A .B .C}}"#, &data, "x-y-z");
+}
+
+#[test]
+fn test_printf_var_then_field() {
+    let data = tmap! { "Name" => "Alice", "Age" => 30i64 };
+    ok(
+        r#"{{$n := .Name}}{{printf "%s is %d" $n .Age}}"#,
+        &data,
+        "Alice is 30",
+    );
+}
+
+#[test]
+fn test_printf_paren_then_field() {
+    let data = tmap! { "Name" => "Alice", "Age" => 30i64 };
+    ok(
+        r#"{{printf "%s is %d" (.Name) .Age}}"#,
+        &data,
+        "Alice is 30",
+    );
+}
+
+#[test]
+fn test_printf_paren_chained_field_then_field() {
+    let data = tmap! {
+        "U" => tmap! { "V" => "inner" },
+        "Other" => "outer"
+    };
+    ok(r#"{{printf "%s-%s" (.U).V .Other}}"#, &data, "inner-outer");
+}
+
+#[test]
+fn test_adjacent_field_chain_still_works() {
+    let data = tmap! {
+        "U" => tmap! { "V" => tmap! { "W" => "deep" } }
+    };
+    ok(r#"{{printf "%s" .U.V.W}}"#, &data, "deep");
+}
+
 // ─── HTML ───────────────────────────────────────────────────────────────
 
 #[test]
