@@ -33,11 +33,13 @@ use crate::funcs::Func;
 use crate::parse::{BranchNode, CommandNode, Expr, ListNode, Node, Number, PipeNode, TemplateNode};
 use crate::value::Value;
 
-/// Maximum recursion depth for `{{template}}` calls.
+/// Maximum total recursion depth across `{{template}}` invocations and
+/// nested `{{if}}`/`{{with}}`/`{{range}}` bodies during execution.
 ///
-/// Go uses 100,000 but Rust's default stack is smaller. 1,000 is safe and
-/// still far beyond any reasonable template nesting.
-const MAX_EXEC_DEPTH: usize = 1_000;
+/// Go uses 100,000; Rust's default thread stack is smaller (2 MB for test
+/// threads). 200 gives comfortable headroom on a 2 MB stack and is far
+/// beyond any reasonable template nesting.
+const MAX_EXEC_DEPTH: usize = 200;
 
 /// Controls behavior when accessing a missing key on a [`Value::Map`].
 ///
@@ -350,9 +352,22 @@ impl<'a> Executor<'a> {
 
     // ─── Control flow ────────────────────────────────────────────────
 
+    fn check_depth(&self) -> ExecResult<()> {
+        if self.depth > MAX_EXEC_DEPTH {
+            return Err(TemplateError::Exec(format!(
+                "exceeded maximum template execution depth ({})",
+                MAX_EXEC_DEPTH
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
     fn walk_if<W: Write>(&mut self, w: &mut W, branch: &BranchNode, dot: &Value) -> ExecResult<()> {
+        self.depth += 1;
+        let depth_ok = self.check_depth();
         self.vars.push();
-        let result = match self.eval_pipeline(dot, &branch.pipe) {
+        let result = depth_ok.and_then(|()| match self.eval_pipeline(dot, &branch.pipe) {
             Ok(val) => {
                 if val.is_truthy() {
                     self.walk(w, &branch.body, dot)
@@ -363,8 +378,9 @@ impl<'a> Executor<'a> {
                 }
             }
             Err(e) => Err(e),
-        };
+        });
         self.vars.pop();
+        self.depth -= 1;
         result
     }
 
@@ -374,8 +390,10 @@ impl<'a> Executor<'a> {
         branch: &BranchNode,
         dot: &Value,
     ) -> ExecResult<()> {
+        self.depth += 1;
+        let depth_ok = self.check_depth();
         self.vars.push();
-        let result = match self.eval_pipeline(dot, &branch.pipe) {
+        let result = depth_ok.and_then(|()| match self.eval_pipeline(dot, &branch.pipe) {
             Ok(val) => {
                 if val.is_truthy() {
                     self.walk(w, &branch.body, &val)
@@ -386,12 +404,25 @@ impl<'a> Executor<'a> {
                 }
             }
             Err(e) => Err(e),
-        };
+        });
         self.vars.pop();
+        self.depth -= 1;
         result
     }
 
     fn walk_range<W: Write>(
+        &mut self,
+        w: &mut W,
+        branch: &BranchNode,
+        dot: &Value,
+    ) -> ExecResult<()> {
+        self.depth += 1;
+        let result = self.check_depth().and_then(|()| self.walk_range_inner(w, branch, dot));
+        self.depth -= 1;
+        result
+    }
+
+    fn walk_range_inner<W: Write>(
         &mut self,
         w: &mut W,
         branch: &BranchNode,
