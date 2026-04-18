@@ -38,6 +38,24 @@ pub(crate) mod value;
 
 pub use error::{Result, TemplateError};
 use funcs::builtins;
+
+/// Shared, lazily-constructed builtins map. `Template::new` clones this
+/// `Arc` (one atomic op) instead of rebuilding the 19-entry BTreeMap on
+/// every call. Mutation via [`Template::func`] / [`Template::funcs`] goes
+/// through `Arc::make_mut`, so custom funcs trigger a one-time copy and
+/// the shared map is never observed in a mutated state.
+#[cfg(feature = "std")]
+fn shared_builtins() -> Arc<BTreeMap<String, ValueFunc>> {
+    use std::sync::LazyLock;
+    static BUILTINS: LazyLock<Arc<BTreeMap<String, ValueFunc>>> =
+        LazyLock::new(|| Arc::new(builtins()));
+    BUILTINS.clone()
+}
+
+#[cfg(not(feature = "std"))]
+fn shared_builtins() -> Arc<BTreeMap<String, ValueFunc>> {
+    Arc::new(builtins())
+}
 pub use go::{html_escape, js_escape, url_encode};
 pub use value::{ToValue, Value, ValueFunc};
 
@@ -100,7 +118,7 @@ pub struct Template {
     name: String,
     tree: Option<ListNode>,
     defines: BTreeMap<String, Arc<ListNode>>,
-    funcs: BTreeMap<String, ValueFunc>,
+    funcs: Arc<BTreeMap<String, ValueFunc>>,
     left_delim: String,
     right_delim: String,
     missing_key: MissingKey,
@@ -155,7 +173,7 @@ impl Template {
             name: name.to_string(),
             tree: None,
             defines: BTreeMap::new(),
-            funcs: builtins(),
+            funcs: shared_builtins(),
             left_delim: "{{".to_string(),
             right_delim: "}}".to_string(),
             missing_key: MissingKey::default(),
@@ -246,7 +264,7 @@ impl Template {
         name: &str,
         f: impl Fn(&[Value]) -> Result<Value> + Send + Sync + 'static,
     ) -> Self {
-        self.funcs.insert(name.to_string(), Arc::new(f));
+        Arc::make_mut(&mut self.funcs).insert(name.to_string(), Arc::new(f));
         self
     }
 
@@ -276,7 +294,7 @@ impl Template {
     /// ```
     #[must_use]
     pub fn funcs(mut self, func_map: FuncMap) -> Self {
-        self.funcs.extend(func_map);
+        Arc::make_mut(&mut self.funcs).extend(func_map);
         self
     }
 

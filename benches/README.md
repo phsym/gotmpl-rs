@@ -39,18 +39,18 @@ numbers are the criterion median, Go numbers are the median of five
 
 ### Parse
 
-| Scenario        | Rust `gotmpl` | Go `text/template` | Go allocs    |
-| --------------- | ------------- | ------------------ | ------------ |
-| `parse/simple`  | 2.80 µs       | 1.11 µs            | 31 / 3.0 KiB |
-| `parse/complex` | 4.59 µs       | 3.41 µs            | 69 / 4.6 KiB |
+| Scenario        | Rust `gotmpl` | Go `text/template` | Go allocs    | Speedup |
+| --------------- | ------------- | ------------------ | ------------ | ------- |
+| `parse/simple`  | 700 ns        | 1.11 µs            | 31 / 3.0 KiB | 1.59×   |
+| `parse/complex` | 2.50 µs       | 3.41 µs            | 69 / 4.6 KiB | 1.36×   |
 
-Go still wins on parse, but the gap has narrowed substantially. The Rust
-lexer scans the source as bytes (rather than materializing a `Vec<char>`
-upfront), tokens borrow their value directly from the source via
-`Cow<'a, str>`, and numeric literals are parsed to `i64` / `f64` at parse
-time so the executor reads them with zero conversion. The remaining gap
-is mostly in AST construction: this crate still allocates owned `String`s
-for identifiers, field names, and template names.
+Rust now wins parse on both cases. The lexer scans the source as bytes
+(rather than materializing a `Vec<char>` upfront), tokens borrow their
+value directly from the source via `Cow<'a, str>`, and numeric literals
+are parsed to `i64` / `f64` at parse time so the executor reads them
+with zero conversion. `Template::new` clones a shared `Arc<BTreeMap>`
+of builtins (one atomic op) instead of rebuilding the 19-entry map per
+call.
 
 ### Execute
 
