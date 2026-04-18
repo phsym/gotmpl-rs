@@ -137,12 +137,7 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
                     return Ok(arg.clone());
                 }
             }
-            #[allow(
-                clippy::unwrap_used,
-                reason = "check_min_args guarantees args is non-empty"
-            )]
-            let last = args.last().unwrap().clone();
-            Ok(last)
+            Ok(args.last().cloned().unwrap_or(Value::Nil))
         }),
     );
 
@@ -155,12 +150,7 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
                     return Ok(arg.clone());
                 }
             }
-            #[allow(
-                clippy::unwrap_used,
-                reason = "check_min_args guarantees args is non-empty"
-            )]
-            let last = args.last().unwrap().clone();
-            Ok(last)
+            Ok(args.last().cloned().unwrap_or(Value::Nil))
         }),
     );
 
