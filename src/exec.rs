@@ -348,10 +348,10 @@ impl<'a> Executor<'a> {
                 if action.pipe.decl.is_empty() {
                     // Go's template engine prints "<no value>" for nil/missing
                     // values, distinct from fmt.Sprint(nil) which prints "<nil>".
-                    if matches!(val, Value::Nil) {
-                        w.write_str("<no value>")?;
-                    } else {
-                        write!(w, "{}", val)?;
+                    match val {
+                        Value::Nil => w.write_str("<no value>")?,
+                        Value::String(s) => w.write_str(&s)?,
+                        other => write!(w, "{}", other)?,
                     }
                 }
                 Ok(())
@@ -544,7 +544,14 @@ impl<'a> Executor<'a> {
     fn eval_pipeline_value(&mut self, dot: &Value, pipe: &PipeNode) -> ExecResult<Value> {
         let mut val = Value::Nil;
         for (i, cmd) in pipe.commands.iter().enumerate() {
-            let prev = if i > 0 { Some(val.clone()) } else { None };
+            // Move the previous stage's result rather than cloning — it is
+            // only used by the next command, and any downstream need for it
+            // is already covered by the new `val` we're about to assign.
+            let prev = if i > 0 {
+                Some(core::mem::replace(&mut val, Value::Nil))
+            } else {
+                None
+            };
             val = self.eval_command(dot, cmd, prev)?;
         }
         Ok(val)
