@@ -441,6 +441,17 @@ fn strip_trailing_zeros_sci(s: &str) -> String {
 
 // ─── %g formatting ──────────────────────────────────────────────────────
 
+/// Decimal exponent of `f` as reported by its shortest scientific form.
+///
+/// Avoids the `log10().floor()` round-off that misclassifies values right at
+/// a power-of-ten boundary (e.g. `999999.999…` rounding up to `1e6`).
+fn decimal_exp(f: f64) -> i32 {
+    let s = format!("{:e}", f.abs());
+    s.find('e')
+        .and_then(|i| s[i + 1..].parse::<i32>().ok())
+        .unwrap_or(0)
+}
+
 /// Format a float with Go's `%g` default precision (shortest representation).
 ///
 /// Uses `%e` notation when the exponent is < −4 or ≥ 6, matching Go's
@@ -449,7 +460,7 @@ fn format_g_default(f: f64, upper: bool) -> String {
     if f == 0.0 {
         return (if f.is_sign_negative() { "-0" } else { "0" }).to_string();
     }
-    let exp = f.abs().log10().floor() as i32;
+    let exp = decimal_exp(f);
     if !(-4..6).contains(&exp) {
         let raw = format!("{:e}", f);
         let s = go_normalize_sci(&raw);
@@ -467,7 +478,7 @@ fn format_g_with_precision(f: f64, prec: usize, upper: bool) -> String {
     if f == 0.0 {
         return (if f.is_sign_negative() { "-0" } else { "0" }).to_string();
     }
-    let exp = f.abs().log10().floor() as i32;
+    let exp = decimal_exp(f);
     if exp < -4 || exp >= prec as i32 {
         let e_prec = prec.saturating_sub(1);
         let raw = format!("{:.prec$e}", f, prec = e_prec);
@@ -633,8 +644,8 @@ pub(crate) fn parse_hex_float(s: &str) -> Option<f64> {
         } else {
             u64::from_str_radix(frac_part, 16).ok()?
         };
-        let frac_bits = frac_part.len() as u32 * 4;
-        int_val as f64 + frac_val as f64 / (1u64 << frac_bits) as f64
+        let frac_bits = frac_part.len() as i32 * 4;
+        int_val as f64 + frac_val as f64 / (2f64).powi(frac_bits)
     } else {
         u64::from_str_radix(mantissa_str, 16).ok()? as f64
     };
