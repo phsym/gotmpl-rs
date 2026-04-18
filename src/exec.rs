@@ -183,6 +183,10 @@ impl VarScope {
     }
 }
 
+/// Default per-execution iteration budget across all `{{range}}` loops.
+/// Caps attacker-controlled `{{range 10000000000}}` / nested-range DoS.
+pub(crate) const DEFAULT_MAX_RANGE_ITERS: u64 = 10_000_000;
+
 /// The template execution context.
 ///
 /// Walks the AST produced by the [`Parser`](crate::parse::Parser), evaluating
@@ -195,6 +199,7 @@ pub struct Executor<'a> {
     vars: VarScope,
     depth: usize,
     missing_key: MissingKey,
+    range_iters_remaining: u64,
 }
 
 /// Returns a short human-readable name for an expression, used in error messages.
@@ -221,6 +226,14 @@ fn expr_name(expr: &Expr) -> &'static str {
 macro_rules! range_loop {
     ($self:expr, $w:expr, $branch:expr, $iter:expr) => {
         for (idx_val, item) in $iter {
+            if $self.range_iters_remaining == 0 {
+                return Err(TemplateError::Exec(format!(
+                    "exceeded maximum range iteration budget ({})",
+                    DEFAULT_MAX_RANGE_ITERS
+                ))
+                .into());
+            }
+            $self.range_iters_remaining -= 1;
             $self.vars.push();
             if $branch.pipe.is_assign {
                 // Assignment form ($v = range ...): modify existing variables
@@ -277,12 +290,19 @@ impl<'a> Executor<'a> {
             vars: VarScope::new(),
             depth: 0,
             missing_key: MissingKey::default(),
+            range_iters_remaining: DEFAULT_MAX_RANGE_ITERS,
         }
     }
 
     /// Set the [`MissingKey`] behavior for this executor.
     pub fn set_missing_key(&mut self, mk: MissingKey) {
         self.missing_key = mk;
+    }
+
+    /// Set the total number of `{{range}}` iterations allowed for this
+    /// execution (across all nested ranges). Zero disables the limit.
+    pub fn set_max_range_iters(&mut self, n: u64) {
+        self.range_iters_remaining = if n == 0 { u64::MAX } else { n };
     }
 
     /// Execute the template tree with the given data, writing output to `writer`.

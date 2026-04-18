@@ -3382,3 +3382,18 @@ fn test_printf_huge_width_terminates() {
         .and_then(|t| t.execute_to_string(&Value::Nil));
     assert!(r.is_ok());
 }
+
+#[test]
+fn test_huge_range_rejected() {
+    // Billion-iteration range must fail fast under the iteration cap.
+    let r = Template::new("t")
+        .max_range_iters(1_000)
+        .parse("{{range 1000000000}}.{{end}}")
+        .and_then(|t| t.execute_to_string(&Value::Nil));
+    assert!(
+        r.as_ref()
+            .is_err_and(|e| e.to_string().contains("range iteration budget")),
+        "expected range-budget error, got {:?}",
+        r
+    );
+}

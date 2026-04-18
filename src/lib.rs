@@ -105,6 +105,7 @@ pub struct Template {
     left_delim: String,
     right_delim: String,
     missing_key: MissingKey,
+    max_range_iters: u64,
 }
 
 /// Adapter that bridges [`std::io::Write`] to [`core::fmt::Write`].
@@ -159,7 +160,17 @@ impl Template {
             left_delim: "{{".to_string(),
             right_delim: "}}".to_string(),
             missing_key: MissingKey::default(),
+            max_range_iters: exec::DEFAULT_MAX_RANGE_ITERS,
         }
+    }
+
+    /// Set the total number of `{{range}}` iterations allowed per execution
+    /// (across all nested ranges). Defaults to 10,000,000. Set to `0` to
+    /// disable the cap entirely (at your own risk with untrusted templates).
+    #[must_use]
+    pub fn max_range_iters(mut self, n: u64) -> Self {
+        self.max_range_iters = n;
+        self
     }
 
     /// Set custom action delimiters (default: `"{{"` and `"}}"`).
@@ -407,6 +418,7 @@ impl Template {
 
         let mut executor = Executor::new(&self.funcs, &self.defines);
         executor.set_missing_key(self.missing_key);
+        executor.set_max_range_iters(self.max_range_iters);
         executor.execute(writer, tree, data)
     }
 
@@ -433,6 +445,7 @@ impl Template {
 
         let mut executor = Executor::new(&self.funcs, &self.defines);
         executor.set_missing_key(self.missing_key);
+        executor.set_max_range_iters(self.max_range_iters);
         executor.execute(writer, tree, data)
     }
 
@@ -626,6 +639,7 @@ impl Template {
             left_delim: self.left_delim.clone(),
             right_delim: self.right_delim.clone(),
             missing_key: self.missing_key,
+            max_range_iters: self.max_range_iters,
         }
     }
 }
