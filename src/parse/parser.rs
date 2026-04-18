@@ -39,10 +39,18 @@ fn parse_number(s: &str) -> Option<Number> {
 /// assert_eq!(tree.nodes.len(), 3); // Text, Action, Text
 /// assert!(defines.is_empty());
 /// ```
+/// Maximum nesting depth (for `{{if}}`/`{{with}}`/`{{range}}`/`{{block}}`
+/// bodies and parenthesised pipelines) allowed during parsing. Prevents
+/// attacker-controlled templates from blowing the thread stack. Chosen to
+/// stay well under Rust's default 2 MB thread stack given ~13 KB per
+/// recursive parser frame in debug builds.
+const MAX_PARSE_DEPTH: usize = 100;
+
 pub struct Parser<'a> {
     tokens: Vec<Token<'a>>,
     pos: usize,
     source: &'a str,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -61,7 +69,27 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             source,
+            depth: 0,
         })
+    }
+
+    fn enter(&mut self) -> Result<()> {
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            return Err(TemplateError::Parse {
+                line: 0,
+                col: 0,
+                message: alloc::format!(
+                    "template nesting depth exceeded {}",
+                    MAX_PARSE_DEPTH
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn leave(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
     }
 
     /// Parse the entire template into an AST.
@@ -138,6 +166,7 @@ impl<'a> Parser<'a> {
     // ─── parse_list: the core loop ──────────────────────────────────
 
     fn parse_list(&mut self, defines: &mut Vec<DefineNode>) -> Result<ListNode> {
+        self.enter()?;
         let pos = self.cur_pos();
         let mut nodes = Vec::new();
 
@@ -207,11 +236,13 @@ impl<'a> Parser<'a> {
                     }
                 }
                 _ => {
+                    self.leave();
                     return Err(self.error(format!("unexpected token: {:?}", self.peek().kind)));
                 }
             }
         }
 
+        self.leave();
         Ok(ListNode { pos, nodes })
     }
 

@@ -3350,3 +3350,35 @@ fn test_octal_literal_upper_range() {
     // 0o1777777777777777777777 = 2^64 - 1
     ok("{{0o1777777777777777777777}}", &Value::Nil, "-1");
 }
+
+// ─── DoS guards ────────────────────────────────────────────────────────
+
+#[test]
+fn test_deeply_nested_if_rejected_not_panic() {
+    let mut src = String::new();
+    let n = 150; // exceeds MAX_PARSE_DEPTH (100)
+    for _ in 0..n {
+        src.push_str("{{if 1}}");
+    }
+    src.push_str("x");
+    for _ in 0..n {
+        src.push_str("{{end}}");
+    }
+    // Must return a parse error, not stack-overflow.
+    let err = Template::new("t").parse(&src).err();
+    assert!(
+        err.as_ref()
+            .is_some_and(|e| e.to_string().contains("nesting depth")),
+        "expected depth-limit error, got {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_printf_huge_width_terminates() {
+    // u16-clamped width must not cause a panic or multi-GB allocation.
+    let r = Template::new("t")
+        .parse(r#"{{printf "%9999999999d" 0}}"#)
+        .and_then(|t| t.execute_to_string(&Value::Nil));
+    assert!(r.is_ok());
+}
