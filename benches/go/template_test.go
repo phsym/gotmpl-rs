@@ -1,5 +1,4 @@
 // Go benchmarks mirroring benches/benches/template.rs.
-// Run with: go test -bench=. -benchmem ./...
 package gotmplbench
 
 import (
