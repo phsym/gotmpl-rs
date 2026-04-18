@@ -2,10 +2,10 @@ name: Test
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
-  workflow_call: 
+    branches: ["main"]
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,27 +18,32 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest] #, windows-latest, macos-latest]
-        features: [""]
+        features: ["", "std", "std,go-crosscheck", "go-crosscheck"]
 
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v6
-    - uses: ./.github/actions/setup-build-env
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-build-env
+      - uses: actions/setup-go@v6
+        if: contains(matrix.features, 'go-crosscheck')
+        with:
+          go-version: "1.26"
+          cache: false
 
-    - name: Build
-      run: cargo build --verbose --features "${{ matrix.features }}"
-    - name: Run tests
-      run: cargo test --verbose --features "${{ matrix.features }}"
-  
+      - name: Build
+        run: cargo build --verbose --no-default-features --features "${{ matrix.features }}"
+      - name: Run tests
+        run: cargo test --verbose --no-default-features --features "${{ matrix.features }}"
+
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: ./.github/actions/setup-build-env
-    - name: Check formatting
-      run: cargo fmt --check --all
-    - name: Run Cargo check
-      run: cargo check --all --all-features --all-targets
-    - name: Run Clippy linter
-      run: cargo clippy --all --all-features --all-targets -- -D clippy::all
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-build-env
+      - name: Check formatting
+        run: cargo fmt --check --all
+      - name: Run Cargo check
+        run: cargo check --all --all-features --all-targets
+      - name: Run Clippy linter
+        run: cargo clippy --all --all-features --all-targets -- -D clippy::all
