@@ -674,21 +674,21 @@ pub fn execute(template_src: &str, data: &Value) -> Result<String> {
 
 /// Reports whether a [`Value`] is "true" according to Go's template truthiness rules.
 ///
-/// Equivalent to Go's `template.IsTrue()`. Returns `(truth, ok)` where `ok`
-/// indicates whether the truthiness check is meaningful for this type
-/// (always `true` for our [`Value`] enum).
+/// Equivalent to Go's `template.IsTrue()` but without the second "ok" tuple
+/// slot — every [`Value`] variant is always meaningful for truthiness, so
+/// Go's `(true, true)` / `(false, true)` pattern collapsed to a single bool.
 ///
 /// # Examples
 ///
 /// ```
 /// use gotmpl::{is_true, Value};
 ///
-/// assert_eq!(is_true(&Value::Bool(true)), (true, true));
-/// assert_eq!(is_true(&Value::Int(0)), (false, true));
-/// assert_eq!(is_true(&Value::Nil), (false, true));
+/// assert!(is_true(&Value::Bool(true)));
+/// assert!(!is_true(&Value::Int(0)));
+/// assert!(!is_true(&Value::Nil));
 /// ```
-pub fn is_true(val: &Value) -> (bool, bool) {
-    (val.is_truthy(), true)
+pub fn is_true(val: &Value) -> bool {
+    val.is_truthy()
 }
 
 #[cfg(test)]
@@ -1004,10 +1004,10 @@ mod tests {
 
     #[test]
     fn test_is_true() {
-        assert_eq!(is_true(&Value::Bool(true)), (true, true));
-        assert_eq!(is_true(&Value::Bool(false)), (false, true));
-        assert_eq!(is_true(&Value::Int(0)), (false, true));
-        assert_eq!(is_true(&Value::Int(1)), (true, true));
-        assert_eq!(is_true(&Value::Nil), (false, true));
+        assert!(is_true(&Value::Bool(true)));
+        assert!(!is_true(&Value::Bool(false)));
+        assert!(!is_true(&Value::Int(0)));
+        assert!(is_true(&Value::Int(1)));
+        assert!(!is_true(&Value::Nil));
     }
 }
