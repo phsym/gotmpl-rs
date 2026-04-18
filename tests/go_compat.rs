@@ -3303,3 +3303,30 @@ fn test_utf8_custom_delimiters_preserve_unicode() {
         .unwrap();
     assert_eq!(result, "[日本語]");
 }
+
+// ─── Variable scoping ──────────────────────────────────────────────────
+
+#[test]
+fn test_if_decl_does_not_leak_past_end() {
+    // Per Go spec, a variable declared in a control pipeline is scoped to
+    // the block. Referencing it after `{{end}}` must fail.
+    fail("{{if $x := true}}y{{end}}{{$x}}", &Value::Nil);
+}
+
+#[test]
+fn test_with_decl_does_not_leak_past_end() {
+    let data = tmap! { "A" => 1i64 };
+    fail("{{with $x := .A}}y{{end}}{{$x}}", &data);
+}
+
+#[test]
+fn test_range_decl_does_not_leak_past_end() {
+    let data = tmap! { "L" => vec![1i64, 2, 3] };
+    fail("{{range $i, $v := .L}}{{end}}{{$i}}", &data);
+}
+
+#[test]
+fn test_multi_var_decl_outside_range_errors() {
+    // Only `range` permits multiple declaration variables.
+    fail("{{$a, $b := 5}}", &Value::Nil);
+}

@@ -351,20 +351,21 @@ impl<'a> Executor<'a> {
     // ─── Control flow ────────────────────────────────────────────────
 
     fn walk_if<W: Write>(&mut self, w: &mut W, branch: &BranchNode, dot: &Value) -> ExecResult<()> {
-        let val = self.eval_pipeline(dot, &branch.pipe)?;
-        if val.is_truthy() {
-            self.vars.push();
-            let result = self.walk(w, &branch.body, dot);
-            self.vars.pop();
-            result
-        } else if let Some(ref else_body) = branch.else_body {
-            self.vars.push();
-            let result = self.walk(w, else_body, dot);
-            self.vars.pop();
-            result
-        } else {
-            Ok(())
-        }
+        self.vars.push();
+        let result = match self.eval_pipeline(dot, &branch.pipe) {
+            Ok(val) => {
+                if val.is_truthy() {
+                    self.walk(w, &branch.body, dot)
+                } else if let Some(ref else_body) = branch.else_body {
+                    self.walk(w, else_body, dot)
+                } else {
+                    Ok(())
+                }
+            }
+            Err(e) => Err(e),
+        };
+        self.vars.pop();
+        result
     }
 
     fn walk_with<W: Write>(
@@ -373,21 +374,21 @@ impl<'a> Executor<'a> {
         branch: &BranchNode,
         dot: &Value,
     ) -> ExecResult<()> {
-        let val = self.eval_pipeline(dot, &branch.pipe)?;
-        if val.is_truthy() {
-            // With sets dot to the pipeline value
-            self.vars.push();
-            let result = self.walk(w, &branch.body, &val);
-            self.vars.pop();
-            result
-        } else if let Some(ref else_body) = branch.else_body {
-            self.vars.push();
-            let result = self.walk(w, else_body, dot);
-            self.vars.pop();
-            result
-        } else {
-            Ok(())
-        }
+        self.vars.push();
+        let result = match self.eval_pipeline(dot, &branch.pipe) {
+            Ok(val) => {
+                if val.is_truthy() {
+                    self.walk(w, &branch.body, &val)
+                } else if let Some(ref else_body) = branch.else_body {
+                    self.walk(w, else_body, dot)
+                } else {
+                    Ok(())
+                }
+            }
+            Err(e) => Err(e),
+        };
+        self.vars.pop();
+        result
     }
 
     fn walk_range<W: Write>(
@@ -396,7 +397,10 @@ impl<'a> Executor<'a> {
         branch: &BranchNode,
         dot: &Value,
     ) -> ExecResult<()> {
-        let val = self.eval_pipeline(dot, &branch.pipe)?;
+        // `range` binds its own per-iteration vars via `range_loop!`; use the
+        // decl-free evaluator so pipe.decl names do not leak into the outer
+        // scope or get pre-bound to the pipeline's final value.
+        let val = self.eval_pipeline_value(dot, &branch.pipe)?;
 
         match &val {
             Value::List(items) if items.is_empty() => {
@@ -497,26 +501,35 @@ impl<'a> Executor<'a> {
 
     // ─── Pipeline and expression evaluation ──────────────────────────
 
-    fn eval_pipeline(&mut self, dot: &Value, pipe: &PipeNode) -> ExecResult<Value> {
+    fn eval_pipeline_value(&mut self, dot: &Value, pipe: &PipeNode) -> ExecResult<Value> {
         let mut val = Value::Nil;
-
         for (i, cmd) in pipe.commands.iter().enumerate() {
-            // For piped commands, the previous result becomes the last argument
             let prev = if i > 0 { Some(val.clone()) } else { None };
             val = self.eval_command(dot, cmd, prev)?;
         }
+        Ok(val)
+    }
 
-        // Handle variable declarations
-        if !pipe.decl.is_empty() {
-            for var_name in &pipe.decl {
+    fn eval_pipeline(&mut self, dot: &Value, pipe: &PipeNode) -> ExecResult<Value> {
+        let val = self.eval_pipeline_value(dot, pipe)?;
+        match pipe.decl.len() {
+            0 => {}
+            1 => {
+                let name = &pipe.decl[0];
                 if pipe.is_assign {
-                    self.vars.assign(var_name, val.clone());
+                    self.vars.assign(name, val.clone());
                 } else {
-                    self.vars.set(var_name, val.clone());
+                    self.vars.set(name, val.clone());
                 }
             }
+            n => {
+                return Err(TemplateError::Exec(format!(
+                    "cannot assign {} variables outside a range pipeline",
+                    n
+                ))
+                .into());
+            }
         }
-
         Ok(val)
     }
 
