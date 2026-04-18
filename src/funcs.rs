@@ -16,6 +16,21 @@
 //! | Output | `print`, `printf`, `println` |
 //! | Data | `len`, `index`, `slice`, `call` |
 //! | Escaping | `html`, `js`, `urlquery` |
+//!
+//! # Escape-function security notes
+//!
+//! The escape builtins match Go's `text/template` parity exactly, which is
+//! **not** enough for all HTML/JS contexts:
+//!
+//! - `html` does **not** escape backticks and is only safe inside
+//!   double-quoted attribute values or text nodes — never in unquoted
+//!   attributes, `<script>` blocks, or inline event handlers.
+//! - `js` does **not** escape U+2028 / U+2029 (line / paragraph separator),
+//!   which terminate string literals when embedded in `<script>` tags.
+//! - `urlquery` percent-encodes for query strings; it is not a replacement
+//!   for full URL-construction logic when building paths.
+//!
+//! For context-aware escaping use a dedicated `html/template`-style crate.
 
 use alloc::collections::BTreeMap;
 use alloc::format;

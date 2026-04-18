@@ -3360,7 +3360,7 @@ fn test_deeply_nested_if_rejected_not_panic() {
     for _ in 0..n {
         src.push_str("{{if 1}}");
     }
-    src.push_str("x");
+    src.push('x');
     for _ in 0..n {
         src.push_str("{{end}}");
     }
