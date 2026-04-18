@@ -1,7 +1,7 @@
 //! Built-in template functions, equivalent to Go's `text/template` builtins.
 //!
 //! In Go, template functions are stored in a `FuncMap` and called via reflection.
-//! In Rust, we use boxed closures with the signature [`Func`].
+//! In Rust, we use boxed closures with the signature [`ValueFunc`].
 //!
 //! All built-in functions are registered automatically when creating a
 //! [`Template`](crate::Template). Custom functions can be added via
@@ -42,17 +42,7 @@ use core::fmt::Write;
 
 use crate::error::{Result, TemplateError};
 use crate::go;
-use crate::value::Value;
-
-/// The function type used by the template engine.
-///
-/// All template functions, both built-in and user-defined, share
-/// this signature: they receive arguments as a [`Value`] slice and return a
-/// [`Result<Value>`](crate::error::Result).
-///
-/// Uses [`Arc`] so that functions can be shared across cloned templates.
-/// Register custom functions via [`Template::func`](crate::Template::func).
-pub type Func = Arc<dyn Fn(&[Value]) -> Result<Value> + Send + Sync>;
+use crate::value::{Value, ValueFunc};
 
 /// Returns a [`BTreeMap`] containing all built-in template functions.
 ///
@@ -61,8 +51,8 @@ pub type Func = Arc<dyn Fn(&[Value]) -> Result<Value> + Send + Sync>;
 /// [`Template::func`](crate::Template::func).
 ///
 /// See the module source for the full list of built-in functions.
-pub fn builtins() -> BTreeMap<String, Func> {
-    let mut m: BTreeMap<String, Func> = BTreeMap::new();
+pub fn builtins() -> BTreeMap<String, ValueFunc> {
+    let mut m: BTreeMap<String, ValueFunc> = BTreeMap::new();
 
     // ─── Comparison operators ────────────────────────────────────────
     // Go's eq can take 2+ args: eq x y z means x==y || x==z

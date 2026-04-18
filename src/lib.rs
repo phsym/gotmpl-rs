@@ -37,7 +37,6 @@ pub(crate) mod value;
 // All user-facing types are available at the crate root.
 
 pub use error::{Result, TemplateError};
-pub use funcs::Func;
 use funcs::builtins;
 pub use go::{html_escape, js_escape, url_encode};
 pub use value::{ToValue, Value, ValueFunc};
@@ -71,7 +70,7 @@ use parse::{ListNode, Parser};
 ///     Ok(Value::Int(args[0].as_int().unwrap_or(0) * 2))
 /// }));
 /// ```
-pub type FuncMap = BTreeMap<String, Func>;
+pub type FuncMap = BTreeMap<String, ValueFunc>;
 
 /// A parsed, ready-to-execute template.
 ///
@@ -101,7 +100,7 @@ pub struct Template {
     name: String,
     tree: Option<ListNode>,
     defines: BTreeMap<String, ListNode>,
-    funcs: BTreeMap<String, Func>,
+    funcs: BTreeMap<String, ValueFunc>,
     left_delim: String,
     right_delim: String,
     missing_key: MissingKey,

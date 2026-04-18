@@ -29,7 +29,7 @@ use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::error::{Result, TemplateError};
-use crate::funcs::Func;
+use crate::value::ValueFunc;
 use crate::parse::{BranchNode, CommandNode, Expr, ListNode, Node, Number, PipeNode, TemplateNode};
 use crate::value::Value;
 
@@ -194,7 +194,7 @@ pub(crate) const DEFAULT_MAX_RANGE_ITERS: u64 = 10_000_000;
 ///
 /// Created internally by [`Template::execute`](crate::Template::execute).
 pub struct Executor<'a> {
-    funcs: &'a BTreeMap<String, Func>,
+    funcs: &'a BTreeMap<String, ValueFunc>,
     templates: &'a BTreeMap<String, ListNode>,
     vars: VarScope,
     depth: usize,
@@ -277,7 +277,7 @@ impl<'a> Executor<'a> {
     /// user-defined functions. The `templates` map holds named templates from
     /// `{{define}}` blocks.
     pub fn new(
-        funcs: &'a BTreeMap<String, Func>,
+        funcs: &'a BTreeMap<String, ValueFunc>,
         templates: &'a BTreeMap<String, ListNode>,
     ) -> Self {
         Executor {
@@ -724,7 +724,7 @@ impl<'a> Executor<'a> {
     }
 
     #[cfg(feature = "std")]
-    fn invoke_func(&self, name: &str, func: &Func, args: &[Value]) -> ExecResult<Value> {
+    fn invoke_func(&self, name: &str, func: &ValueFunc, args: &[Value]) -> ExecResult<Value> {
         match catch_unwind(AssertUnwindSafe(|| func(args))) {
             Ok(result) => result.map_err(ExecSignal::from),
             Err(payload) => Err(TemplateError::FuncPanic {
@@ -736,7 +736,7 @@ impl<'a> Executor<'a> {
     }
 
     #[cfg(not(feature = "std"))]
-    fn invoke_func(&self, _name: &str, func: &Func, args: &[Value]) -> ExecResult<Value> {
+    fn invoke_func(&self, _name: &str, func: &ValueFunc, args: &[Value]) -> ExecResult<Value> {
         func(args).map_err(ExecSignal::from)
     }
 
