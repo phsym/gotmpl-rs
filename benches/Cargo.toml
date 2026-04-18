@@ -1,0 +1,15 @@
+[package]
+name = "gotmpl-benches"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gotmpl = { path = ".." }
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "template"
+harness = false

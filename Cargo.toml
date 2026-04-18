@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "benches"]
+default-members = ["."]
+
 [package]
 name = "gotmpl"
 version = "0.1.0"
