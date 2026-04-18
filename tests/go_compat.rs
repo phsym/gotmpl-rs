@@ -3330,3 +3330,23 @@ fn test_multi_var_decl_outside_range_errors() {
     // Only `range` permits multiple declaration variables.
     fail("{{$a, $b := 5}}", &Value::Nil);
 }
+
+// ─── Wide integer literals ─────────────────────────────────────────────
+
+#[test]
+fn test_hex_literal_u64_max_wraps() {
+    // u64::MAX wraps to -1 when read as signed i64 (matches Go's typed-int
+    // conversion of the untyped hex constant).
+    ok("{{0xFFFFFFFFFFFFFFFF}}", &Value::Nil, "-1");
+}
+
+#[test]
+fn test_binary_literal_u64_max_wraps() {
+    ok(&format!("{{{{{}}}}}", "0b".to_owned() + &"1".repeat(64)), &Value::Nil, "-1");
+}
+
+#[test]
+fn test_octal_literal_upper_range() {
+    // 0o1777777777777777777777 = 2^64 - 1
+    ok("{{0o1777777777777777777777}}", &Value::Nil, "-1");
+}

@@ -662,9 +662,11 @@ impl<'a> Lexer<'a> {
                         } else {
                             (false, clean.as_ref())
                         };
-                        match i64::from_str_radix(digits, 8) {
+                        match u64::from_str_radix(digits, 8) {
                             Ok(n) => {
-                                let val = if negative { -n } else { n };
+                                let signed = n as i64;
+                                let val =
+                                    if negative { signed.wrapping_neg() } else { signed };
                                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
                             }
                             Err(_) => return Err(self.error("invalid octal number")),
@@ -714,9 +716,10 @@ impl<'a> Lexer<'a> {
                 .trim_start_matches("0x")
                 .trim_start_matches("0X")
         };
-        match i64::from_str_radix(hex_str, 16) {
+        match u64::from_str_radix(hex_str, 16) {
             Ok(n) => {
-                let val = if negative { -n } else { n };
+                let signed = n as i64;
+                let val = if negative { signed.wrapping_neg() } else { signed };
                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
             }
             Err(_) => return Err(self.error("invalid hex number")),
@@ -785,9 +788,10 @@ impl<'a> Lexer<'a> {
         let negative = clean.starts_with('-');
         let prefix_len = if negative { 3 } else { 2 }; // skip sign + 0x/0o/0b
         let digits = &clean[prefix_len..];
-        match i64::from_str_radix(digits, base) {
+        match u64::from_str_radix(digits, base) {
             Ok(n) => {
-                let val = if negative { -n } else { n };
+                let signed = n as i64;
+                let val = if negative { signed.wrapping_neg() } else { signed };
                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
             }
             Err(_) => return Err(self.error(format!("invalid base-{} number", base))),
