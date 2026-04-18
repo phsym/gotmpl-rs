@@ -1916,8 +1916,9 @@ fn test_function_panic_is_exec_error() {
     match result {
         Ok(exec_result) => {
             let err = exec_result.expect_err("expected execution error");
-            assert!(err.to_string().contains("error calling boom"));
-            assert!(err.to_string().contains("boom panic"));
+            let s = err.to_string();
+            assert!(s.contains("boom") && s.contains("panicked"), "got: {s}");
+            assert!(s.contains("boom panic"), "got: {s}");
         }
         Err(_) => panic!("panic escaped template execution"),
     }

@@ -227,11 +227,7 @@ macro_rules! range_loop {
     ($self:expr, $w:expr, $branch:expr, $iter:expr) => {
         for (idx_val, item) in $iter {
             if $self.range_iters_remaining == 0 {
-                return Err(TemplateError::Exec(format!(
-                    "exceeded maximum range iteration budget ({})",
-                    DEFAULT_MAX_RANGE_ITERS
-                ))
-                .into());
+                return Err(TemplateError::RangeIterLimit.into());
             }
             $self.range_iters_remaining -= 1;
             $self.vars.push();
@@ -374,11 +370,7 @@ impl<'a> Executor<'a> {
 
     fn check_depth(&self) -> ExecResult<()> {
         if self.depth > MAX_EXEC_DEPTH {
-            return Err(TemplateError::Exec(format!(
-                "exceeded maximum template execution depth ({})",
-                MAX_EXEC_DEPTH
-            ))
-            .into());
+            return Err(TemplateError::RecursionLimit.into());
         }
         Ok(())
     }
@@ -523,11 +515,7 @@ impl<'a> Executor<'a> {
         self.depth += 1;
         if self.depth > MAX_EXEC_DEPTH {
             self.depth -= 1;
-            return Err(TemplateError::Exec(format!(
-                "exceeded maximum template call depth ({})",
-                MAX_EXEC_DEPTH
-            ))
-            .into());
+            return Err(TemplateError::RecursionLimit.into());
         }
 
         let new_dot = if let Some(ref pipe) = tmpl.pipe {
@@ -739,11 +727,10 @@ impl<'a> Executor<'a> {
     fn invoke_func(&self, name: &str, func: &Func, args: &[Value]) -> ExecResult<Value> {
         match catch_unwind(AssertUnwindSafe(|| func(args))) {
             Ok(result) => result.map_err(ExecSignal::from),
-            Err(payload) => Err(TemplateError::Exec(format!(
-                "error calling {}: {}",
-                name,
-                panic_payload_to_string(payload)
-            ))
+            Err(payload) => Err(TemplateError::FuncPanic {
+                name: name.to_string(),
+                message: panic_payload_to_string(payload),
+            }
             .into()),
         }
     }

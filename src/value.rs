@@ -193,17 +193,11 @@ impl Value {
         match (self, idx) {
             (Value::List(v), Value::Int(i)) => {
                 if *i < 0 {
-                    return Err(crate::error::TemplateError::Exec(format!(
-                        "index out of range: {}",
-                        i
-                    )));
+                    return Err(crate::error::TemplateError::IndexOutOfRange { index: *i });
                 }
                 let idx = *i as usize;
                 if idx >= v.len() {
-                    return Err(crate::error::TemplateError::Exec(format!(
-                        "index out of range: {}",
-                        i
-                    )));
+                    return Err(crate::error::TemplateError::IndexOutOfRange { index: *i });
                 }
                 Ok(v[idx].clone())
             }

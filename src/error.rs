@@ -17,8 +17,15 @@ use thiserror::Error;
 /// |-------|----------|
 /// | Lexing | [`Lex`](Self::Lex) |
 /// | Parsing | [`Parse`](Self::Parse) |
-/// | Execution | [`Exec`](Self::Exec), [`UndefinedTemplate`](Self::UndefinedTemplate), [`UndefinedFunction`](Self::UndefinedFunction), [`UndefinedVariable`](Self::UndefinedVariable), [`ArgCount`](Self::ArgCount), [`NotIterable`](Self::NotIterable) |
-/// | I/O | [`Io`](Self::Io) |
+/// | Execution | many: see below |
+/// | I/O | [`Io`](Self::Io), [`ReadFile`](Self::ReadFile) |
+///
+/// Execution errors include [`Exec`](Self::Exec) as a catch-all string
+/// variant for rare cases; prefer pattern-matching on the structured
+/// variants where available.
+///
+/// Marked `#[non_exhaustive]`: future versions may add variants without a
+/// major bump.
 ///
 /// # Examples
 ///
@@ -31,6 +38,7 @@ use thiserror::Error;
 /// assert!(err.to_string().contains("unclosed action"));
 /// ```
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TemplateError {
     /// A syntax error found during parsing, with source location.
     #[error("parse error at line {line}, col {col}: {message}")]
@@ -53,8 +61,56 @@ pub enum TemplateError {
     },
 
     /// A general execution error (type mismatch, invalid operation, etc.).
+    ///
+    /// Prefer the structured variants below when they apply.
     #[error("execution error: {0}")]
     Exec(String),
+
+    /// An index or slice bound was outside the sequence it addressed.
+    #[error("index out of range: {index}")]
+    IndexOutOfRange {
+        /// The offending index as supplied (may be negative).
+        index: i64,
+    },
+
+    /// A value had the wrong type for the operation attempted on it.
+    #[error("type mismatch: expected {expected}, got {got}")]
+    TypeMismatch {
+        /// The type name the operation required (e.g. `"int"`, `"list"`).
+        expected: &'static str,
+        /// The actual type of the offending value.
+        got: &'static str,
+    },
+
+    /// A required map key was missing and [`MissingKey::Error`](crate::MissingKey::Error) is set.
+    #[error("map has no entry for key: {key}")]
+    MissingKey {
+        /// The key that was looked up.
+        key: String,
+    },
+
+    /// Executor recursion depth exceeded.
+    ///
+    /// Triggered by deeply nested `{{template}}` calls or `{{if}}`/`{{with}}`/
+    /// `{{range}}` bodies. The limit is internal and not configurable.
+    #[error("recursion limit exceeded")]
+    RecursionLimit,
+
+    /// The per-execution `{{range}}` iteration budget was exhausted.
+    ///
+    /// Configurable via [`Template::max_range_iters`](crate::Template::max_range_iters).
+    #[error("range iteration budget exhausted")]
+    RangeIterLimit,
+
+    /// A user-registered template function panicked.
+    #[cfg(feature = "std")]
+    #[error("function {name} panicked: {message}")]
+    FuncPanic {
+        /// Name of the function that panicked.
+        name: String,
+        /// Best-effort description of the panic payload.
+        message: String,
+    },
 
     /// A `{{template "name"}}` action referenced a template that was never defined.
     #[error("undefined template: {0}")]
@@ -87,6 +143,18 @@ pub enum TemplateError {
     /// or [`Value::Int`](crate::value::Value::Int)).
     #[error("cannot range over {0}")]
     NotIterable(String),
+
+    /// Failed to read a template file passed to
+    /// [`Template::parse_files`](crate::Template::parse_files).
+    #[cfg(feature = "std")]
+    #[error("failed to read template file {path}: {source}")]
+    ReadFile {
+        /// The path that failed to open.
+        path: String,
+        /// The underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
 
     /// An I/O error occurred while writing template output.
     #[cfg(feature = "std")]

@@ -344,7 +344,10 @@ impl Template {
     pub fn parse_files(mut self, filenames: &[&str]) -> Result<Self> {
         for filename in filenames {
             let content = std::fs::read_to_string(filename).map_err(|e| {
-                error::TemplateError::Exec(format!("parse_files: {}: {}", filename, e))
+                error::TemplateError::ReadFile {
+                    path: filename.to_string(),
+                    source: e,
+                }
             })?;
 
             let parser = Parser::new(&content, &self.left_delim, &self.right_delim)?;
@@ -972,9 +975,16 @@ mod tests {
     #[cfg(feature = "std")]
     fn test_parse_files_not_found() {
         let result = Template::new("t").parse_files(&["/nonexistent/file.html"]);
-        assert!(result.is_err());
         let err = result.err().unwrap();
-        assert!(err.to_string().contains("parse_files"));
+        assert!(
+            matches!(
+                err,
+                error::TemplateError::ReadFile { ref path, .. }
+                    if path == "/nonexistent/file.html"
+            ),
+            "expected ReadFile error, got {:?}",
+            err
+        );
     }
 
     #[test]

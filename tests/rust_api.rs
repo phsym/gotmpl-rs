@@ -99,12 +99,11 @@ fn test_max_exec_depth() {
         .parse(r#"{{define "recurse"}}{{template "recurse" .}}{{end}}{{template "recurse" .}}"#)
         .unwrap()
         .execute_to_string(&Value::Nil);
-    assert!(result.is_err());
+    let err = result.expect_err("expected recursion limit error");
     assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("maximum template call depth")
+        matches!(err, gotmpl::TemplateError::RecursionLimit),
+        "expected RecursionLimit, got {:?}",
+        err
     );
 }
 
