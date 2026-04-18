@@ -585,7 +585,11 @@ fn test_utf8_invalid_hex_escape_is_dropped() {
 
 fn parse_err_line_col(src: &str) -> (usize, usize) {
     use gotmpl::TemplateError;
-    match Template::new("t").parse(src).err().expect("expected parse error") {
+    match Template::new("t")
+        .parse(src)
+        .err()
+        .expect("expected parse error")
+    {
         TemplateError::Parse { line, col, .. } => (line, col),
         other => panic!("expected Parse error, got {other:?}"),
     }
@@ -652,7 +656,13 @@ fn test_parse_tree_node_offsets_are_byte_indices() {
     let action = tree
         .nodes
         .iter()
-        .find_map(|n| if let Node::Action(a) = n { Some(a) } else { None })
+        .find_map(|n| {
+            if let Node::Action(a) = n {
+                Some(a)
+            } else {
+                None
+            }
+        })
         .expect("expected an Action node");
 
     let field_expr = &action.pipe.commands[0].args[0];
@@ -692,7 +702,13 @@ fn test_parse_tree_text_node_offset_after_utf8_and_newlines() {
     let action = tree
         .nodes
         .iter()
-        .find_map(|n| if let Node::Action(a) = n { Some(a) } else { None })
+        .find_map(|n| {
+            if let Node::Action(a) = n {
+                Some(a)
+            } else {
+                None
+            }
+        })
         .expect("expected an Action node");
     let dot_expr = &action.pipe.commands[0].args[0];
     assert_eq!(dot_expr.pos().offset, 17, "got {}", dot_expr.pos().offset);

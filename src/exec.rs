@@ -29,9 +29,9 @@ use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::error::{Result, TemplateError};
-use crate::value::ValueFunc;
 use crate::parse::{BranchNode, CommandNode, Expr, ListNode, Node, Number, PipeNode, TemplateNode};
 use crate::value::Value;
+use crate::value::ValueFunc;
 
 /// Maximum total recursion depth across `{{template}}` invocations and
 /// nested `{{if}}`/`{{with}}`/`{{range}}` bodies during execution.
@@ -430,7 +430,9 @@ impl<'a> Executor<'a> {
         dot: &Value,
     ) -> ExecResult<()> {
         self.depth += 1;
-        let result = self.check_depth().and_then(|()| self.walk_range_inner(w, branch, dot));
+        let result = self
+            .check_depth()
+            .and_then(|()| self.walk_range_inner(w, branch, dot));
         self.depth -= 1;
         result
     }

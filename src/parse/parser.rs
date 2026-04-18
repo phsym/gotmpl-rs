@@ -79,10 +79,7 @@ impl<'a> Parser<'a> {
             return Err(TemplateError::Parse {
                 line: 0,
                 col: 0,
-                message: alloc::format!(
-                    "template nesting depth exceeded {}",
-                    MAX_PARSE_DEPTH
-                ),
+                message: alloc::format!("template nesting depth exceeded {}", MAX_PARSE_DEPTH),
             });
         }
         Ok(())

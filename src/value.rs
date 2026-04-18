@@ -535,7 +535,12 @@ impl<T: ToValue> ToValue for Option<T> {
 // ─── List-like collection impls ─────────────────────────────────────────
 
 fn list_from_iter<'a, T: ToValue + 'a, I: IntoIterator<Item = &'a T>>(iter: I) -> Value {
-    Value::List(iter.into_iter().map(ToValue::to_value).collect::<Vec<_>>().into())
+    Value::List(
+        iter.into_iter()
+            .map(ToValue::to_value)
+            .collect::<Vec<_>>()
+            .into(),
+    )
 }
 
 fn map_from_iter_str<'a, T: ToValue + 'a, I: IntoIterator<Item = (&'a str, &'a T)>>(

@@ -3343,7 +3343,11 @@ fn test_hex_literal_u64_max_wraps() {
 
 #[test]
 fn test_binary_literal_u64_max_wraps() {
-    ok(&format!("{{{{{}}}}}", "0b".to_owned() + &"1".repeat(64)), &Value::Nil, "-1");
+    ok(
+        &format!("{{{{{}}}}}", "0b".to_owned() + &"1".repeat(64)),
+        &Value::Nil,
+        "-1",
+    );
 }
 
 #[test]

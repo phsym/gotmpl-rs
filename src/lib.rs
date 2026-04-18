@@ -297,7 +297,8 @@ impl Template {
 
         self.tree = Some(tree);
         for def in defines {
-            self.defines.insert(def.name.to_string(), Arc::new(def.body));
+            self.defines
+                .insert(def.name.to_string(), Arc::new(def.body));
         }
 
         Ok(self)
@@ -317,7 +318,8 @@ impl Template {
         let (_, defines) = parser.parse()?;
 
         for def in defines {
-            self.defines.insert(def.name.to_string(), Arc::new(def.body));
+            self.defines
+                .insert(def.name.to_string(), Arc::new(def.body));
         }
 
         Ok(self)
@@ -346,12 +348,11 @@ impl Template {
     #[cfg(feature = "std")]
     pub fn parse_files(mut self, filenames: &[&str]) -> Result<Self> {
         for filename in filenames {
-            let content = std::fs::read_to_string(filename).map_err(|e| {
-                error::TemplateError::ReadFile {
+            let content =
+                std::fs::read_to_string(filename).map_err(|e| error::TemplateError::ReadFile {
                     path: filename.to_string(),
                     source: e,
-                }
-            })?;
+                })?;
 
             let parser = Parser::new(&content, &self.left_delim, &self.right_delim)?;
             let (tree, defines) = parser.parse()?;
@@ -364,7 +365,8 @@ impl Template {
             self.defines.insert(basename.to_string(), Arc::new(tree));
 
             for def in defines {
-                self.defines.insert(def.name.to_string(), Arc::new(def.body));
+                self.defines
+                    .insert(def.name.to_string(), Arc::new(def.body));
             }
         }
         Ok(self)

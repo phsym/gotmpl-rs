@@ -44,7 +44,11 @@ pub(crate) fn needs_space(prev: &Value, next: &Value) -> bool {
 pub(crate) const PRINTF_MAX_LEN: usize = u16::MAX as usize;
 
 fn clamp_fmt_len(n: usize) -> usize {
-    if n > PRINTF_MAX_LEN { PRINTF_MAX_LEN } else { n }
+    if n > PRINTF_MAX_LEN {
+        PRINTF_MAX_LEN
+    } else {
+        n
+    }
 }
 
 /// Parsed printf format specifier (`flags`, `width`, `precision`).
@@ -1474,18 +1478,12 @@ mod tests {
 
     #[test]
     fn sprintf_d_non_int_emits_bad_verb() {
-        assert_eq!(
-            sf("%d", &[Value::String("abc".into())]),
-            "%!d(string=abc)"
-        );
+        assert_eq!(sf("%d", &[Value::String("abc".into())]), "%!d(string=abc)");
     }
 
     #[test]
     fn sprintf_f_non_numeric_emits_bad_verb() {
-        assert_eq!(
-            sf("%f", &[Value::String("abc".into())]),
-            "%!f(string=abc)"
-        );
+        assert_eq!(sf("%f", &[Value::String("abc".into())]), "%!f(string=abc)");
     }
 
     // ─── FmtSpec::pad ───────────────────────────────────────────────

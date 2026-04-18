@@ -665,8 +665,11 @@ impl<'a> Lexer<'a> {
                         match u64::from_str_radix(digits, 8) {
                             Ok(n) => {
                                 let signed = n as i64;
-                                let val =
-                                    if negative { signed.wrapping_neg() } else { signed };
+                                let val = if negative {
+                                    signed.wrapping_neg()
+                                } else {
+                                    signed
+                                };
                                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
                             }
                             Err(_) => return Err(self.error("invalid octal number")),
@@ -719,7 +722,11 @@ impl<'a> Lexer<'a> {
         match u64::from_str_radix(hex_str, 16) {
             Ok(n) => {
                 let signed = n as i64;
-                let val = if negative { signed.wrapping_neg() } else { signed };
+                let val = if negative {
+                    signed.wrapping_neg()
+                } else {
+                    signed
+                };
                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
             }
             Err(_) => return Err(self.error("invalid hex number")),
@@ -791,7 +798,11 @@ impl<'a> Lexer<'a> {
         match u64::from_str_radix(digits, base) {
             Ok(n) => {
                 let signed = n as i64;
-                let val = if negative { signed.wrapping_neg() } else { signed };
+                let val = if negative {
+                    signed.wrapping_neg()
+                } else {
+                    signed
+                };
                 self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
             }
             Err(_) => return Err(self.error(format!("invalid base-{} number", base))),
