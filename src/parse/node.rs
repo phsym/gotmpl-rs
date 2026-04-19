@@ -148,8 +148,7 @@ pub struct CommandNode {
 
 /// A parsed numeric literal — either an integer or a floating-point value.
 ///
-/// Produced by the parser from [`TokenKind::Number`](crate::parse::lexer::TokenKind)
-/// and [`TokenKind::Char`](crate::parse::lexer::TokenKind) tokens. Character
+/// Produced by the parser from `Number` and `Char` tokens. Character
 /// literals are stored as `Int` holding the Unicode code point.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Number {
