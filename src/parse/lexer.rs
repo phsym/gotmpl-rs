@@ -12,9 +12,10 @@
 
 use alloc::borrow::Cow;
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
+use super::node::Number;
 use crate::error::{Result, TemplateError};
 
 /// Build an integer-literal lex error message that distinguishes an
@@ -85,14 +86,18 @@ pub enum TokenKind {
 ///
 /// The `val` field borrows from the source when possible (text, identifiers,
 /// field names, keywords, raw strings) and only allocates for values that
-/// must be transformed — quoted strings with escapes, numeric literals
-/// converted to decimal, and character literals rendered as code points.
+/// must be transformed — quoted strings with escapes. For `Number` and `Char`
+/// tokens, `val` always borrows the raw source slice and the parsed numeric
+/// value is carried in `num`, so the parser can skip the decimal round-trip.
 #[derive(Debug, Clone)]
 pub struct Token<'a> {
     /// What kind of token this is.
     pub kind: TokenKind,
     /// The token's string value (literal text, identifier name, number, etc.).
     pub val: Cow<'a, str>,
+    /// Pre-parsed numeric value for `Number` / `Char` tokens. `None` for all
+    /// other token kinds.
+    pub num: Option<Number>,
     /// Byte offset in the original source.
     pub pos: usize,
     /// 1-based line number tracked during scanning.
@@ -147,8 +152,6 @@ pub struct Lexer<'a> {
     tokens: Vec<Token<'a>>,
     left_delim: &'a str,
     right_delim: &'a str,
-    left_trim: String,
-    right_trim: String,
     line: usize,
 }
 
@@ -166,10 +169,18 @@ impl<'a> Lexer<'a> {
             tokens: Vec::with_capacity(capacity),
             left_delim,
             right_delim,
-            left_trim: format!("{}-", left_delim),
-            right_trim: format!("-{}", right_delim),
             line: 1,
         }
+    }
+
+    fn at_left_trim(&self) -> bool {
+        self.starts_with(self.left_delim)
+            && self.input.as_bytes().get(self.pos + self.left_delim.len()) == Some(&b'-')
+    }
+
+    fn at_right_trim(&self) -> bool {
+        self.input.as_bytes().get(self.pos) == Some(&b'-')
+            && self.input[self.pos + 1..].starts_with(self.right_delim)
     }
 
     /// Tokenize the entire input and return the token stream.
@@ -248,6 +259,7 @@ impl<'a> Lexer<'a> {
         self.tokens.push(Token {
             kind,
             val,
+            num: None,
             pos: self.start,
             line: self.line,
         });
@@ -258,6 +270,19 @@ impl<'a> Lexer<'a> {
         self.tokens.push(Token {
             kind,
             val,
+            num: None,
+            pos: self.start,
+            line: self.line,
+        });
+        self.start = self.pos;
+    }
+
+    fn emit_num(&mut self, kind: TokenKind, num: Number) {
+        let val = Cow::Borrowed(self.current_str());
+        self.tokens.push(Token {
+            kind,
+            val,
+            num: Some(num),
             pos: self.start,
             line: self.line,
         });
@@ -290,12 +315,12 @@ impl<'a> Lexer<'a> {
             }
 
             // Check for left trim delimiter (e.g. "{{-")
-            if self.starts_with(&self.left_trim) {
+            if self.at_left_trim() {
                 if self.pos > self.start {
                     // {{- trims trailing whitespace from preceding text
                     self.emit_pending_text(trim_leading, true);
                 }
-                self.skip(self.left_trim.len());
+                self.skip(self.left_delim.len() + 1);
                 self.ignore();
                 self.emit(TokenKind::LeftTrimDelim);
                 trim_leading = self.lex_action_body()?;
@@ -404,8 +429,8 @@ impl<'a> Lexer<'a> {
 
         // Detect whether close has trim marker
         let close_trims;
-        if self.starts_with(&self.right_trim) {
-            self.skip(self.right_trim.len());
+        if self.at_right_trim() {
+            self.skip(self.right_delim.len() + 1);
             close_trims = true;
         } else if self.starts_with(self.right_delim) {
             self.skip(self.right_delim.len());
@@ -440,8 +465,8 @@ impl<'a> Lexer<'a> {
             }
 
             // Check for right delimiter (with optional trim)
-            if self.starts_with(&self.right_trim) {
-                self.skip(self.right_trim.len());
+            if self.at_right_trim() {
+                self.skip(self.right_delim.len() + 1);
                 self.ignore();
                 self.emit(TokenKind::RightTrimDelim);
                 return Ok(());
@@ -669,7 +694,7 @@ impl<'a> Lexer<'a> {
                         match i64::from_str_radix(digits, 8) {
                             Ok(n) => {
                                 let val = if negative { -n } else { n };
-                                self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
+                                self.emit_num(TokenKind::Number, Number::Int(val));
                             }
                             Err(e) => return Err(self.error(int_parse_msg("octal", &e))),
                         }
@@ -721,7 +746,7 @@ impl<'a> Lexer<'a> {
         match i64::from_str_radix(hex_str, 16) {
             Ok(n) => {
                 let val = if negative { -n } else { n };
-                self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
+                self.emit_num(TokenKind::Number, Number::Int(val));
             }
             Err(e) => return Err(self.error(int_parse_msg("hex", &e))),
         }
@@ -758,7 +783,7 @@ impl<'a> Lexer<'a> {
         let clean = strip_underscores(raw);
         // Parse hex float manually: use the format 0xHEX.HEXpEXP
         match crate::go::parse_hex_float(&clean) {
-            Some(f) => self.emit_val(TokenKind::Number, Cow::Owned(format!("{}", f))),
+            Some(f) => self.emit_num(TokenKind::Number, Number::Float(f)),
             None => return Err(self.error("invalid hex float")),
         }
         Ok(())
@@ -797,7 +822,7 @@ impl<'a> Lexer<'a> {
         match i64::from_str_radix(digits, base) {
             Ok(n) => {
                 let val = if negative { -n } else { n };
-                self.emit_val(TokenKind::Number, Cow::Owned(val.to_string()));
+                self.emit_num(TokenKind::Number, Number::Int(val));
             }
             Err(e) => return Err(self.error(int_parse_msg(kind, &e))),
         }
@@ -839,8 +864,29 @@ impl<'a> Lexer<'a> {
         }
 
         let raw = self.current_str();
-        // Strip underscores for the value; borrow when the literal has none.
-        self.emit_val(TokenKind::Number, strip_underscores(raw));
+        // Strip underscores for parsing; borrow when the literal has none.
+        let clean = strip_underscores(raw);
+        let num = if has_dot || has_exp {
+            clean
+                .parse::<f64>()
+                .map(Number::Float)
+                .map_err(|_| self.error("invalid number"))?
+        } else {
+            clean
+                .parse::<i64>()
+                .map(Number::Int)
+                .map_err(|e| self.error(int_parse_msg("decimal", &e)))?
+        };
+        // Emit with underscore-stripped val so existing consumers (error
+        // messages, tests) see a clean decimal string; the parser reads `num`.
+        self.tokens.push(Token {
+            kind: TokenKind::Number,
+            val: clean,
+            num: Some(num),
+            pos: self.start,
+            line: self.line,
+        });
+        self.start = self.pos;
         Ok(())
     }
 
@@ -944,7 +990,7 @@ impl<'a> Lexer<'a> {
         }
 
         // Emit as a number (Go treats char constants as their Unicode code point)
-        self.emit_val(TokenKind::Char, Cow::Owned((ch as u32).to_string()));
+        self.emit_num(TokenKind::Char, Number::Int(i64::from(ch as u32)));
         Ok(())
     }
 
@@ -1181,31 +1227,33 @@ mod tests {
         let tokens = lex("{{42}}");
         assert_eq!(tokens[1].kind, TokenKind::Number);
         assert_eq!(tokens[1].val, "42");
+        assert_eq!(tokens[1].num, Some(Number::Int(42)));
 
-        let tokens = lex("{{3.14}}");
+        let tokens = lex("{{2.5}}");
         assert_eq!(tokens[1].kind, TokenKind::Number);
-        assert_eq!(tokens[1].val, "3.14");
+        assert_eq!(tokens[1].val, "2.5");
+        assert!(matches!(tokens[1].num, Some(Number::Float(f)) if (f - 2.5).abs() < 1e-9));
     }
 
     #[test]
     fn test_hex_number() {
         let tokens = lex("{{0xFF}}");
         assert_eq!(tokens[1].kind, TokenKind::Number);
-        assert_eq!(tokens[1].val, "255");
+        assert_eq!(tokens[1].num, Some(Number::Int(255)));
     }
 
     #[test]
     fn test_octal_number() {
         let tokens = lex("{{0o77}}");
         assert_eq!(tokens[1].kind, TokenKind::Number);
-        assert_eq!(tokens[1].val, "63");
+        assert_eq!(tokens[1].num, Some(Number::Int(63)));
     }
 
     #[test]
     fn test_binary_number() {
         let tokens = lex("{{0b1010}}");
         assert_eq!(tokens[1].kind, TokenKind::Number);
-        assert_eq!(tokens[1].val, "10");
+        assert_eq!(tokens[1].num, Some(Number::Int(10)));
     }
 
     #[test]
@@ -1213,6 +1261,33 @@ mod tests {
         let tokens = lex("{{1_000_000}}");
         assert_eq!(tokens[1].kind, TokenKind::Number);
         assert_eq!(tokens[1].val, "1000000");
+        assert_eq!(tokens[1].num, Some(Number::Int(1_000_000)));
+    }
+
+    #[test]
+    fn test_hex_float_prefilled_num() {
+        let tokens = lex("{{0x1.ep+2}}");
+        assert_eq!(tokens[1].kind, TokenKind::Number);
+        assert!(matches!(tokens[1].num, Some(Number::Float(f)) if (f - 7.5).abs() < 1e-9));
+    }
+
+    #[test]
+    fn test_decimal_float_underscore_prefilled_num() {
+        let tokens = lex("{{1_234.5}}");
+        assert_eq!(tokens[1].kind, TokenKind::Number);
+        // val is the underscore-stripped string; num carries the parsed float.
+        assert_eq!(tokens[1].val, "1234.5");
+        assert!(matches!(tokens[1].num, Some(Number::Float(f)) if (f - 1234.5).abs() < 1e-9));
+    }
+
+    #[test]
+    fn test_non_numeric_tokens_have_no_num() {
+        let tokens = lex("{{ .Field }}");
+        for tok in &tokens {
+            if !matches!(tok.kind, TokenKind::Number | TokenKind::Char) {
+                assert!(tok.num.is_none(), "{:?} should not carry num", tok.kind);
+            }
+        }
     }
 
     #[test]
@@ -1253,11 +1328,11 @@ mod tests {
     fn test_char_literal_escape() {
         let tokens = lex("{{'\\n'}}");
         assert_eq!(tokens[1].kind, TokenKind::Char);
-        // '\n' should be the char value of newline = 10
-        assert_eq!(tokens[1].val, "10");
+        // '\n' is the char value of newline = 10
+        assert_eq!(tokens[1].num, Some(Number::Int(10)));
 
         let tokens = lex("{{'a'}}");
         assert_eq!(tokens[1].kind, TokenKind::Char);
-        assert_eq!(tokens[1].val, "97");
+        assert_eq!(tokens[1].num, Some(Number::Int(97)));
     }
 }

@@ -1652,6 +1652,311 @@ fn test_printf_o() {
     ok(r#"{{printf "%o" 8}}"#, &Value::Nil, "10");
 }
 
+// Coverage for the in-place sprintf rewrite. These templates exercise the
+// hot paths (`pad_in_place`, `apply_float_sign_in_place`, `write_signed`,
+// `write_display_truncated`, `format_int_base_into`, the `%q` writers)
+// whose semantics must stay byte-for-byte identical to Go's `fmt.Sprintf`.
+// Each case is covered by `ok()` so it's automatically cross-checked when
+// `--features go-crosscheck` is enabled.
+#[test]
+fn test_printf_d_plus_zero_pad_negative() {
+    ok(r#"{{printf "%+06d" -42}}"#, &Value::Nil, "-00042");
+}
+
+#[test]
+fn test_printf_d_zero_pad_positive() {
+    ok(r#"{{printf "%06d" 42}}"#, &Value::Nil, "000042");
+}
+
+#[test]
+fn test_printf_d_zero_pad_with_plus_positive() {
+    ok(r#"{{printf "%+06d" 42}}"#, &Value::Nil, "+00042");
+}
+
+#[test]
+fn test_printf_d_space_sign() {
+    ok(r#"{{printf "% d" 42}}"#, &Value::Nil, " 42");
+}
+
+#[test]
+fn test_printf_d_space_sign_negative() {
+    ok(r#"{{printf "% d" -42}}"#, &Value::Nil, "-42");
+}
+
+#[test]
+fn test_printf_d_left_align() {
+    ok(r#"{{printf "[%-6d]" 42}}"#, &Value::Nil, "[42    ]");
+}
+
+#[test]
+fn test_printf_s_left_align() {
+    ok(r#"{{printf "[%-6s]" "hi"}}"#, &Value::Nil, "[hi    ]");
+}
+
+#[test]
+fn test_printf_s_right_align() {
+    ok(r#"{{printf "[%6s]" "hi"}}"#, &Value::Nil, "[    hi]");
+}
+
+#[test]
+fn test_printf_s_precision_truncate() {
+    ok(r#"{{printf "%.3s" "hello"}}"#, &Value::Nil, "hel");
+}
+
+#[test]
+fn test_printf_s_precision_multibyte() {
+    // Precision counts Unicode scalars, not bytes; "café" → "caf".
+    ok(r#"{{printf "%.3s" "café"}}"#, &Value::Nil, "caf");
+}
+
+#[test]
+fn test_printf_s_left_align_with_precision() {
+    ok(r#"{{printf "[%-6.3s]" "hello"}}"#, &Value::Nil, "[hel   ]");
+}
+
+#[test]
+fn test_printf_f_plus_negative() {
+    ok(r#"{{printf "%+f" -1.5}}"#, &Value::Nil, "-1.500000");
+}
+
+#[test]
+fn test_printf_f_space_sign() {
+    ok(r#"{{printf "% f" 1.5}}"#, &Value::Nil, " 1.500000");
+}
+
+#[test]
+fn test_printf_f_precision_zero_rounds() {
+    ok(r#"{{printf "%.0f" 1.5}}"#, &Value::Nil, "2");
+}
+
+#[test]
+fn test_printf_e_width() {
+    ok(
+        r#"{{printf "[%16e]" 1.5}}"#,
+        &Value::Nil,
+        "[    1.500000e+00]",
+    );
+}
+
+#[test]
+fn test_printf_e_plus_width_negative() {
+    ok(
+        r#"{{printf "[%+16e]" -1.5}}"#,
+        &Value::Nil,
+        "[   -1.500000e+00]",
+    );
+}
+
+#[test]
+fn test_printf_g_plus_negative() {
+    ok(r#"{{printf "%+g" -3.5}}"#, &Value::Nil, "-3.5");
+}
+
+#[test]
+fn test_printf_g_width() {
+    ok(r#"{{printf "[%10g]" 1e7}}"#, &Value::Nil, "[     1e+07]");
+}
+
+// Coverage for the in-place `write_g_default` / `write_g_with_precision` /
+// `write_normalized_sci` rewrite. Each test exercises a distinct branch of
+// the new helpers and is cross-checked against Go via `ok()`.
+
+#[test]
+fn test_printf_g_negative_decimal() {
+    ok(r#"{{printf "%g" -3.5}}"#, &Value::Nil, "-3.5");
+}
+
+#[test]
+fn test_printf_g_negative_sci() {
+    ok(r#"{{printf "%g" -1e7}}"#, &Value::Nil, "-1e+07");
+}
+
+#[test]
+fn test_printf_g_negative_zero() {
+    ok(r#"{{printf "%g" -0.0}}"#, &Value::Nil, "-0");
+}
+
+#[test]
+fn test_printf_g_boundary_decimal() {
+    // exp = 5 — stays in decimal branch.
+    ok(r#"{{printf "%g" 100000.0}}"#, &Value::Nil, "100000");
+}
+
+#[test]
+fn test_printf_g_boundary_sci() {
+    // exp = 6 — switches to sci branch.
+    ok(r#"{{printf "%g" 1000000.0}}"#, &Value::Nil, "1e+06");
+}
+
+#[test]
+fn test_printf_g_uppercase_default() {
+    ok(r#"{{printf "%G" 1e7}}"#, &Value::Nil, "1E+07");
+}
+
+#[test]
+fn test_printf_g_uppercase_with_precision() {
+    ok(r#"{{printf "%.4G" 123456.0}}"#, &Value::Nil, "1.235E+05");
+}
+
+#[test]
+fn test_printf_g_precision_decimal_branch() {
+    // exp = 1, prec = 2 → decimal branch (exp < prec).
+    ok(r#"{{printf "%.2g" 10.0}}"#, &Value::Nil, "10");
+}
+
+#[test]
+fn test_printf_g_precision_decimal_strip_zeros() {
+    // exp = 0, prec = 6, f = 1.5 → decimal branch with trailing-zero strip.
+    ok(r#"{{printf "%.6g" 1.5}}"#, &Value::Nil, "1.5");
+}
+
+#[test]
+fn test_printf_g_precision_decimal_strip_to_int() {
+    // f_prec = 5 → "1.00000" → trim → "1".
+    ok(r#"{{printf "%.6g" 1.0}}"#, &Value::Nil, "1");
+}
+
+#[test]
+fn test_printf_g_precision_sci_strip_zeros() {
+    // exp = 5 >= prec = 4 → sci branch. Mantissa after strip becomes "1".
+    ok(r#"{{printf "%.4g" 100000.0}}"#, &Value::Nil, "1e+05");
+}
+
+#[test]
+fn test_printf_g_precision_sci_negative() {
+    ok(r#"{{printf "%.4g" -123456.0}}"#, &Value::Nil, "-1.235e+05");
+}
+
+#[test]
+fn test_printf_g_precision_zero() {
+    ok(r#"{{printf "%.4g" 0.0}}"#, &Value::Nil, "0");
+}
+
+#[test]
+fn test_printf_g_precision_small_exponent() {
+    // exp = -2, prec = 2 → decimal branch with f_prec = 3 → "0.012".
+    ok(r#"{{printf "%.2g" 0.0123}}"#, &Value::Nil, "0.012");
+}
+
+// %E uppercase coverage (write_normalized_sci with upper=true on a raw
+// string that already contains 'E').
+#[test]
+fn test_printf_e_uppercase_default() {
+    ok(r#"{{printf "%E" 1.5}}"#, &Value::Nil, "1.500000E+00");
+}
+
+#[test]
+fn test_printf_e_uppercase_negative() {
+    ok(r#"{{printf "%E" -1.5}}"#, &Value::Nil, "-1.500000E+00");
+}
+
+#[test]
+fn test_printf_e_negative_zero() {
+    ok(r#"{{printf "%e" -0.0}}"#, &Value::Nil, "-0.000000e+00");
+}
+
+#[test]
+fn test_printf_e_precision_two() {
+    ok(r#"{{printf "%.2e" 1.5}}"#, &Value::Nil, "1.50e+00");
+}
+
+#[test]
+fn test_printf_e_precision_zero_rounds() {
+    ok(r#"{{printf "%.0e" 1.5}}"#, &Value::Nil, "2e+00");
+}
+
+#[test]
+fn test_printf_e_large_exponent() {
+    // Two-digit exponent — exercises the no-pad path of write_normalized_sci.
+    ok(r#"{{printf "%e" 1.5e100}}"#, &Value::Nil, "1.500000e+100");
+}
+
+#[test]
+fn test_printf_e_negative_exponent() {
+    ok(r#"{{printf "%e" 1.5e-100}}"#, &Value::Nil, "1.500000e-100");
+}
+
+#[test]
+fn test_printf_q_width() {
+    ok(r#"{{printf "[%8q]" "hi"}}"#, &Value::Nil, r#"[    "hi"]"#);
+}
+
+#[test]
+fn test_printf_q_left_align() {
+    ok(r#"{{printf "[%-8q]" "hi"}}"#, &Value::Nil, r#"["hi"    ]"#);
+}
+
+#[test]
+fn test_printf_hash_q_backtick() {
+    ok(r#"{{printf "%#q" "hello"}}"#, &Value::Nil, "`hello`");
+}
+
+#[test]
+fn test_printf_hash_q_fallback_on_control() {
+    ok(r#"{{printf "%#q" "a\nb"}}"#, &Value::Nil, r#""a\nb""#);
+}
+
+#[test]
+fn test_printf_q_escapes_control_chars() {
+    ok(r#"{{printf "%q" "a\tb"}}"#, &Value::Nil, r#""a\tb""#);
+}
+
+#[test]
+fn test_printf_x_negative_with_hash() {
+    ok(r#"{{printf "%#x" -255}}"#, &Value::Nil, "-0xff");
+}
+
+#[test]
+fn test_printf_b_with_hash() {
+    ok(r#"{{printf "%#b" 10}}"#, &Value::Nil, "0b1010");
+}
+
+#[test]
+fn test_printf_o_with_hash() {
+    ok(r#"{{printf "%#o" 8}}"#, &Value::Nil, "010");
+}
+
+#[test]
+fn test_printf_x_string_precision_limits_input_bytes() {
+    // Go: precision on `%.Nx` for strings limits *input bytes*, yielding
+    // 2*N hex chars — not N hex chars.
+    ok(r#"{{printf "%.2x" "abc"}}"#, &Value::Nil, "6162");
+}
+
+#[test]
+fn test_printf_t_width() {
+    ok(r#"{{printf "[%6t]" true}}"#, &Value::Nil, "[  true]");
+}
+
+#[test]
+fn test_printf_v_width() {
+    ok(r#"{{printf "[%6v]" 42}}"#, &Value::Nil, "[    42]");
+}
+
+#[test]
+fn test_printf_c_unicode() {
+    ok(r#"{{printf "%c" 65}}"#, &Value::Nil, "A");
+}
+
+#[test]
+fn test_printf_multiple_verbs_mixed_text() {
+    // Exercises the per-verb in-place writes interleaved with literal bytes.
+    ok(
+        r#"{{printf "id=%05d name=%s ratio=%.2f" 7 "alice" 0.137}}"#,
+        &Value::Nil,
+        "id=00007 name=alice ratio=0.14",
+    );
+}
+
+#[test]
+fn test_printf_percent_literal_between_verbs() {
+    ok(
+        r#"{{printf "%d%% of %s" 50 "users"}}"#,
+        &Value::Nil,
+        "50% of users",
+    );
+}
+
 // Additional Go test coverage: eq with nil
 #[test]
 fn test_eq_nil() {

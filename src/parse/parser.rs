@@ -556,9 +556,12 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::Number => {
                     let tok = self.next().clone();
-                    let num = parse_number(&tok.val).ok_or_else(|| {
-                        self.token_error(&tok, format!("invalid number: {}", tok.val))
-                    })?;
+                    let num = match tok.num {
+                        Some(n) => n,
+                        None => parse_number(&tok.val).ok_or_else(|| {
+                            self.token_error(&tok, format!("invalid number: {}", tok.val))
+                        })?,
+                    };
                     args.push(Expr::Number(Pos::new(tok.pos, tok.line), num));
                 }
                 TokenKind::Bool => {
@@ -571,8 +574,7 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::Char => {
                     let tok = self.next().clone();
-                    // Char tokens carry the Unicode code point as a decimal integer.
-                    let num = tok.val.parse::<i64>().map(Number::Int).map_err(|_| {
+                    let num = tok.num.ok_or_else(|| {
                         self.token_error(&tok, format!("invalid char literal: {}", tok.val))
                     })?;
                     args.push(Expr::Number(Pos::new(tok.pos, tok.line), num));

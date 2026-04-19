@@ -196,7 +196,7 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
                 }
             };
             let result = go::sprintf(fmt_str, &args[1..])?;
-            Ok(Value::String(Arc::from(result)))
+            Ok(Value::String(Arc::from(result.into_boxed_str())))
         }),
     );
 

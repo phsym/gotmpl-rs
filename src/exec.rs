@@ -704,7 +704,8 @@ impl<'a> Executor<'a> {
             .get(name)
             .ok_or_else(|| TemplateError::UndefinedFunction(name.to_string()))?;
 
-        let mut args: Vec<Value> = Vec::new();
+        let mut args: Vec<Value> =
+            Vec::with_capacity(arg_exprs.len() + usize::from(piped.is_some()));
         for expr in arg_exprs {
             args.push(self.eval_expr(dot, expr)?);
         }

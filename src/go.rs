@@ -11,17 +11,17 @@
 //! |----------|-----------|---------------|
 //! | sprintf | [`sprintf`] | `fmt.Sprintf` |
 //! | Sprint spacing | [`needs_space`] | `fmt.Sprint` inter-arg spacing rule |
-//! | Quoting | [`go_quote`], [`go_backquote`] | `strconv.Quote`, `%#q` |
-//! | Sci-notation | [`go_normalize_sci`] | Exponent `e+00` format |
-//! | `%g` formatting | [`format_g_default`], [`format_g_with_precision`] | `%g` / `%.Ng` |
-//! | Integer bases | [`format_int_base`] | `%x`, `%o`, `%b` with sign handling |
+//! | Quoting | [`go_quote_into`], [`try_backquote_into`] | `strconv.Quote`, `%#q` |
+//! | Sci-notation | [`write_normalized_sci`] | Exponent `e+00` format |
+//! | `%g` formatting | [`write_g_default`], [`write_g_with_precision`] | `%g` / `%.Ng` |
+//! | Integer bases | [`format_int_base_into`] | `%x`, `%o`, `%b` with sign handling |
 //! | HTML escape | [`html_escape`] | `template.HTMLEscapeString` |
 //! | JS escape | [`js_escape`] | `template.JSEscapeString` |
 //! | URL encode | [`url_encode`] | `template.URLQueryEscaper` |
 //! | Hex float parse | [`parse_hex_float`] | Hex float literal `0x1.Fp10` |
 
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use core::fmt::Write;
 
 use crate::error::Result;
@@ -123,45 +123,63 @@ impl FmtSpec {
         spec
     }
 
-    /// Pad a formatted string to the configured width.
-    fn pad(&self, s: &str, is_numeric: bool) -> String {
+    /// Pad `out[start..]` to the configured width in place.
+    ///
+    /// Width is measured in Unicode scalars (chars) to match Rust's formatter
+    /// semantics and Go parity on the verbs we support. Padding is inserted
+    /// only when the already-written content is shorter than `width`.
+    ///
+    /// `start` must sit on a char boundary in `out`. Callers always invoke
+    /// at `out.len()` taken before the verb's content was pushed, which
+    /// trivially satisfies that requirement.
+    fn pad_in_place(&self, out: &mut String, start: usize, is_numeric: bool) {
         let Some(width) = self.width else {
-            return s.to_string();
+            return;
         };
+        let written = out[start..].chars().count();
+        if written >= width {
+            return;
+        }
+        let pad_count = width - written;
+
         if self.left_align {
-            format!("{s:<width$}")
-        } else if self.zero && is_numeric {
-            // Put zeros after the sign character
-            if let Some(rest) = s.strip_prefix(['-', '+']) {
-                let sign = &s[..1];
-                let w = width.saturating_sub(1);
-                format!("{sign}{rest:0>w$}")
-            } else {
-                format!("{s:0>width$}")
+            for _ in 0..pad_count {
+                out.push(' ');
             }
+        } else if self.zero && is_numeric {
+            // Zero-pad after a leading '+' or '-' sign so `-042` stays sign-first.
+            let sign_off = match out.as_bytes().get(start) {
+                Some(&b'-') | Some(&b'+') => 1,
+                _ => 0,
+            };
+            insert_repeated(out, start + sign_off, '0', pad_count);
         } else {
-            format!("{s:>width$}")
+            insert_repeated(out, start, ' ', pad_count);
         }
     }
 
-    /// Format a signed integer with sign flags (`+`, ` `) applied.
-    fn format_signed(&self, n: i64) -> String {
-        if self.plus {
-            if n >= 0 {
-                format!("+{}", n)
-            } else {
-                format!("{}", n)
+    /// Write a signed integer with sign flags (`+`, ` `) applied into `out`.
+    fn write_signed(&self, out: &mut String, n: i64) {
+        if n >= 0 {
+            if self.plus {
+                out.push('+');
+            } else if self.space {
+                out.push(' ');
             }
-        } else if self.space {
-            if n >= 0 {
-                format!(" {}", n)
-            } else {
-                format!("{}", n)
-            }
-        } else {
-            format!("{}", n)
         }
+        let _ = write!(out, "{}", n);
     }
+}
+
+/// Insert `count` copies of `ch` at byte position `pos` in `out`.
+///
+/// One allocation for the pad buffer (via `str::repeat`), then a single
+/// `insert_str` memmove. Callers pass ASCII characters, so `pos` is
+/// guaranteed to sit on a char boundary.
+fn insert_repeated(out: &mut String, pos: usize, ch: char, count: usize) {
+    let mut buf = [0u8; 4];
+    let s: &str = ch.encode_utf8(&mut buf);
+    out.insert_str(pos, &s.repeat(count));
 }
 
 /// Go-compatible `fmt.Sprintf` implementation.
@@ -173,13 +191,23 @@ impl FmtSpec {
 /// Flags: `-` (left-align), `+` (sign), ` ` (space sign), `#` (alternate),
 /// `0` (zero-pad). Width and precision (`.N`) are supported.
 pub(crate) fn sprintf(fmt_str: &str, args: &[Value]) -> Result<String> {
-    let mut result = String::new();
+    let mut out = String::with_capacity(fmt_str.len() + 16 * args.len());
+    sprintf_into(&mut out, fmt_str, args)?;
+    Ok(out)
+}
+
+/// Format directly into `out`. Each verb writes its value at `out.len()`,
+/// then pads in place. The only remaining per-verb intermediate `String`
+/// allocations are the unavoidable `format!("{:e}", f)` temps used by
+/// `write_g_*` and the `%e`/`%E` verbs to produce Rust's scientific form
+/// before normalizing it into Go's format.
+fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
     let mut chars = fmt_str.chars().peekable();
     let mut arg_idx = 0;
 
     while let Some(ch) = chars.next() {
         if ch != '%' {
-            result.push(ch);
+            out.push(ch);
             continue;
         }
 
@@ -188,13 +216,13 @@ pub(crate) fn sprintf(fmt_str: &str, args: &[Value]) -> Result<String> {
         let verb = match chars.next() {
             Some(v) => v,
             None => {
-                result.push('%');
+                out.push('%');
                 break;
             }
         };
 
         if verb == '%' {
-            result.push('%');
+            out.push('%');
             continue;
         }
 
@@ -203,46 +231,42 @@ pub(crate) fn sprintf(fmt_str: &str, args: &[Value]) -> Result<String> {
             arg_idx += 1;
             &args[arg_idx - 1]
         } else {
-            write!(result, "%!{}(MISSING)", verb).ok();
+            let _ = write!(out, "%!{}(MISSING)", verb);
             continue;
         };
 
+        let start = out.len();
         match verb {
             's' => {
-                let mut s = format!("{}", arg);
-                if let Some(prec) = spec.precision {
-                    s = s.chars().take(prec).collect();
+                match spec.precision {
+                    Some(prec) => write_display_truncated(out, arg, prec),
+                    None => {
+                        let _ = write!(out, "{}", arg);
+                    }
                 }
-                result.push_str(&spec.pad(&s, false));
+                spec.pad_in_place(out, start, false);
             }
             'd' => match arg.as_int() {
                 Some(n) => {
-                    let s = spec.format_signed(n);
-                    result.push_str(&spec.pad(&s, true));
+                    spec.write_signed(out, n);
+                    spec.pad_in_place(out, start, true);
                 }
-                None => write_bad_verb(&mut result, verb, arg),
+                None => write_bad_verb(out, verb, arg),
             },
             'f' => match arg.as_float() {
                 Some(f) => {
                     let prec = spec.precision.unwrap_or(6);
-                    let s = if spec.plus {
-                        if f >= 0.0 {
-                            format!("+{:.prec$}", f)
-                        } else {
-                            format!("{:.prec$}", f)
+                    if f >= 0.0 && !f.is_nan() {
+                        if spec.plus {
+                            out.push('+');
+                        } else if spec.space {
+                            out.push(' ');
                         }
-                    } else if spec.space {
-                        if f >= 0.0 {
-                            format!(" {:.prec$}", f)
-                        } else {
-                            format!("{:.prec$}", f)
-                        }
-                    } else {
-                        format!("{:.prec$}", f)
-                    };
-                    result.push_str(&spec.pad(&s, true));
+                    }
+                    let _ = write!(out, "{:.prec$}", f);
+                    spec.pad_in_place(out, start, true);
                 }
-                None => write_bad_verb(&mut result, verb, arg),
+                None => write_bad_verb(out, verb, arg),
             },
             'e' | 'E' => match arg.as_float() {
                 Some(f) => {
@@ -252,82 +276,125 @@ pub(crate) fn sprintf(fmt_str: &str, args: &[Value]) -> Result<String> {
                     } else {
                         format!("{:.prec$E}", f)
                     };
-                    let s = go_normalize_sci(&raw);
-                    let s = apply_float_sign(s, f, &spec);
-                    result.push_str(&spec.pad(&s, true));
+                    write_normalized_sci(out, &raw, verb == 'E', false);
+                    apply_float_sign_in_place(out, start, f, &spec);
+                    spec.pad_in_place(out, start, true);
                 }
-                None => write_bad_verb(&mut result, verb, arg),
+                None => write_bad_verb(out, verb, arg),
             },
             'g' | 'G' => match arg.as_float() {
                 Some(f) => {
-                    let s = if f.is_nan() || f.is_infinite() {
-                        format!("{}", f)
+                    if f.is_nan() || f.is_infinite() {
+                        let _ = write!(out, "{}", f);
                     } else if let Some(prec) = spec.precision {
-                        format_g_with_precision(f, prec.max(1), verb == 'G')
+                        write_g_with_precision(out, f, prec.max(1), verb == 'G');
                     } else {
-                        format_g_default(f, verb == 'G')
+                        write_g_default(out, f, verb == 'G');
                     };
-                    let s = apply_float_sign(s, f, &spec);
-                    result.push_str(&spec.pad(&s, true));
+                    apply_float_sign_in_place(out, start, f, &spec);
+                    spec.pad_in_place(out, start, true);
                 }
-                None => write_bad_verb(&mut result, verb, arg),
+                None => write_bad_verb(out, verb, arg),
             },
             'v' => {
-                let s = format!("{}", arg);
-                result.push_str(&spec.pad(&s, false));
+                let _ = write!(out, "{}", arg);
+                spec.pad_in_place(out, start, false);
             }
             'q' => match arg {
                 Value::String(s) => {
-                    let formatted = if spec.hash {
-                        go_backquote(s).unwrap_or_else(|| go_quote(s))
-                    } else {
-                        go_quote(s)
-                    };
-                    result.push_str(&spec.pad(&formatted, false));
+                    if !(spec.hash && try_backquote_into(out, s)) {
+                        go_quote_into(out, s);
+                    }
+                    spec.pad_in_place(out, start, false);
                 }
                 Value::Int(n) => {
                     // Go's %q on an int emits a single-quoted rune literal.
                     if let Some(c) = u32::try_from(*n).ok().and_then(char::from_u32) {
-                        let s = format!("'{}'", c.escape_default());
-                        result.push_str(&spec.pad(&s, false));
+                        let _ = write!(out, "'{}'", c.escape_default());
+                        spec.pad_in_place(out, start, false);
                     } else {
-                        write_bad_verb(&mut result, verb, arg);
+                        write_bad_verb(out, verb, arg);
                     }
                 }
-                _ => write_bad_verb(&mut result, verb, arg),
+                _ => write_bad_verb(out, verb, arg),
             },
             't' => match arg {
                 Value::Bool(b) => {
-                    let s = if *b { "true" } else { "false" };
-                    result.push_str(&spec.pad(s, false));
+                    out.push_str(if *b { "true" } else { "false" });
+                    spec.pad_in_place(out, start, false);
                 }
-                _ => write_bad_verb(&mut result, verb, arg),
+                _ => write_bad_verb(out, verb, arg),
             },
             'x' | 'X' | 'o' | 'b' => match arg {
                 Value::String(s) if verb == 'x' || verb == 'X' => {
-                    let formatted = format_string_hex(s, verb == 'X', &spec);
-                    result.push_str(&spec.pad(&formatted, false));
+                    format_string_hex_into(out, s, verb == 'X', &spec);
+                    spec.pad_in_place(out, start, false);
                 }
                 _ => match arg.as_int() {
                     Some(n) => {
-                        let s = format_int_base(n, &verb.to_string(), &spec);
-                        result.push_str(&spec.pad(&s, true));
+                        format_int_base_into(out, n, verb, &spec);
+                        spec.pad_in_place(out, start, true);
                     }
-                    None => write_bad_verb(&mut result, verb, arg),
+                    None => write_bad_verb(out, verb, arg),
                 },
             },
             'c' => match arg.as_int() {
                 Some(n) => match u32::try_from(n).ok().and_then(char::from_u32) {
-                    Some(c) => result.push(c),
-                    None => result.push('\u{FFFD}'),
+                    Some(c) => out.push(c),
+                    None => out.push('\u{FFFD}'),
                 },
-                None => write_bad_verb(&mut result, verb, arg),
+                None => write_bad_verb(out, verb, arg),
             },
-            _ => write_bad_verb(&mut result, verb, arg),
+            _ => write_bad_verb(out, verb, arg),
         }
     }
 
-    Ok(result)
+    Ok(())
+}
+
+/// Write `arg`'s `Display` output into `out`, truncated to at most
+/// `max_chars` Unicode scalars. Avoids the "format then collect" double
+/// allocation used by the naive `%.Ns` path.
+fn write_display_truncated(out: &mut String, arg: &Value, max_chars: usize) {
+    struct Truncate<'a> {
+        out: &'a mut String,
+        remaining: usize,
+    }
+    impl core::fmt::Write for Truncate<'_> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            for ch in s.chars() {
+                if self.remaining == 0 {
+                    return Ok(());
+                }
+                self.out.push(ch);
+                self.remaining -= 1;
+            }
+            Ok(())
+        }
+    }
+    let mut w = Truncate {
+        out,
+        remaining: max_chars,
+    };
+    let _ = write!(w, "{}", arg);
+}
+
+/// Prepend a `+` or space sign to a formatted float at `out[start..]`
+/// when the sign flag demands it and the number isn't already negative.
+fn apply_float_sign_in_place(out: &mut String, start: usize, f: f64, spec: &FmtSpec) {
+    // `f >= 0.0` is false for NaN, matching the semantics of the previous
+    // allocating `apply_float_sign` helper (NaN never gets a synthesized sign).
+    if f < 0.0 || f.is_nan() {
+        return;
+    }
+    if matches!(out.as_bytes().get(start), Some(&b'-')) {
+        return;
+    }
+    if spec.plus {
+        out.insert(start, '+');
+    } else if spec.space {
+        out.insert(start, ' ');
+    }
 }
 
 /// Emit Go's `%!verb(type=value)` marker for a type-mismatched or unknown verb.
@@ -342,17 +409,17 @@ fn write_bad_verb(out: &mut String, verb: char, arg: &Value) {
     out.push(')');
 }
 
-/// `%x` / `%X` on strings: hex-encode each byte.
+/// `%x` / `%X` on strings: hex-encode each byte into `out`.
 ///
 /// Go's precision on `%.Nx` for strings limits the number of *input bytes*
 /// consumed, yielding `2 * N` hex characters — not `N` hex characters.
-fn format_string_hex(s: &str, upper: bool, spec: &FmtSpec) -> String {
+fn format_string_hex_into(out: &mut String, s: &str, upper: bool, spec: &FmtSpec) {
     let bytes = s.as_bytes();
     let take = spec
         .precision
         .map(|p| p.min(bytes.len()))
         .unwrap_or(bytes.len());
-    let mut out = String::with_capacity(take * 2);
+    out.reserve(take * 2);
     for b in &bytes[..take] {
         let _ = if upper {
             write!(out, "{:02X}", b)
@@ -360,16 +427,15 @@ fn format_string_hex(s: &str, upper: bool, spec: &FmtSpec) -> String {
             write!(out, "{:02x}", b)
         };
     }
-    out
 }
 
 // Quoting
-/// Produce a Go-syntax double-quoted string literal (like `strconv.Quote`).
+/// Write a Go-syntax double-quoted string literal (like `strconv.Quote`) into `out`.
 ///
 /// Escapes backslash, double-quote, newline, tab, carriage-return, bell,
 /// backspace, form-feed, vertical-tab, and all control characters.
-fn go_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+fn go_quote_into(out: &mut String, s: &str) {
+    out.reserve(s.len() + 2);
     out.push('"');
     for ch in s.chars() {
         match ch {
@@ -383,77 +449,91 @@ fn go_quote(s: &str) -> String {
             '\x0C' => out.push_str("\\f"),
             '\x0B' => out.push_str("\\v"),
             c if (c as u32) < 0x20 || c == '\x7F' => {
-                write!(out, "\\x{:02x}", c as u32).ok();
+                let _ = write!(out, "\\x{:02x}", c as u32);
             }
             c => out.push(c),
         }
     }
     out.push('"');
-    out
 }
 
-/// Produce a Go-syntax backtick-quoted string (for `%#q`) if possible.
+/// Try to write a Go-syntax backtick-quoted string (for `%#q`) into `out`.
 ///
-/// Returns `None` if the string contains backticks or non-printable characters,
-/// in which case the caller should fall back to [`go_quote`].
-fn go_backquote(s: &str) -> Option<String> {
+/// Returns `false` if the string contains backticks or non-printable
+/// characters; in that case `out` is left unchanged and the caller should
+/// fall back to [`go_quote_into`].
+fn try_backquote_into(out: &mut String, s: &str) -> bool {
     if s.contains('`') {
-        return None;
+        return false;
     }
     for ch in s.chars() {
         if ch != '\t' && (ch < ' ' || ch == '\x7F') {
-            return None;
+            return false;
         }
     }
-    Some(format!("`{}`", s))
+    out.reserve(s.len() + 2);
+    out.push('`');
+    out.push_str(s);
+    out.push('`');
+    true
 }
 
 // Scientific notation normalization
-/// Normalize Rust's scientific notation to Go's format.
+/// Write Rust's scientific notation `raw` into `out` in Go's format.
 ///
-/// Go always includes an explicit sign and at least 2 digits in the exponent:
-/// - `e0` → `e+00`
-/// - `e2` → `e+02`
-/// - `e-3` → `e-03`
-fn go_normalize_sci(s: &str) -> String {
-    if let Some(e_pos) = s.find('e').or_else(|| s.find('E')) {
-        let (mantissa, exp_part) = s.split_at(e_pos);
-        let e_char = &exp_part[..1];
-        let exp_str = &exp_part[1..];
-        let (sign, digits) = if let Some(d) = exp_str.strip_prefix('-') {
-            ("-", d)
-        } else if let Some(d) = exp_str.strip_prefix('+') {
-            ("+", d)
+/// Go's format requires:
+/// - Explicit `+` sign on positive exponents.
+/// - At least 2-digit exponent (`e+02`, not `e+2`).
+/// - The exponent character is taken from `upper` (`'E'` if true, else `'e'`),
+///   regardless of which case `raw` happens to contain. Callers that already
+///   produced uppercase `raw` (e.g. `format!("{:E}", f)`) must pass
+///   `upper = true` to preserve case.
+/// - When `strip_zeros` is set, trailing zeros (and a dangling `.`) are
+///   removed from the mantissa before emission.
+///
+/// Writes directly into `out` — no intermediate `String` allocation, in
+/// contrast to the previous `go_normalize_sci` + `replace` + `strip` chain.
+fn write_normalized_sci(out: &mut String, raw: &str, upper: bool, strip_zeros: bool) {
+    let e_pos = raw.bytes().position(|b| b == b'e' || b == b'E');
+    let Some(e_pos) = e_pos else {
+        // No exponent — emit the mantissa-only form, optionally stripped.
+        out.push_str(if strip_zeros {
+            trim_trailing_zeros_view(raw)
         } else {
-            ("+", exp_str)
-        };
-        if digits.len() < 2 {
-            format!("{}{}{}{:0>2}", mantissa, e_char, sign, digits)
-        } else {
-            format!("{}{}{}{}", mantissa, e_char, sign, digits)
-        }
-    } else {
-        s.to_string()
+            raw
+        });
+        return;
+    };
+    let mut mantissa = &raw[..e_pos];
+    if strip_zeros && mantissa.contains('.') {
+        mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
     }
+    out.push_str(mantissa);
+    out.push(if upper { 'E' } else { 'e' });
+
+    let exp_str = &raw[e_pos + 1..];
+    let (sign, digits) = if let Some(d) = exp_str.strip_prefix('-') {
+        ('-', d)
+    } else if let Some(d) = exp_str.strip_prefix('+') {
+        ('+', d)
+    } else {
+        ('+', exp_str)
+    };
+    out.push(sign);
+    if digits.len() < 2 {
+        out.push('0');
+    }
+    out.push_str(digits);
 }
 
-/// Strip trailing zeros after the decimal point (`"1.50000"` → `"1.5"`).
-fn strip_trailing_zeros(s: &str) -> String {
+/// Borrowing view of `s` with trailing zeros (and a dangling `.`) stripped.
+/// Zero-allocation alternative to the old `strip_trailing_zeros` String
+/// helper.
+fn trim_trailing_zeros_view(s: &str) -> &str {
     if !s.contains('.') {
-        return s.to_string();
+        return s;
     }
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
-}
-
-/// Strip trailing zeros from the mantissa of a scientific notation string.
-fn strip_trailing_zeros_sci(s: &str) -> String {
-    if let Some(e_pos) = s.find('e').or_else(|| s.find('E')) {
-        let mantissa = &s[..e_pos];
-        let exp_part = &s[e_pos..];
-        format!("{}{}", strip_trailing_zeros(mantissa), exp_part)
-    } else {
-        strip_trailing_zeros(s)
-    }
+    s.trim_end_matches('0').trim_end_matches('.')
 }
 
 // %g formatting
@@ -468,39 +548,36 @@ fn decimal_exp(f: f64) -> i32 {
         .unwrap_or(0)
 }
 
-/// Format a float with Go's `%g` default precision (shortest representation).
-///
-/// Uses `%e` notation when the exponent is < −4 or ≥ 6, matching Go's
-/// `strconv.FormatFloat(f, 'g', -1, 64)`.
-fn format_g_default(f: f64, upper: bool) -> String {
+/// Write a float into `out` using Go's `%g` default precision (shortest
+/// representation). Uses `%e` notation when the exponent is < −4 or ≥ 6,
+/// matching Go's `strconv.FormatFloat(f, 'g', -1, 64)`.
+fn write_g_default(out: &mut String, f: f64, upper: bool) {
     if f == 0.0 {
-        return (if f.is_sign_negative() { "-0" } else { "0" }).to_string();
+        out.push_str(if f.is_sign_negative() { "-0" } else { "0" });
+        return;
     }
     let exp = decimal_exp(f);
     if !(-4..6).contains(&exp) {
         let raw = format!("{:e}", f);
-        let s = go_normalize_sci(&raw);
-        if upper { s.replace('e', "E") } else { s }
+        write_normalized_sci(out, &raw, upper, false);
     } else {
-        format!("{}", f)
+        let _ = write!(out, "{}", f);
     }
 }
 
-/// Format a float with Go's `%g` and an explicit precision (significant digits).
-///
-/// Uses `%e` notation when the exponent is < −4 or ≥ `prec`, then strips
-/// trailing zeros.
-fn format_g_with_precision(f: f64, prec: usize, upper: bool) -> String {
+/// Write a float into `out` using Go's `%g` with an explicit precision
+/// (significant digits). Uses `%e` notation when the exponent is < −4 or
+/// ≥ `prec`, then strips trailing zeros.
+fn write_g_with_precision(out: &mut String, f: f64, prec: usize, upper: bool) {
     if f == 0.0 {
-        return (if f.is_sign_negative() { "-0" } else { "0" }).to_string();
+        out.push_str(if f.is_sign_negative() { "-0" } else { "0" });
+        return;
     }
     let exp = decimal_exp(f);
     if exp < -4 || exp >= prec as i32 {
         let e_prec = prec.saturating_sub(1);
         let raw = format!("{:.prec$e}", f, prec = e_prec);
-        let s = go_normalize_sci(&raw);
-        let s = strip_trailing_zeros_sci(&s);
-        if upper { s.replace('e', "E") } else { s }
+        write_normalized_sci(out, &raw, upper, true);
     } else {
         let f_prec = if prec as i32 > exp + 1 {
             (prec as i32 - exp - 1) as usize
@@ -508,57 +585,42 @@ fn format_g_with_precision(f: f64, prec: usize, upper: bool) -> String {
             0
         };
         let raw = format!("{:.prec$}", f, prec = f_prec);
-        strip_trailing_zeros(&raw)
-    }
-}
-
-/// Apply the `+` or space sign flag to a formatted float string.
-fn apply_float_sign(s: String, f: f64, spec: &FmtSpec) -> String {
-    if spec.plus && f >= 0.0 && !s.starts_with('-') {
-        format!("+{}", s)
-    } else if spec.space && f >= 0.0 && !s.starts_with('-') {
-        format!(" {}", s)
-    } else {
-        s
+        out.push_str(trim_trailing_zeros_view(&raw));
     }
 }
 
 // Integer base formatting
-/// Format a signed integer in a non-decimal base, using Go's conventions
-/// (sign is separate from magnitude: `-0xff`, not two's complement).
-fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> String {
+/// Write a signed integer in a non-decimal base into `out`, using Go's
+/// conventions (sign is separate from magnitude: `-0xff`, not two's complement).
+fn format_int_base_into(out: &mut String, n: i64, base: char, spec: &FmtSpec) {
     let abs = n.unsigned_abs();
-    let digits = match base {
-        "x" => format!("{:x}", abs),
-        "X" => format!("{:X}", abs),
-        "o" => format!("{:o}", abs),
-        "b" => format!("{:b}", abs),
-        #[allow(
-            clippy::unreachable,
-            reason = "private helper; callers only pass \"x\", \"X\", \"o\", \"b\""
-        )]
-        _ => unreachable!(),
-    };
-    let prefix = if spec.hash {
+    if n < 0 {
+        out.push('-');
+    }
+    if spec.hash {
         match base {
-            "x" => "0x",
-            "X" => "0X",
-            "o" => "0",
-            "b" => "0b",
+            'x' => out.push_str("0x"),
+            'X' => out.push_str("0X"),
+            'o' => out.push('0'),
+            'b' => out.push_str("0b"),
             #[allow(
                 clippy::unreachable,
-                reason = "private helper; callers only pass \"x\", \"X\", \"o\", \"b\""
+                reason = "private helper; callers only pass 'x', 'X', 'o', 'b'"
             )]
             _ => unreachable!(),
         }
-    } else {
-        ""
-    };
-    if n < 0 {
-        format!("-{}{}", prefix, digits)
-    } else {
-        format!("{}{}", prefix, digits)
     }
+    let _ = match base {
+        'x' => write!(out, "{:x}", abs),
+        'X' => write!(out, "{:X}", abs),
+        'o' => write!(out, "{:o}", abs),
+        'b' => write!(out, "{:b}", abs),
+        #[allow(
+            clippy::unreachable,
+            reason = "private helper; callers only pass 'x', 'X', 'o', 'b'"
+        )]
+        _ => unreachable!(),
+    };
 }
 
 // Escaping functions
@@ -675,10 +737,95 @@ pub(crate) fn parse_hex_float(s: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     // Helper: run sprintf with Value args and return the String.
     fn sf(fmt: &str, args: &[Value]) -> String {
         sprintf(fmt, args).unwrap()
+    }
+
+    // Test wrappers for helpers that write into `&mut String` in production.
+    // Kept here (not in the main module) so production code stays free of
+    // test-only scaffolding.
+
+    impl FmtSpec {
+        fn pad(&self, s: &str, is_numeric: bool) -> String {
+            let mut out = String::from(s);
+            self.pad_in_place(&mut out, 0, is_numeric);
+            out
+        }
+
+        fn format_signed(&self, n: i64) -> String {
+            let mut out = String::new();
+            self.write_signed(&mut out, n);
+            out
+        }
+    }
+
+    fn go_quote(s: &str) -> String {
+        let mut out = String::new();
+        go_quote_into(&mut out, s);
+        out
+    }
+
+    fn go_backquote(s: &str) -> Option<String> {
+        let mut out = String::new();
+        if try_backquote_into(&mut out, s) {
+            Some(out)
+        } else {
+            None
+        }
+    }
+
+    // `base` is a single-char string (`"x"`, `"X"`, `"o"`, `"b"`) so the
+    // existing test call-sites compile unchanged.
+    fn format_int_base(n: i64, base: &str, spec: &FmtSpec) -> String {
+        let mut out = String::new();
+        let ch = base.chars().next().unwrap_or('x');
+        format_int_base_into(&mut out, n, ch, spec);
+        out
+    }
+
+    // String-returning wrappers for the sci-notation and `%g` helpers, kept
+    // so the existing test call-sites compile after production switched to
+    // `&mut String` writers. They are *not* used in production code.
+
+    fn go_normalize_sci(s: &str) -> String {
+        let mut out = String::new();
+        // Preserve raw case: pass `upper = true` only if the raw `s` already
+        // uses 'E'. The old `go_normalize_sci` was case-preserving.
+        let upper = s.bytes().any(|b| b == b'E');
+        write_normalized_sci(&mut out, s, upper, false);
+        out
+    }
+
+    fn strip_trailing_zeros(s: &str) -> String {
+        trim_trailing_zeros_view(s).to_string()
+    }
+
+    fn strip_trailing_zeros_sci(s: &str) -> String {
+        // Old behavior: trim zeros from mantissa, leave exponent verbatim.
+        if let Some(e_pos) = s.bytes().position(|b| b == b'e' || b == b'E') {
+            let mantissa = trim_trailing_zeros_view(&s[..e_pos]);
+            let mut out = String::with_capacity(s.len());
+            out.push_str(mantissa);
+            out.push_str(&s[e_pos..]);
+            out
+        } else {
+            trim_trailing_zeros_view(s).to_string()
+        }
+    }
+
+    fn format_g_default(f: f64, upper: bool) -> String {
+        let mut out = String::new();
+        write_g_default(&mut out, f, upper);
+        out
+    }
+
+    fn format_g_with_precision(f: f64, prec: usize, upper: bool) -> String {
+        let mut out = String::new();
+        write_g_with_precision(&mut out, f, prec, upper);
+        out
     }
 
     // needs_space
@@ -1165,6 +1312,25 @@ mod tests {
         assert_eq!(sf("%.10s", &[Value::String("hi".into())]), "hi");
     }
 
+    #[test]
+    fn sprintf_s_precision_multibyte() {
+        // Precision counts Unicode scalars, not bytes. Each accented char is
+        // 2 bytes in UTF-8 — `%.3s` keeps the first 3 chars.
+        assert_eq!(sf("%.3s", &[Value::String("café".into())]), "caf");
+        assert_eq!(sf("%.4s", &[Value::String("café".into())]), "café");
+    }
+
+    #[test]
+    fn sprintf_s_left_align_with_truncation() {
+        // Truncate first to 3 chars, then left-align in width 6.
+        assert_eq!(sf("%-6.3s", &[Value::String("hello".into())]), "hel   ");
+    }
+
+    #[test]
+    fn sprintf_s_zero_precision() {
+        assert_eq!(sf("%.0s", &[Value::String("hello".into())]), "");
+    }
+
     // sprintf: %d
     #[test]
     fn sprintf_d_basic() {
@@ -1200,6 +1366,24 @@ mod tests {
     #[test]
     fn sprintf_d_zero_pad_with_plus() {
         assert_eq!(sf("%+06d", &[Value::Int(42)]), "+00042");
+    }
+
+    #[test]
+    fn sprintf_d_zero_pad_plus_negative() {
+        // The plus flag is shadowed by the leading minus on negatives.
+        assert_eq!(sf("%+06d", &[Value::Int(-42)]), "-00042");
+    }
+
+    #[test]
+    fn sprintf_d_left_align_overrides_zero() {
+        // Go: '-' wins over '0' — pad with spaces on the right.
+        assert_eq!(sf("%-06d", &[Value::Int(42)]), "42    ");
+    }
+
+    #[test]
+    fn sprintf_d_zero_pad_no_overpad() {
+        // Width <= already-written length: no padding inserted.
+        assert_eq!(sf("%02d", &[Value::Int(12345)]), "12345");
     }
 
     // sprintf: %f
@@ -1257,6 +1441,25 @@ mod tests {
         assert_eq!(sf("%e", &[Value::Float(0.0)]), "0.000000e+00");
     }
 
+    #[test]
+    fn sprintf_e_space_flag() {
+        assert_eq!(sf("% e", &[Value::Float(1.5)]), " 1.500000e+00");
+        assert_eq!(sf("% e", &[Value::Float(-1.5)]), "-1.500000e+00");
+    }
+
+    #[test]
+    fn sprintf_e_width() {
+        // Right-align in 16 chars; "1.500000e+00" is 12 → 4 leading spaces.
+        assert_eq!(sf("%16e", &[Value::Float(1.5)]), "    1.500000e+00");
+    }
+
+    #[test]
+    fn sprintf_e_plus_width_negative() {
+        // The plus flag does not synthesize a sign on negatives; width pads
+        // the whole number (sign included) on the left.
+        assert_eq!(sf("%+16e", &[Value::Float(-1.5)]), "   -1.500000e+00");
+    }
+
     // sprintf: %g / %G
     #[test]
     fn sprintf_g_default() {
@@ -1307,6 +1510,43 @@ mod tests {
         assert_eq!(sf("%g", &[Value::Float(-0.0)]), "-0");
     }
 
+    #[test]
+    fn sprintf_g_nan_no_sign_synthesis() {
+        // NaN must never get a `+` or space prepended, even with sign flags.
+        assert_eq!(sf("%g", &[Value::Float(f64::NAN)]), "NaN");
+        assert_eq!(sf("%+g", &[Value::Float(f64::NAN)]), "NaN");
+        assert_eq!(sf("% g", &[Value::Float(f64::NAN)]), "NaN");
+    }
+
+    #[test]
+    fn sprintf_g_inf_with_sign_flags() {
+        // The crate currently passes through Rust's Display for inf (lowercase
+        // "inf", no synthesized sign). Sign flags still prepend on the
+        // positive case because the leading byte is 'i', not '-'.
+        assert_eq!(sf("%g", &[Value::Float(f64::INFINITY)]), "inf");
+        assert_eq!(sf("%g", &[Value::Float(f64::NEG_INFINITY)]), "-inf");
+        assert_eq!(sf("%+g", &[Value::Float(f64::INFINITY)]), "+inf");
+    }
+
+    #[test]
+    fn sprintf_g_width_and_sci() {
+        // Width pads the entire formatted number, sci notation included.
+        assert_eq!(sf("%10g", &[Value::Float(1e7)]), "     1e+07");
+    }
+
+    #[test]
+    fn sprintf_f_nan() {
+        assert_eq!(sf("%f", &[Value::Float(f64::NAN)]), "NaN");
+        // Sign flags do NOT prepend on NaN.
+        assert_eq!(sf("%+f", &[Value::Float(f64::NAN)]), "NaN");
+    }
+
+    #[test]
+    fn sprintf_f_inf() {
+        assert_eq!(sf("%f", &[Value::Float(f64::INFINITY)]), "inf");
+        assert_eq!(sf("%f", &[Value::Float(f64::NEG_INFINITY)]), "-inf");
+    }
+
     // sprintf: %v
     #[test]
     fn sprintf_v() {
@@ -1314,6 +1554,12 @@ mod tests {
         assert_eq!(sf("%v", &[Value::String("hi".into())]), "hi");
         assert_eq!(sf("%v", &[Value::Bool(true)]), "true");
         assert_eq!(sf("%v", &[Value::Nil]), "<nil>");
+    }
+
+    #[test]
+    fn sprintf_v_width() {
+        assert_eq!(sf("%6v", &[Value::Int(42)]), "    42");
+        assert_eq!(sf("%-6v", &[Value::String("hi".into())]), "hi    ");
     }
 
     // sprintf: %q
@@ -1342,6 +1588,19 @@ mod tests {
         assert_eq!(sf("%#q", &[Value::String("a\nb".into())]), r#""a\nb""#);
     }
 
+    #[test]
+    fn sprintf_q_width() {
+        // `"hi"` is 4 chars wide; right-align in width 8 → 4 leading spaces.
+        assert_eq!(sf("%8q", &[Value::String("hi".into())]), r#"    "hi""#);
+        assert_eq!(sf("%-8q", &[Value::String("hi".into())]), r#""hi"    "#);
+    }
+
+    #[test]
+    fn sprintf_hash_q_width() {
+        // Backtick form: `hi` is 4 chars, pad to width 8.
+        assert_eq!(sf("%#8q", &[Value::String("hi".into())]), "    `hi`");
+    }
+
     // sprintf: %t
     #[test]
     fn sprintf_t() {
@@ -1352,6 +1611,12 @@ mod tests {
     #[test]
     fn sprintf_t_non_bool_emits_bad_verb() {
         assert_eq!(sf("%t", &[Value::Int(42)]), "%!t(int=42)");
+    }
+
+    #[test]
+    fn sprintf_t_width() {
+        assert_eq!(sf("%6t", &[Value::Bool(true)]), "  true");
+        assert_eq!(sf("%-6t", &[Value::Bool(true)]), "true  ");
     }
 
     // sprintf: %x / %X / %o / %b
@@ -1375,6 +1640,27 @@ mod tests {
     #[test]
     fn sprintf_x_zero_pad() {
         assert_eq!(sf("%04x", &[Value::Int(127)]), "007f");
+    }
+
+    #[test]
+    fn sprintf_x_left_align() {
+        assert_eq!(sf("%-6x", &[Value::Int(255)]), "ff    ");
+    }
+
+    #[test]
+    fn sprintf_x_hash_zero_pad_negative() {
+        // Trickiest interaction: negative + hash prefix + zero-pad. The
+        // formatter writes "-0xff", then `pad_in_place` sees the leading
+        // '-' and inserts zeros after the sign, before the `0x` prefix.
+        assert_eq!(sf("%#08x", &[Value::Int(-255)]), "-0000xff");
+    }
+
+    #[test]
+    fn sprintf_x_hash_zero_pad_positive() {
+        // Positive case has no sign byte, so zeros land at the very start
+        // (before `0x`). This pins the current behavior; a Go-strict
+        // implementation would slot the zeros between `0x` and the digits.
+        assert_eq!(sf("%#08x", &[Value::Int(255)]), "00000xff");
     }
 
     #[test]
