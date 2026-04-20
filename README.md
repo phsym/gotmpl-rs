@@ -98,19 +98,45 @@ The syntax follows Go's `text/template` spec.
 
 ## Built-in functions
 
-| Function                           | Description                                                                               |
-| ---------------------------------- | ----------------------------------------------------------------------------------------- |
-| `print`                            | Concatenate args (spaces between non-string adjacent args)                                |
-| `printf`                           | Formatted output (`%s`, `%d`, `%f`, `%v`, `%q`, `%x`, `%o`, `%b`, `%e`, `%g`, `%t`, `%c`) |
-| `println`                          | Print with spaces between args, trailing newline                                          |
-| `len`                              | Length of string, list, or map                                                            |
-| `index`                            | Index into list or map: `index .List 0`, `index .Map "key"`                               |
-| `slice`                            | Slice a list or string: `slice .List 1 3`                                                 |
-| `call`                             | Call a function value: `call .Func arg1 arg2`                                             |
-| `eq`, `ne`, `lt`, `le`, `gt`, `ge` | Comparison operators. `eq` supports multi-arg: `eq .X 1 2 3`                              |
-| `and`, `or`                        | Short-circuit logic, return the deciding value                                            |
-| `not`                              | Boolean negation                                                                          |
-| `html`, `js`, `urlquery`           | Escape for HTML, JavaScript, URL query                                                    |
+| Function                           | Description                                                  |
+| ---------------------------------- | ------------------------------------------------------------ |
+| `print`                            | Concatenate args (spaces between non-string adjacent args)   |
+| `printf`                           | Formatted output ([see below](#printf-verbs-and-flags))      |
+| `println`                          | Print with spaces between args, trailing newline             |
+| `len`                              | Length of string, list, or map                               |
+| `index`                            | Index into list or map: `index .List 0`, `index .Map "key"`  |
+| `slice`                            | Slice a list or string: `slice .List 1 3`                    |
+| `call`                             | Call a function value: `call .Func arg1 arg2`                |
+| `eq`, `ne`, `lt`, `le`, `gt`, `ge` | Comparison operators. `eq` supports multi-arg: `eq .X 1 2 3` |
+| `and`, `or`                        | Short-circuit logic, return the deciding value               |
+| `not`                              | Boolean negation                                             |
+| `html`, `js`, `urlquery`           | Escape for HTML, JavaScript, URL query                       |
+
+### `printf` verbs and flags
+
+Format strings follow Go's [`fmt`](https://pkg.go.dev/fmt) syntax:
+`%[flags][width][.precision]verb`.
+
+| Verb       | Applies to        | Output                                          |
+| ---------- | ----------------- | ----------------------------------------------- |
+| `%s`       | any               | Default string representation (`Display`)       |
+| `%q`       | string, int(rune) | Go-quoted string, or single-quoted rune literal |
+| `%v`       | any               | Default formatted value                         |
+| `%d`       | int               | Decimal                                         |
+| `%b`       | int               | Binary                                          |
+| `%o`       | int               | Octal                                           |
+| `%x`, `%X` | int, string       | Lower/upper hex (on strings: hex of each byte)  |
+| `%c`       | int               | Unicode scalar                                  |
+| `%f`       | float             | Decimal, no exponent                            |
+| `%e`, `%E` | float             | Scientific notation (lower/upper `e`)           |
+| `%g`, `%G` | float             | `%e`/`%E` for large exponents, else `%f`        |
+| `%t`       | bool              | `true` / `false`                                |
+| `%%`       | —                 | Literal `%`                                     |
+
+Flags: `-` (left-align), `+` (always sign numerics), ` ` (leading space for non-negative
+numerics), `#` (alternate form: `0b`/`0o`/`0x`/`0X` prefix), `0` (zero-pad numerics).
+Width and `.precision` are both supported; mismatched verb/argument pairs produce Go's
+`%!v(BADVERB)` / `%!v(MISSING)` markers rather than panicking.
 
 ## Custom functions
 
@@ -238,7 +264,7 @@ feature:
 
 ```toml
 [dependencies]
-gotmpl = { version = "0.1", default-features = false }
+gotmpl = { version = "0.2", default-features = false }
 ```
 
 Without `std`, `execute_fmt` and `execute_to_string` are available. The `io::Write`-based
