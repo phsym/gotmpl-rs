@@ -1,7 +1,10 @@
 # gotmpl
 
 [![Test](https://github.com/phsym/gotmpl-rs/actions/workflows/test.yaml/badge.svg)](https://github.com/phsym/gotmpl-rs/actions/workflows/test.yaml)
-[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue)](https://releases.rs/docs/1.89.0/)
+[![GitHub License](https://img.shields.io/github/license/phsym/gotmpl-rs)](./LICENSE)
+[![Crates.io Version](https://img.shields.io/crates/v/gotmpl)](https://crates.io/crates/gotmpl)
+[![docs.rs](https://img.shields.io/docsrs/gotmpl)](https://docs.rs/gotmpl)
+[![Crates.io MSRV](https://img.shields.io/crates/msrv/gotmpl)](https://crates.io/crates/gotmpl)
 
 A Rust port of Go's [`text/template`](https://pkg.go.dev/text/template).
 
@@ -95,19 +98,19 @@ The syntax follows Go's `text/template` spec.
 
 ## Built-in functions
 
-| Function | Description |
-|----------|-------------|
-| `print` | Concatenate args (spaces between non-string adjacent args) |
-| `printf` | Formatted output (`%s`, `%d`, `%f`, `%v`, `%q`, `%x`, `%o`, `%b`, `%e`, `%g`, `%t`, `%c`) |
-| `println` | Print with spaces between args, trailing newline |
-| `len` | Length of string, list, or map |
-| `index` | Index into list or map: `index .List 0`, `index .Map "key"` |
-| `slice` | Slice a list or string: `slice .List 1 3` |
-| `call` | Call a function value: `call .Func arg1 arg2` |
-| `eq`, `ne`, `lt`, `le`, `gt`, `ge` | Comparison operators. `eq` supports multi-arg: `eq .X 1 2 3` |
-| `and`, `or` | Short-circuit logic, return the deciding value |
-| `not` | Boolean negation |
-| `html`, `js`, `urlquery` | Escape for HTML, JavaScript, URL query |
+| Function                           | Description                                                                               |
+| ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| `print`                            | Concatenate args (spaces between non-string adjacent args)                                |
+| `printf`                           | Formatted output (`%s`, `%d`, `%f`, `%v`, `%q`, `%x`, `%o`, `%b`, `%e`, `%g`, `%t`, `%c`) |
+| `println`                          | Print with spaces between args, trailing newline                                          |
+| `len`                              | Length of string, list, or map                                                            |
+| `index`                            | Index into list or map: `index .List 0`, `index .Map "key"`                               |
+| `slice`                            | Slice a list or string: `slice .List 1 3`                                                 |
+| `call`                             | Call a function value: `call .Func arg1 arg2`                                             |
+| `eq`, `ne`, `lt`, `le`, `gt`, `ge` | Comparison operators. `eq` supports multi-arg: `eq .X 1 2 3`                              |
+| `and`, `or`                        | Short-circuit logic, return the deciding value                                            |
+| `not`                              | Boolean negation                                                                          |
+| `html`, `js`, `urlquery`           | Escape for HTML, JavaScript, URL query                                                    |
 
 ## Custom functions
 
@@ -176,11 +179,11 @@ use gotmpl::MissingKey;
 let mk: MissingKey = "error".parse().unwrap();
 ```
 
-| `MissingKey` variant | `FromStr` value | Behavior |
-|----------------------|-----------------|----------|
-| `Invalid` (default) | `"invalid"`, `"default"` | Return `<no value>` |
-| `ZeroValue`          | `"zero"` | Return `<no value>` |
-| `Error`              | `"error"` | Return an error |
+| `MissingKey` variant | `FromStr` value          | Behavior            |
+| -------------------- | ------------------------ | ------------------- |
+| `Invalid` (default)  | `"invalid"`, `"default"` | Return `<no value>` |
+| `ZeroValue`          | `"zero"`                 | Return `<no value>` |
+| `Error`              | `"error"`                | Return an error     |
 
 ## Number literals
 
@@ -202,16 +205,16 @@ Go-compatible number literal syntax:
 
 Template data uses the `Value` enum:
 
-| Variant | Rust type | Go equivalent |
-|---------|-----------|---------------|
-| `Nil` | n/a | `nil` |
-| `Bool(bool)` | `bool` | `bool` |
-| `Int(i64)` | `i64` | `int` |
-| `Float(f64)` | `f64` | `float64` |
-| `String(Arc<str>)` | `String` | `string` |
-| `List(Arc<[Value]>)` | `Vec<Value>` | `[]any` |
-| `Map(Arc<BTreeMap<Arc<str>, Value>>)` | `BTreeMap` | `map[string]any` |
-| `Function(ValueFunc)` | `Arc<dyn Fn>` | `func(...)` |
+| Variant                               | Rust type     | Go equivalent    |
+| ------------------------------------- | ------------- | ---------------- |
+| `Nil`                                 | n/a           | `nil`            |
+| `Bool(bool)`                          | `bool`        | `bool`           |
+| `Int(i64)`                            | `i64`         | `int`            |
+| `Float(f64)`                          | `f64`         | `float64`        |
+| `String(Arc<str>)`                    | `String`      | `string`         |
+| `List(Arc<[Value]>)`                  | `Vec<Value>`  | `[]any`          |
+| `Map(Arc<BTreeMap<Arc<str>, Value>>)` | `BTreeMap`    | `map[string]any` |
+| `Function(ValueFunc)`                 | `Arc<dyn Fn>` | `func(...)`      |
 
 The `tmap!` macro builds data maps:
 

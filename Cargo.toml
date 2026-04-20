@@ -9,6 +9,7 @@ edition = "2024"
 rust-version = "1.89"
 description = "A Rust reimplementation of Go's text/template library"
 repository = "https://github.com/phsym/gotmpl-rs"
+documentation = "https://docs.rs/gotmpl"
 license = "MIT"
 readme = "README.md"
 authors = ["Pierre-Henri Symoneaux"]
