@@ -538,10 +538,13 @@ impl<'a> Executor<'a> {
                 .ok_or_else(|| TemplateError::UndefinedTemplate(tmpl.name.to_string()))?,
         );
 
-        self.vars.push();
+        // Template invocations do not inherit the caller's variables. Swap in
+        // a fresh scope containing only `$`, matching Go's walkTemplate which
+        // rebuilds `state.vars` as `[{"$", dot}]` before recursing.
+        let saved = core::mem::replace(&mut self.vars, VarScope::new());
         self.vars.set("$", new_dot.clone());
         let result = self.walk(w, &tree, &new_dot);
-        self.vars.pop();
+        self.vars = saved;
         result
     }
 

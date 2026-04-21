@@ -2654,6 +2654,42 @@ fn test_invoke_no_args() {
     );
 }
 
+// Go documents: "No dynamic scoping: template invocations inherit no
+// variables." The callee sees only `$` (the dot argument) and its own locals.
+#[test]
+fn test_template_does_not_inherit_caller_variables() {
+    // The callee references `$x`, which is bound in the caller. It must fail
+    // to resolve, producing an execution error.
+    fail(
+        r#"{{$x := "outer"}}{{define "sub"}}[{{$x}}]{{end}}{{template "sub" .}}"#,
+        &Value::Nil,
+    );
+}
+
+#[test]
+fn test_template_callee_dollar_rebinds_to_its_dot() {
+    // `$` inside the callee refers to the callee's dot argument, not the
+    // caller's. Here the caller's `$` is the string "outer" but the callee
+    // is invoked with ".Inner", so its `$` is "inner".
+    let data = tmap! { "Inner" => "inner" };
+    ok(
+        r#"{{define "sub"}}[{{$}}]{{end}}{{template "sub" .Inner}}"#,
+        &data,
+        "[inner]",
+    );
+}
+
+#[test]
+fn test_template_callee_locals_do_not_leak_to_caller() {
+    // A `$y` declared inside the callee must not be visible after the
+    // template call returns; the caller's own `$y` (if any) is unaffected.
+    ok(
+        r#"{{define "sub"}}{{$y := "inner"}}{{$y}}{{end}}{{$y := "outer"}}{{template "sub" .}}-{{$y}}"#,
+        &Value::Nil,
+        "inner-outer",
+    );
+}
+
 // Go multi_test.go: testFunc
 #[test]
 fn test_one_arg_literal() {
