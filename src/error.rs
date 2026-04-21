@@ -6,8 +6,19 @@
 //! Errors are split into phases (lexing, parsing, and execution) so callers
 //! can match on the variant to provide targeted diagnostics.
 
+use alloc::format;
 use alloc::string::String;
 use thiserror::Error;
+
+/// Shared formatter for source-location errors (parse + lex). The format is
+/// Go-compatible when a name is present (`template: foo.tmpl:12:5: msg`) and
+/// drops the name segment when absent, keeping the structure parallel.
+fn fmt_src_err(name: &Option<String>, line: usize, col: usize, message: &str) -> String {
+    match name {
+        Some(n) => format!("template: {n}:{line}:{col}: {message}"),
+        None => format!("template: {line}:{col}: {message}"),
+    }
+}
 
 /// The error type returned by all template operations.
 ///
@@ -41,8 +52,15 @@ use thiserror::Error;
 #[non_exhaustive]
 pub enum TemplateError {
     /// A syntax error found during parsing, with source location.
-    #[error("parse error at line {line}, col {col}: {message}")]
+    ///
+    /// The optional `name` tags the template's origin (e.g. the file name
+    /// when parsing via [`parse_files`](crate::Template::parse_files)) and
+    /// is prefixed Go-style in the `Display` output
+    /// (`template: <name>:<line>:<col>: <message>`).
+    #[error("{}", fmt_src_err(name, *line, *col, message))]
     Parse {
+        /// Source of the template (e.g. file name) if known.
+        name: Option<String>,
         /// 1-based line number in the template source.
         line: usize,
         /// 1-based column number in the template source.
@@ -52,10 +70,18 @@ pub enum TemplateError {
     },
 
     /// An error found during lexical scanning.
-    #[error("lex error at position {pos}: {message}")]
+    ///
+    /// Shares the `Parse` variant's shape and `Display` format — the message
+    /// itself describes the lex-specific failure, so no extra preamble is
+    /// added.
+    #[error("{}", fmt_src_err(name, *line, *col, message))]
     Lex {
-        /// Byte offset in the template source where the error occurred.
-        pos: usize,
+        /// Source of the template (e.g. file name) if known.
+        name: Option<String>,
+        /// 1-based line number in the template source.
+        line: usize,
+        /// 1-based column number in the template source.
+        col: usize,
         /// Human-readable description of the lex error.
         message: String,
     },

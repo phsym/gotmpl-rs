@@ -332,7 +332,11 @@ impl Template {
     /// contains syntax errors, or if two non-empty definitions of the same
     /// name appear in the same parse call.
     pub fn parse(mut self, src: &str) -> Result<Self> {
-        let parser = Parser::new(src, &self.left_delim, &self.right_delim)?;
+        // Go parity: `(*Template).Parse` tags errors with the receiver's name
+        // (its `parseName`). An empty receiver name drops the `<name>:` segment
+        // from the error's display, keeping the rest of the format unchanged.
+        let parser =
+            Parser::with_name(self.parse_name(), src, &self.left_delim, &self.right_delim)?;
         let (tree, defines) = parser.parse()?;
 
         if self.tree.is_none() || !tree.is_empty_tree() {
@@ -341,6 +345,13 @@ impl Template {
 
         self.merge_defines(defines, src)?;
         Ok(self)
+    }
+
+    /// The template's name as a parser tag, or `None` when empty. Matches Go's
+    /// `parseName` handling — an unnamed template drops the name segment from
+    /// error displays rather than rendering as `template: :<line>:<col>: …`.
+    fn parse_name(&self) -> Option<&str> {
+        (!self.name.is_empty()).then_some(self.name.as_str())
     }
 
     /// Merge one parse call's `{{define}}` bodies into `self.defines`,
@@ -367,6 +378,7 @@ impl Template {
                     continue;
                 }
                 return Err(error::TemplateError::Parse {
+                    name: self.parse_name().map(String::from),
                     line: def.pos.line,
                     col: col_for_offset(src, def.pos.offset),
                     message: alloc::format!(
@@ -381,7 +393,8 @@ impl Template {
             if !new_is_empty {
                 seen_non_empty.insert(def.name.clone());
             }
-            self.defines.insert(def.name.to_string(), Arc::new(def.body));
+            self.defines
+                .insert(def.name.to_string(), Arc::new(def.body));
         }
         Ok(())
     }
@@ -443,14 +456,22 @@ impl Template {
                     source: e,
                 })?;
 
-            let parser = Parser::new(&content, &self.left_delim, &self.right_delim)?;
-            let (tree, defines) = parser.parse()?;
-
             // Register the file's top-level content under its basename
             let basename = std::path::Path::new(filename)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(filename);
+
+            // Tag the parser with the basename so parse/lex errors report
+            // the originating file (Go's parseName), matching its
+            // `template: foo.tmpl:12:5: …` format.
+            let parser = Parser::with_name(
+                Some(basename),
+                &content,
+                &self.left_delim,
+                &self.right_delim,
+            )?;
+            let (tree, defines) = parser.parse()?;
 
             // Go parity: if the basename matches the receiver's name, the file's
             // top-level content becomes the receiver's own tree (so `Execute` works
@@ -1159,6 +1180,104 @@ mod tests {
         assert_eq!(tmpl.execute_to_string(&data).unwrap(), "Hi there");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_parse_files_error_cites_filename() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("gotmpl_test_parse_files_error_name");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let path = dir.join("broken.tmpl");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(b"ok\n{{if}}missing pipeline{{end}}")
+            .unwrap();
+
+        let err = Template::new("t")
+            .parse_files(&[path.to_str().unwrap()])
+            .err()
+            .unwrap();
+
+        match &err {
+            error::TemplateError::Parse { name, line, .. } => {
+                assert_eq!(name.as_deref(), Some("broken.tmpl"));
+                assert_eq!(*line, 2);
+            }
+            other => panic!("expected Parse error, got {other:?}"),
+        }
+        // Display format matches Go's `template: <name>:<line>:<col>: <msg>` prefix.
+        let s = err.to_string();
+        assert!(
+            s.starts_with("template: broken.tmpl:"),
+            "unexpected display: {s}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_parse_error_without_name_drops_name_segment() {
+        // Template::new("") -> empty name, so parse() leaves the error untagged
+        // and the display format omits the name segment: `template: <line>:<col>: …`.
+        let err = Template::new("").parse("{{if}}").err().unwrap();
+        let s = err.to_string();
+        assert!(s.starts_with("template: "), "got: {s}");
+        assert!(!s.contains("template: :"), "should drop name segment: {s}");
+    }
+
+    #[test]
+    fn test_lex_error_without_name_drops_name_segment() {
+        // Symmetric to the Parse case: an unnamed template should omit the
+        // `<name>:` segment from lex-error display too (shared format).
+        let err = Template::new("").parse("{{\"unterminated}}").err().unwrap();
+        match &err {
+            error::TemplateError::Lex { name, .. } => {
+                assert!(name.is_none(), "expected name to be None, got {name:?}");
+            }
+            other => panic!("expected Lex error, got {other:?}"),
+        }
+        let s = err.to_string();
+        assert!(s.starts_with("template: "), "got: {s}");
+        assert!(!s.contains("template: :"), "should drop name segment: {s}");
+    }
+
+    #[test]
+    fn test_lex_error_carries_line_col_and_shared_format() {
+        // Unterminated quoted string → lex error on the second line.
+        let err = Template::new("t")
+            .parse("ok\n{{\"unterminated}}")
+            .err()
+            .unwrap();
+        match &err {
+            error::TemplateError::Lex {
+                name,
+                line,
+                col,
+                message,
+            } => {
+                assert_eq!(name.as_deref(), Some("t"));
+                assert_eq!(*line, 2);
+                assert!(*col >= 1);
+                assert!(!message.is_empty());
+            }
+            other => panic!("expected Lex error, got {other:?}"),
+        }
+        // Shares the Parse variant's `template: <name>:<line>:<col>:` prefix.
+        assert!(err.to_string().starts_with("template: t:2:"));
+    }
+
+    #[test]
+    fn test_parse_error_tagged_with_receiver_name() {
+        let err = Template::new("greet.tmpl").parse("{{if}}").err().unwrap();
+        match &err {
+            error::TemplateError::Parse { name, .. } => {
+                assert_eq!(name.as_deref(), Some("greet.tmpl"));
+            }
+            other => panic!("expected Parse error, got {other:?}"),
+        }
+        assert!(err.to_string().starts_with("template: greet.tmpl:"));
     }
 
     #[test]

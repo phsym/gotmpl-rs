@@ -51,6 +51,7 @@ pub struct Parser<'a> {
     pos: usize,
     source: &'a str,
     depth: usize,
+    parse_name: Option<&'a str>,
 }
 
 impl<'a> Parser<'a> {
@@ -63,20 +64,41 @@ impl<'a> Parser<'a> {
     /// Returns a [`TemplateError::Lex`] if
     /// the source contains lexical errors (unterminated strings, invalid characters, etc.).
     pub fn new(source: &'a str, left_delim: &'a str, right_delim: &'a str) -> Result<Self> {
-        let lexer = Lexer::new(source, left_delim, right_delim);
+        Self::with_name(None, source, left_delim, right_delim)
+    }
+
+    /// Like [`new`](Self::new) but tags the parser with a source name (typically
+    /// a file path) that is prefixed onto lex and parse error messages, matching
+    /// Go's `template: <name>:<line>:<col>: <message>` format.
+    ///
+    /// The name is borrowed for the parser's lifetime and only copied into the
+    /// error's owned `String` when an error is actually emitted.
+    pub fn with_name(
+        parse_name: Option<&'a str>,
+        source: &'a str,
+        left_delim: &'a str,
+        right_delim: &'a str,
+    ) -> Result<Self> {
+        let lexer = Lexer::new(source, left_delim, right_delim).with_name(parse_name);
         let tokens = lexer.tokenize()?;
         Ok(Parser {
             tokens,
             pos: 0,
             source,
             depth: 0,
+            parse_name,
         })
+    }
+
+    fn err_name(&self) -> Option<String> {
+        self.parse_name.map(String::from)
     }
 
     fn enter(&mut self) -> Result<()> {
         self.depth += 1;
         if self.depth > MAX_PARSE_DEPTH {
             return Err(TemplateError::Parse {
+                name: self.err_name(),
                 line: 0,
                 col: 0,
                 message: alloc::format!("template nesting depth exceeded {}", MAX_PARSE_DEPTH),
@@ -125,6 +147,7 @@ impl<'a> Parser<'a> {
             let tok_val = tok.val.clone();
             let (line, col) = tok.line_col(self.source);
             return Err(TemplateError::Parse {
+                name: self.err_name(),
                 line,
                 col,
                 message: format!("expected {:?}, got {:?} ({:?})", kind, tok_kind, tok_val),
@@ -141,6 +164,7 @@ impl<'a> Parser<'a> {
         let tok = self.peek();
         let (line, col) = tok.line_col(self.source);
         TemplateError::Parse {
+            name: self.err_name(),
             line,
             col,
             message: msg.into(),
@@ -153,6 +177,7 @@ impl<'a> Parser<'a> {
     fn token_error(&self, tok: &Token<'a>, msg: impl Into<String>) -> TemplateError {
         let (line, col) = tok.line_col(self.source);
         TemplateError::Parse {
+            name: self.err_name(),
             line,
             col,
             message: msg.into(),
@@ -607,6 +632,7 @@ impl<'a> Parser<'a> {
             _ => {
                 let (line, col) = self.tokens[self.pos - 1].line_col(self.source);
                 Err(TemplateError::Parse {
+                    name: self.err_name(),
                     line,
                     col,
                     message: format!(

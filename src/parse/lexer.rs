@@ -153,6 +153,7 @@ pub struct Lexer<'a> {
     left_delim: &'a str,
     right_delim: &'a str,
     line: usize,
+    parse_name: Option<&'a str>,
 }
 
 impl<'a> Lexer<'a> {
@@ -170,7 +171,16 @@ impl<'a> Lexer<'a> {
             left_delim,
             right_delim,
             line: 1,
+            parse_name: None,
         }
+    }
+
+    /// Tag the lexer with a source name (e.g. file path) that is included in
+    /// lex error messages. The name is borrowed for the lexer's lifetime and
+    /// only copied into a `String` when a lex error is actually emitted.
+    pub fn with_name(mut self, name: Option<&'a str>) -> Self {
+        self.parse_name = name;
+        self
     }
 
     fn at_left_trim(&self) -> bool {
@@ -294,8 +304,20 @@ impl<'a> Lexer<'a> {
     }
 
     fn error(&self, msg: impl Into<String>) -> TemplateError {
+        // Cold path — error construction. `col` is derived on demand rather
+        // than carried through scanning because every `next_char` / `backup`
+        // would otherwise need a branch to reset or decrement it; `line` is
+        // already tracked because newlines are rare by comparison. Scanning
+        // back to the previous newline runs once per error.
+        let prefix = &self.input[..self.pos];
+        let col = match prefix.rfind('\n') {
+            Some(nl) => prefix[nl + 1..].chars().count() + 1,
+            None => prefix.chars().count() + 1,
+        };
         TemplateError::Lex {
-            pos: self.pos,
+            name: self.parse_name.map(String::from),
+            line: self.line,
+            col,
             message: msg.into(),
         }
     }
