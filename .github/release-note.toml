@@ -18,7 +18,14 @@ body = """
             {% if commit.breaking %}[**breaking**] {% endif %}\
             {{ commit.message | upper_first }}\
     {% endfor %}
-{% endfor %}\n
+  {% endfor %}
+{% set breaking = (commits | filter(attribute="breaking", value=true) | map(attribute="breaking_description")) -%}
+{% if breaking -%}
+  ### ⚠️ BREAKING CHANGES:
+  {% for bk in breaking %}
+    - {{ bk -}} 
+  {% endfor %}
+{% endif %}
 """
 # template for the changelog footer
 footer = ""
