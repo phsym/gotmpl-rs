@@ -344,16 +344,30 @@ impl Template {
         Ok(self)
     }
 
-    /// Parse template definitions from one or more files and merge them.
+    /// Parse template definitions from one or more files and associate them with this template.
     ///
-    /// Equivalent to Go's `template.ParseFiles()`. Each file is read and parsed;
-    /// `{{define}}` blocks are extracted and added to this template's definition map.
-    /// The file's basename (without directory) is also registered as a template name
-    /// for the file's top-level content.
+    /// Equivalent to Go's `(*Template).ParseFiles` **method** (not the package-level
+    /// `template.ParseFiles` constructor). Each file is read and parsed; `{{define}}`
+    /// blocks are hoisted into this template's definition map, and the file's basename
+    /// is registered as an associated template whose body is the file's top-level
+    /// content.
+    ///
+    /// If a file's basename matches this template's own name (as set via
+    /// [`new`](Self::new)), that file's content additionally becomes the receiver's
+    /// main tree — so [`execute`](Self::execute) works directly. Otherwise, the
+    /// receiver's main tree is left unchanged and callers must use
+    /// [`execute_template`](Self::execute_template) with the basename. This matches
+    /// Go's `name == t.Name()` branch in `parseFiles`.
+    ///
+    /// To get the constructor-style behavior (receiver's name and tree synthesized
+    /// from the first file's basename), call
+    /// `Template::new(basename).parse_files(&[...])` explicitly, or use the top-level
+    /// [`execute_file`] helper for the single-file case.
     ///
     /// # Errors
     ///
-    /// Returns an error if any file cannot be read or contains syntax errors.
+    /// Returns [`TemplateError::NoFiles`](crate::error::TemplateError::NoFiles) if
+    /// `filenames` is empty, or a read/parse error for the first file that fails.
     ///
     /// # Examples
     ///
@@ -366,6 +380,10 @@ impl Template {
     /// ```
     #[cfg(feature = "std")]
     pub fn parse_files(mut self, filenames: &[&str]) -> Result<Self> {
+        if filenames.is_empty() {
+            return Err(error::TemplateError::NoFiles);
+        }
+
         for filename in filenames {
             let content =
                 std::fs::read_to_string(filename).map_err(|e| error::TemplateError::ReadFile {
@@ -381,6 +399,13 @@ impl Template {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(filename);
+
+            // Go parity: if the basename matches the receiver's name, the file's
+            // top-level content becomes the receiver's own tree (so `Execute` works
+            // directly). Otherwise it is only registered as an associated template.
+            if basename == self.name {
+                self.tree = Some(tree.clone());
+            }
             self.defines.insert(basename.to_string(), Arc::new(tree));
 
             for def in defines {
@@ -699,6 +724,35 @@ pub fn execute(template_src: &str, data: &Value) -> Result<String> {
         .execute_to_string(data)
 }
 
+/// Parse a template file and execute it in one shot.
+///
+/// Convenience wrapper around [`Template::parse_files`] for the common single-file
+/// case. The file's basename is used as the template name for execution.
+///
+/// # Examples
+///
+/// ```no_run
+/// use gotmpl::{execute_file, tmap};
+///
+/// let result = execute_file("templates/greeting.tmpl", &tmap! { "Name" => "World" }).unwrap();
+/// # let _ = result;
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, the template is invalid, or
+/// execution fails.
+#[cfg(feature = "std")]
+pub fn execute_file(filename: &str, data: &Value) -> Result<String> {
+    let basename = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(filename);
+    Template::new(basename)
+        .parse_files(&[filename])?
+        .execute_to_string(data)
+}
+
 /// Reports whether a [`Value`] is "true" according to Go's template truthiness rules.
 ///
 /// Equivalent to Go's `template.IsTrue()` but without the second "ok" tuple
@@ -1009,6 +1063,60 @@ mod tests {
                     if path == "/nonexistent/file.html"
             ),
             "expected ReadFile error, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_execute_file() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("gotmpl_test_execute_file");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let path = dir.join("greeting.tmpl");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(b"Hello, {{.Name}}!")
+            .unwrap();
+
+        let data = tmap! { "Name" => "World" };
+        let result = execute_file(path.to_str().unwrap(), &data).unwrap();
+        assert_eq!(result, "Hello, World!");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_parse_files_basename_matches_receiver() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("gotmpl_test_parse_files_basename");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let path = dir.join("main.tmpl");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(b"Hi {{.Name}}")
+            .unwrap();
+
+        let tmpl = Template::new("main.tmpl")
+            .parse_files(&[path.to_str().unwrap()])
+            .unwrap();
+        let data = tmap! { "Name" => "there" };
+        assert_eq!(tmpl.execute_to_string(&data).unwrap(), "Hi there");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_parse_files_empty() {
+        let result = Template::new("t").parse_files(&[]);
+        let err = result.err().unwrap();
+        assert!(
+            matches!(err, error::TemplateError::NoFiles),
+            "expected NoFiles error, got {:?}",
             err
         );
     }

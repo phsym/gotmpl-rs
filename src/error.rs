@@ -156,6 +156,12 @@ pub enum TemplateError {
         source: std::io::Error,
     },
 
+    /// [`Template::parse_files`](crate::Template::parse_files) was called
+    /// with an empty slice of filenames.
+    #[cfg(feature = "std")]
+    #[error("no files named in call to parse_files")]
+    NoFiles,
+
     /// An I/O error occurred while writing template output.
     #[cfg(feature = "std")]
     #[error("io error: {0}")]
