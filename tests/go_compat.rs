@@ -1185,6 +1185,58 @@ fn test_trim_newlines() {
     );
 }
 
+#[test]
+fn test_trim_left_tab_separator() {
+    ok("  {{-\t.}}", &Value::String("x".into()), "x");
+}
+
+#[test]
+fn test_trim_right_newline_separator() {
+    ok("{{.\n-}}  ", &Value::String("x".into()), "x");
+}
+
+#[test]
+fn test_trim_left_requires_space_after_dash() {
+    // `{{-` without a space after the dash is not a trim marker in Go; the
+    // action body then starts with `-`, which is not a valid identifier lead.
+    fail("  {{-.X}}", &tmap! { "X" => "x" });
+}
+
+#[test]
+fn test_trim_left_negative_number_is_not_trim() {
+    // `{{-5}}` parses as the numeric literal `-5`, not as a trim marker, so
+    // the preceding whitespace must survive.
+    ok("  {{-5}}", &Value::Nil, "  -5");
+    // Contrast: the same input with a space after the dash *is* a trim.
+    ok("  {{- 5}}", &Value::Nil, "5");
+}
+
+#[test]
+fn test_trim_right_requires_space_before_dash() {
+    // `-}}` without a preceding space is not a trim marker in Go; the lexer
+    // treats the `-` as a sign prefix and errors on the missing digits.
+    fail("{{.X-}}", &tmap! { "X" => "x" });
+}
+
+#[test]
+fn test_trim_right_negative_number_is_not_trim() {
+    // The `-` belongs to the literal `-5`, so `}}` is the close delim and the
+    // trailing whitespace is not trimmed.
+    ok("{{-5}}  ", &Value::Nil, "-5  ");
+    // Contrast: a space before the dash turns it into a trim.
+    ok("{{5 -}}  ", &Value::Nil, "5");
+}
+
+#[test]
+fn test_trim_comment_requires_space_around_markers() {
+    // Valid: space on both sides of the comment trims surrounding text.
+    ok("a  {{- /* c */ -}}  b", &Value::Nil, "ab");
+    // Invalid: no space between `*/` and `-}}`.
+    fail("a {{/* c */-}} b", &Value::Nil);
+    // Invalid: no space between `{{-` and `/*`.
+    fail("a {{-/* c */}} b", &Value::Nil);
+}
+
 // Bug fixes (from Go's exec_test.go)
 #[test]
 fn test_bug4_nil_in_if() {

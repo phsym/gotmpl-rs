@@ -28,6 +28,13 @@ fn int_parse_msg(kind: &str, err: &core::num::ParseIntError) -> String {
     }
 }
 
+/// ASCII whitespace recognised by Go's lexer (`isSpace` in
+/// `text/template/parse/lex.go`). Trim markers only bind adjacent to one of
+/// these bytes, not arbitrary Unicode whitespace.
+fn is_go_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\r' | b'\n')
+}
+
 fn strip_underscores(raw: &str) -> Cow<'_, str> {
     if raw.contains('_') {
         Cow::Owned(raw.replace('_', ""))
@@ -185,12 +192,23 @@ impl<'a> Lexer<'a> {
     }
 
     fn at_left_trim(&self) -> bool {
+        // Go requires a space (space/tab/CR/LF) after the `-` for `{{- ` to
+        // count as a trim marker; `{{-foo}}` tokenises as the plain left delim
+        // followed by `-foo`.
+        let bytes = self.input.as_bytes();
         self.starts_with(self.left_delim)
-            && self.input.as_bytes().get(self.pos + self.left_delim.len()) == Some(&b'-')
+            && bytes.get(self.pos + self.left_delim.len()) == Some(&b'-')
+            && bytes
+                .get(self.pos + self.left_delim.len() + 1)
+                .is_some_and(|b| is_go_space(*b))
     }
 
-    fn at_right_trim(&self) -> bool {
-        self.input.as_bytes().get(self.pos) == Some(&b'-')
+    /// Detect a right trim marker at the current position. `ws_before` must be
+    /// true if at least one ASCII space/tab/CR/LF was consumed immediately
+    /// before; Go rejects `-}}` without a preceding space.
+    fn at_right_trim(&self, ws_before: bool) -> bool {
+        ws_before
+            && self.input.as_bytes().get(self.pos) == Some(&b'-')
             && self.input[self.pos + 1..].starts_with(self.right_delim)
     }
 
@@ -441,18 +459,12 @@ impl<'a> Lexer<'a> {
             self.next_char();
         }
 
-        // Skip whitespace after */
-        while let Some(ch) = self.peek() {
-            if ch.is_whitespace() {
-                self.next_char();
-            } else {
-                break;
-            }
-        }
+        // Skip whitespace after */; `-}}` only binds as a trim marker when at
+        // least one space/tab/CR/LF separates it from the comment terminator.
+        let ws_before = self.skip_whitespace();
 
-        // Detect whether close has trim marker
         let close_trims;
-        if self.at_right_trim() {
+        if self.at_right_trim(ws_before) {
             self.skip(self.right_delim.len() + 1);
             close_trims = true;
         } else if self.starts_with(self.right_delim) {
@@ -480,15 +492,14 @@ impl<'a> Lexer<'a> {
     // State: Scanning inside {{ ... }}
     fn lex_inside(&mut self) -> Result<()> {
         loop {
-            self.skip_whitespace();
+            let ws_before = self.skip_whitespace();
             self.ignore();
 
             if self.pos >= self.input.len() {
                 return Err(self.error("unclosed action"));
             }
 
-            // Check for right delimiter (with optional trim)
-            if self.at_right_trim() {
+            if self.at_right_trim(ws_before) {
                 self.skip(self.right_delim.len() + 1);
                 self.ignore();
                 self.emit(TokenKind::RightTrimDelim);
@@ -573,7 +584,9 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn skip_whitespace(&mut self) {
+    /// Consume ASCII space/tab/CR/LF. Returns true if any were consumed.
+    fn skip_whitespace(&mut self) -> bool {
+        let start = self.pos;
         while let Some(ch) = self.peek() {
             if ch.is_whitespace() {
                 self.next_char();
@@ -581,6 +594,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+        self.pos != start
     }
 
     // Individual token scanners
