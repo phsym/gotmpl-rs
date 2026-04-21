@@ -35,7 +35,6 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt::Write;
 
@@ -176,8 +175,15 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
     m.insert(
         "println".into(),
         Arc::new(|args: &[Value]| {
-            let s: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
-            Ok(Value::String(Arc::from(format!("{}\n", s.join(" ")))))
+            let mut result = String::new();
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    result.push(' ');
+                }
+                write!(result, "{}", arg).ok();
+            }
+            result.push('\n');
+            Ok(Value::String(Arc::from(result)))
         }),
     );
 
