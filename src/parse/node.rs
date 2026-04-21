@@ -1,9 +1,8 @@
 //! Abstract Syntax Tree (AST) node types for the template language.
 //!
-//! The AST is produced by the [`Parser`](super::Parser) and consumed by
-//! the executor. In Go's implementation, nodes use an interface with a tree
-//! of concrete types. In Rust, we use enums, the natural way to represent
-//! sum types.
+//! The AST is produced by the [`Parser`](super::Parser) and consumed by the
+//! executor. Go's implementation uses an interface with a tree of concrete
+//! types; in Rust we use enums, which fit sum types more naturally.
 //!
 //! The top-level enum is [`Node`], with expression-level atoms in [`Expr`].
 
@@ -13,8 +12,8 @@ use alloc::vec::Vec;
 
 /// Byte-level position in the template source, used for error reporting.
 ///
-/// Carried by every AST node so that execution errors can point back to
-/// the originating source location.
+/// Carried by every AST node so that execution errors can point back to the
+/// originating source location.
 #[derive(Debug, Clone, Copy)]
 pub struct Pos {
     /// Byte offset from the start of the template source.
@@ -32,8 +31,8 @@ impl Pos {
 
 /// A top-level AST node produced by the parser.
 ///
-/// Each variant corresponds to a syntactic construct in the Go template language.
-/// The executor walks a tree of these nodes to produce output.
+/// Each variant corresponds to a syntactic construct in the Go template
+/// language. The executor walks a tree of these nodes to produce output.
 #[derive(Debug, Clone)]
 pub enum Node {
     /// A sequence of nodes (the body of a template or control-flow branch).
@@ -175,10 +174,10 @@ pub struct CommandNode {
     pub args: Vec<Expr>,
 }
 
-/// A parsed numeric literal — either an integer or a floating-point value.
+/// A parsed numeric literal: either an integer or a floating-point value.
 ///
-/// Produced by the parser from `Number` and `Char` tokens. Character
-/// literals are stored as `Int` holding the Unicode code point.
+/// Produced by the parser from `Number` and `Char` tokens. Character literals
+/// are stored as `Int` holding the Unicode code point.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Number {
     /// An integer literal (decimal, hex, octal, binary, or char code point).

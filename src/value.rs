@@ -1,10 +1,11 @@
 //! Dynamic value system for template data.
 //!
-//! Go's template engine inspects arbitrary types at runtime via reflection.
-//! In Rust, we use the [`Value`] enum, similar to `serde_json::Value`.
+//! Go's template engine inspects arbitrary types at runtime through
+//! reflection. Rust has no such reflection, so data is carried through the
+//! engine as a [`Value`] enum, similar in spirit to `serde_json::Value`.
 //!
-//! The [`ToValue`](crate::ToValue) trait allows converting Rust types into [`Value`]s, and the
-//! [`tmap!`](crate::tmap) macro provides a convenient way to build data maps.
+//! The [`ToValue`](crate::ToValue) trait converts Rust types into [`Value`]s,
+//! and the [`tmap!`](crate::tmap) macro builds data maps.
 //!
 //! # Examples
 //!
@@ -27,9 +28,9 @@ use core::fmt;
 
 use crate::error::Result;
 
-/// Type alias for a callable function stored inside [`Value::Function`].
+/// Alias for a callable function stored inside [`Value::Function`].
 ///
-/// This is an `Arc`-wrapped closure so that [`Value`] remains [`Clone`].
+/// Wrapped in `Arc` so that [`Value`] remains [`Clone`].
 ///
 /// # Examples
 ///
@@ -47,11 +48,11 @@ use crate::error::Result;
 /// ```
 pub type ValueFunc = Arc<dyn Fn(&[Value]) -> Result<Value> + Send + Sync>;
 
-/// The core dynamic type for template data.
+/// The dynamic type for template data.
 ///
-/// Every piece of data flowing through the template engine (dot, variables,
-/// function arguments, pipeline results) is a `Value`. This plays the role
-/// that `reflect.Value` plays in Go's template engine.
+/// Dot, variables, function arguments, and pipeline results are all carried
+/// as a `Value`. Plays the role that `reflect.Value` plays in Go's template
+/// engine.
 ///
 /// # Truthiness
 ///
@@ -156,7 +157,8 @@ impl Value {
     /// not a map. This lets callers distinguish "key set to nil" from
     /// "key missing", which matters for the `missingkey=error` option.
     ///
-    /// In Go, this would use reflection to access struct fields or map keys.
+    /// In Go, the equivalent lookup uses reflection on struct fields or map
+    /// keys.
     ///
     /// # Examples
     ///
@@ -392,7 +394,7 @@ impl fmt::Display for Value {
 
 /// Rust-side equality for [`Value`].
 ///
-/// This comparison is type-strict: values must have the same variant to be equal
+/// Type-strict: values must have the same variant to compare equal
 /// (except `Nil == Nil`).
 ///
 /// Template builtins (`eq`, `ne`) implement Go-compatible comparison error
@@ -414,12 +416,12 @@ impl PartialEq for Value {
 
 /// Rust-side partial ordering for [`Value`].
 ///
-/// Supports ordering for same-type numeric/string variants only:
-/// [`Value::Int`], [`Value::Float`], [`Value::String`].
-/// Returns `None` for all other combinations.
+/// Supports ordering for same-type numeric and string variants only:
+/// [`Value::Int`], [`Value::Float`], [`Value::String`]. Every other
+/// combination returns `None`.
 ///
-/// Template builtins (`lt`, `le`, `gt`, `ge`) implement Go-compatible comparison
-/// error semantics separately in `funcs.rs`.
+/// Template builtins (`lt`, `le`, `gt`, `ge`) implement Go-compatible
+/// comparison error semantics separately in `funcs.rs`.
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         match (self, other) {
@@ -433,9 +435,9 @@ impl PartialOrd for Value {
 
 /// Trait for converting Rust types into template [`Value`]s.
 ///
-/// This is the Rust equivalent of Go's ability to pass any type to
-/// `template.Execute()`. Blanket implementations are provided for common
-/// types; implement this trait for your own types to pass them as template data.
+/// Standing in for Go's ability to pass any type to `template.Execute()`.
+/// Blanket impls cover common types; implement it on your own types to pass
+/// them as template data.
 ///
 /// # Examples
 ///
@@ -667,8 +669,8 @@ impl From<Arc<BTreeMap<Arc<str>, Value>>> for Value {
 
 /// Converts a [`std::collections::HashMap<String, Value>`] into a [`Value::Map`].
 ///
-/// Useful when you already have data in a `HashMap` and want to pass it
-/// to a template without manually converting to `BTreeMap`.
+/// Useful when data is already in a `HashMap` and should be passed to a
+/// template without first converting to `BTreeMap`.
 ///
 /// # Examples
 ///

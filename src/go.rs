@@ -1,9 +1,9 @@
 //! Go-compatible formatting, escaping, and number parsing.
 //!
-//! This module contains all the adaptations needed to match Go's `fmt` package
-//! and `text/template` output conventions from Rust. It is used internally by
-//! the built-in template functions ([`print`](crate::funcs), [`printf`](crate::funcs), etc.)
-//! and by the lexer for number literal parsing.
+//! Holds the adaptations needed to match Go's `fmt` package and `text/template`
+//! output conventions. Used by the built-in template functions
+//! ([`print`](crate::funcs), [`printf`](crate::funcs), etc.) and by the lexer
+//! for number literal parsing.
 //!
 //! # What lives here
 //!
@@ -412,7 +412,7 @@ fn write_bad_verb(out: &mut String, verb: char, arg: &Value) {
 /// `%x` / `%X` on strings: hex-encode each byte into `out`.
 ///
 /// Go's precision on `%.Nx` for strings limits the number of *input bytes*
-/// consumed, yielding `2 * N` hex characters — not `N` hex characters.
+/// consumed, yielding `2 * N` hex characters, not `N`.
 fn format_string_hex_into(out: &mut String, s: &str, upper: bool, spec: &FmtSpec) {
     let bytes = s.as_bytes();
     let take = spec
@@ -491,12 +491,12 @@ fn try_backquote_into(out: &mut String, s: &str) -> bool {
 /// - When `strip_zeros` is set, trailing zeros (and a dangling `.`) are
 ///   removed from the mantissa before emission.
 ///
-/// Writes directly into `out` — no intermediate `String` allocation, in
+/// Writes directly into `out`: no intermediate `String` allocation, in
 /// contrast to the previous `go_normalize_sci` + `replace` + `strip` chain.
 fn write_normalized_sci(out: &mut String, raw: &str, upper: bool, strip_zeros: bool) {
     let e_pos = raw.bytes().position(|b| b == b'e' || b == b'E');
     let Some(e_pos) = e_pos else {
-        // No exponent — emit the mantissa-only form, optionally stripped.
+        // No exponent: emit the mantissa-only form, optionally stripped.
         out.push_str(if strip_zeros {
             trim_trailing_zeros_view(raw)
         } else {
@@ -1315,7 +1315,7 @@ mod tests {
     #[test]
     fn sprintf_s_precision_multibyte() {
         // Precision counts Unicode scalars, not bytes. Each accented char is
-        // 2 bytes in UTF-8 — `%.3s` keeps the first 3 chars.
+        // 2 bytes in UTF-8, so `%.3s` keeps the first 3 chars.
         assert_eq!(sf("%.3s", &[Value::String("café".into())]), "caf");
         assert_eq!(sf("%.4s", &[Value::String("café".into())]), "café");
     }
@@ -1376,7 +1376,7 @@ mod tests {
 
     #[test]
     fn sprintf_d_left_align_overrides_zero() {
-        // Go: '-' wins over '0' — pad with spaces on the right.
+        // Go: '-' wins over '0', so pad with spaces on the right.
         assert_eq!(sf("%-06d", &[Value::Int(42)]), "42    ");
     }
 

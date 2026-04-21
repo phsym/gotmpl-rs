@@ -86,9 +86,10 @@ pub enum TokenKind {
 ///
 /// The `val` field borrows from the source when possible (text, identifiers,
 /// field names, keywords, raw strings) and only allocates for values that
-/// must be transformed — quoted strings with escapes. For `Number` and `Char`
-/// tokens, `val` always borrows the raw source slice and the parsed numeric
-/// value is carried in `num`, so the parser can skip the decimal round-trip.
+/// must be transformed, i.e. quoted strings with escapes. For `Number` and
+/// `Char` tokens, `val` always borrows the raw source slice and the parsed
+/// numeric value is carried in `num`, so the parser can skip the decimal
+/// round-trip.
 #[derive(Debug, Clone)]
 pub struct Token<'a> {
     /// What kind of token this is.
@@ -160,7 +161,7 @@ impl<'a> Lexer<'a> {
     /// Create a new lexer for the given input with the specified delimiters.
     pub fn new(input: &'a str, left_delim: &'a str, right_delim: &'a str) -> Self {
         // Heuristic: one token per ~8 bytes of source. Overshoots slightly on
-        // ASCII-heavy text, which is fine — avoids the ~7 reallocations a
+        // ASCII-heavy text, which is fine; it avoids the ~7 reallocations a
         // defaulted Vec would do on a 100-token template.
         let capacity = input.len() / 8 + 8;
         Lexer {
@@ -210,7 +211,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Look `n` characters ahead without advancing. O(n) in `n` (scans chars
-    /// from `self.pos`), so only use for small lookaheads — not in hot loops.
+    /// from `self.pos`), so only use for small lookaheads, not in hot loops.
     fn peek_ahead(&self, n: usize) -> Option<char> {
         self.input[self.pos..].chars().nth(n)
     }
@@ -225,7 +226,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Back up one character. `self.pos` must be a char boundary and greater
-    /// than zero — both hold because every advance path (`next_char`, `skip`)
+    /// than zero; both hold because every advance path (`next_char`, `skip`)
     /// moves by whole UTF-8 characters starting from 0.
     fn backup(&mut self) {
         debug_assert!(self.pos > 0, "backup with self.pos == 0");
@@ -304,11 +305,11 @@ impl<'a> Lexer<'a> {
     }
 
     fn error(&self, msg: impl Into<String>) -> TemplateError {
-        // Cold path — error construction. `col` is derived on demand rather
+        // Cold path: error construction. `col` is derived on demand rather
         // than carried through scanning because every `next_char` / `backup`
-        // would otherwise need a branch to reset or decrement it; `line` is
-        // already tracked because newlines are rare by comparison. Scanning
-        // back to the previous newline runs once per error.
+        // would otherwise need a branch to reset or decrement it. `line` is
+        // already tracked because newlines are rare by comparison, and
+        // scanning back to the previous newline runs once per error.
         let prefix = &self.input[..self.pos];
         let col = match prefix.rfind('\n') {
             Some(nl) => prefix[nl + 1..].chars().count() + 1,

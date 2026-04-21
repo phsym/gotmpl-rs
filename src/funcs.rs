@@ -1,10 +1,9 @@
-//! Built-in template functions, equivalent to Go's `text/template` builtins.
+//! Built-in template functions, matching Go's `text/template` builtins.
 //!
-//! In Go, template functions are stored in a `FuncMap` and called via reflection.
-//! In Rust, we use boxed closures with the signature [`ValueFunc`].
-//!
-//! All built-in functions are registered automatically when creating a
-//! [`Template`](crate::Template). Custom functions can be added via
+//! In Go, template functions live in a `FuncMap` and are called via
+//! reflection. Here they are boxed closures with the signature [`ValueFunc`].
+//! Built-ins are registered automatically when creating a
+//! [`Template`](crate::Template); custom functions can be added via
 //! [`Template::func`](crate::Template::func).
 //!
 //! # Built-in function reference
@@ -19,11 +18,11 @@
 //!
 //! # Escape-function security notes
 //!
-//! The escape builtins match Go's `text/template` parity exactly, which is
-//! **not** enough for all HTML/JS contexts:
+//! The escape builtins match Go's `text/template` exactly, which is **not**
+//! enough for all HTML/JS contexts:
 //!
 //! - `html` does **not** escape backticks and is only safe inside
-//!   double-quoted attribute values or text nodes — never in unquoted
+//!   double-quoted attribute values or text nodes. Never use it in unquoted
 //!   attributes, `<script>` blocks, or inline event handlers.
 //! - `js` does **not** escape U+2028 / U+2029 (line / paragraph separator),
 //!   which terminate string literals when embedded in `<script>` tags.

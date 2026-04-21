@@ -9,10 +9,10 @@
 A Rust port of Go's [`text/template`](https://pkg.go.dev/text/template).
 
 Supports the full template syntax (pipelines, control flow, custom functions, template
-composition, whitespace trimming) with Go compatible output. `no_std` compatible.
+composition, whitespace trimming) with Go compatible output. `no_std` compatible (with `alloc`).
 
-**No `unsafe`, no panics**: the crate `#![forbid(unsafe_code)]` and denies `panic!`,
-`unwrap`, `expect`, `unreachable!`, `todo!`, and `unimplemented!` at the lint level.
+The crate forbids `unsafe` code and denies the panic-family lints (`panic!`, `unwrap`,
+`expect`, `unreachable!`, `todo!`, `unimplemented!`).
 User-provided functions that panic are caught under `std`; see `no_std` notes below.
 
 ## Quick start
@@ -29,10 +29,19 @@ let result = Template::new("hello")
 assert_eq!(result, "Hello, World!");
 ```
 
+For one-shot renders with no configuration, use `gotmpl::execute` (source
+string) or `gotmpl::execute_file` (reads from disk):
+
+```rust
+use gotmpl::{execute, tmap};
+
+let result = execute("Hello, {{.Name}}!", &tmap! { "Name" => "World" }).unwrap();
+assert_eq!(result, "Hello, World!");
+```
+
 ## Template syntax
 
 Actions are delimited by `{{` and `}}` (configurable via `.delims()`).
-The syntax follows Go's `text/template` spec.
 
 ### Data access
 
@@ -135,7 +144,7 @@ Format strings follow Go's [`fmt`](https://pkg.go.dev/fmt) syntax:
 
 Flags: `-` (left-align), `+` (always sign numerics), ` ` (leading space for non-negative
 numerics), `#` (alternate form: `0b`/`0o`/`0x`/`0X` prefix), `0` (zero-pad numerics).
-Width and `.precision` are both supported; mismatched verb/argument pairs produce Go's
+Width and `.precision` are both supported. Mismatched verb/argument pairs produce Go's
 `%!v(BADVERB)` / `%!v(MISSING)` markers rather than panicking.
 
 ## Custom functions
@@ -211,6 +220,10 @@ let mk: MissingKey = "error".parse().unwrap();
 | `ZeroValue`          | `"zero"`                 | Return `<no value>` |
 | `Error`              | `"error"`                | Return an error     |
 
+`ZeroValue` exists for parity with Go's `{{options "missingkey=zero"}}` directive.
+Since `Value` is untyped, it behaves the same as `Invalid`; the variant is there so
+callers can still opt in to the named option.
+
 ## Number literals
 
 Go-compatible number literal syntax:
@@ -264,7 +277,7 @@ feature:
 
 ```toml
 [dependencies]
-gotmpl = { version = "0.2", default-features = false }
+gotmpl = { version = "0.3", default-features = false }
 ```
 
 Without `std`, `execute_fmt` and `execute_to_string` are available. The `io::Write`-based
@@ -291,5 +304,5 @@ cargo test --features go-crosscheck
 ```
 
 A Go helper (`tests/testdata/go_crosscheck.go`) is compiled once per test run. It
-receives templates and typed data as JSON on stdin, executes via Go's `text/template`, and
-prints the result.
+reads templates and typed data from stdin as JSON, executes them via Go's
+`text/template`, and prints the result.

@@ -40,10 +40,10 @@ pub(crate) mod value;
 pub use error::{Result, TemplateError};
 use funcs::builtins;
 
-/// Shared, lazily-constructed builtins map. `Template::new` clones this
-/// `Arc` (one atomic op) instead of rebuilding the 19-entry BTreeMap on
-/// every call. Mutation via [`Template::func`] / [`Template::funcs`] goes
-/// through `Arc::make_mut`, so custom funcs trigger a one-time copy and
+/// Shared, lazily-constructed builtins map. `Template::new` clones this `Arc`
+/// (one atomic op) instead of rebuilding the builtins BTreeMap on every call.
+/// Mutation via [`Template::func`] / [`Template::funcs`] goes through
+/// `Arc::make_mut`, so registering a custom func triggers a one-time copy and
 /// the shared map is never observed in a mutated state.
 #[cfg(feature = "std")]
 fn shared_builtins() -> Arc<BTreeMap<String, ValueFunc>> {
@@ -79,10 +79,9 @@ use exec::Executor;
 pub use exec::MissingKey;
 use parse::{DefineNode, ListNode, Parser};
 
-/// A function map mapping names to template functions.
-///
-/// Equivalent to Go's `template.FuncMap`. Used with [`Template::funcs`] to
-/// register multiple functions at once.
+/// A map from function names to template functions, equivalent to Go's
+/// `template.FuncMap`. Pass one to [`Template::funcs`] to register several
+/// functions at once.
 ///
 /// # Examples
 ///
@@ -92,17 +91,16 @@ use parse::{DefineNode, ListNode, Parser};
 ///
 /// let mut fm = FuncMap::new();
 /// fm.insert("double".into(), Arc::new(|args: &[Value]| {
-///     Ok(Value::Int(args[0].as_int().unwrap_or(0) * 2))
+///     let n = args.first().and_then(Value::as_int).unwrap_or(0);
+///     Ok(Value::Int(n * 2))
 /// }));
 /// ```
 pub type FuncMap = BTreeMap<String, ValueFunc>;
 
-/// A parsed, ready-to-execute template.
-///
-/// This is the main entry point of the library, equivalent to Go's
+/// A parsed template, equivalent to Go's
 /// [`template.Template`](https://pkg.go.dev/text/template#Template).
 ///
-/// Use the builder-style API to configure, parse, and execute templates:
+/// Configure, parse, and execute via the builder-style API:
 ///
 /// ```
 /// use gotmpl::{Template, MissingKey, tmap};
@@ -111,8 +109,8 @@ pub type FuncMap = BTreeMap<String, ValueFunc>;
 ///     .delims("<<", ">>")                        // optional: custom delimiters
 ///     .missing_key(MissingKey::Error)             // optional: error on missing keys
 ///     .func("shout", |args| {                     // optional: custom functions
-///         let s = format!("{}", args[0]).to_uppercase();
-///         Ok(gotmpl::Value::String(s.into()))
+///         let s = args.first().map(|v| v.to_string()).unwrap_or_default();
+///         Ok(gotmpl::Value::String(s.to_uppercase().into()))
 ///     })
 ///     .parse("Hello, << .Name | shout >>!")       // parse template source
 ///     .unwrap()
@@ -132,10 +130,8 @@ pub struct Template {
     max_range_iters: u64,
 }
 
-/// Adapter that bridges [`std::io::Write`] to [`core::fmt::Write`].
-///
-/// Stashes the [`io::Error`](std::io::Error) since [`fmt::Error`](core::fmt::Error)
-/// carries no payload.
+/// Adapts a [`std::io::Write`] to [`core::fmt::Write`]. Any [`io::Error`](std::io::Error)
+/// gets stashed, since [`fmt::Error`](core::fmt::Error) has no payload to carry it.
 #[cfg(feature = "std")]
 struct IoAdapter<'a, W> {
     inner: &'a mut W,
@@ -173,8 +169,7 @@ impl Template {
     /// Create a new, empty template with the given name.
     ///
     /// The name is used in error messages and when invoking templates via
-    /// `{{template "name"}}`. All built-in functions are
-    /// registered automatically.
+    /// `{{template "name"}}`. Built-in functions are registered automatically.
     pub fn new(name: &str) -> Self {
         Template {
             name: name.to_string(),
@@ -243,11 +238,10 @@ impl Template {
 
     /// Register a custom template function.
     ///
-    /// Must be called **before** [`parse`](Self::parse). Functions receive their
-    /// arguments as a `&[Value]` slice and return a [`Result<Value>`](error::Result).
-    ///
-    /// The function is available inside templates by the given `name`.
-    /// Registering a name that matches a built-in replaces it.
+    /// Must be called **before** [`parse`](Self::parse). The function receives
+    /// its arguments as a `&[Value]` slice and returns a
+    /// [`Result<Value>`](error::Result). It is available inside templates under
+    /// the given `name`; registering a name that matches a built-in replaces it.
     ///
     /// # Examples
     ///
@@ -256,7 +250,7 @@ impl Template {
     ///
     /// let result = Template::new("t")
     ///     .func("double", |args| {
-    ///         let n = args[0].as_int().unwrap_or(0);
+    ///         let n = args.first().and_then(Value::as_int).unwrap_or(0);
     ///         Ok(Value::Int(n * 2))
     ///     })
     ///     .parse("{{double 21}}")
@@ -275,9 +269,8 @@ impl Template {
         self
     }
 
-    /// Register multiple template functions at once from a [`FuncMap`].
-    ///
-    /// Equivalent to Go's `template.Funcs()`. Must be called **before**
+    /// Register several template functions at once from a [`FuncMap`], the
+    /// counterpart to Go's `template.Funcs()`. Must be called **before**
     /// [`parse`](Self::parse).
     ///
     /// # Examples
@@ -288,7 +281,8 @@ impl Template {
     ///
     /// let mut fm = FuncMap::new();
     /// fm.insert("greet".into(), Arc::new(|args: &[Value]| {
-    ///     Ok(Value::String(format!("Hello, {}!", args[0]).into()))
+    ///     let name = args.first().map(|v| v.to_string()).unwrap_or_default();
+    ///     Ok(Value::String(format!("Hello, {name}!").into()))
     /// }));
     ///
     /// let result = Template::new("t")
@@ -313,7 +307,7 @@ impl Template {
     ///
     /// Successive calls can redefine named templates. A body that reduces to
     /// only whitespace is considered empty and will **not** overwrite an
-    /// existing body or define of the same name — this is how `parse` can be
+    /// existing body or define of the same name. That is how `parse` can be
     /// used to add named definitions without clobbering the main template.
     /// Comment-only bodies behave as empty because the lexer strips comments
     /// before parsing. If no body has been set yet, an empty body is still
@@ -323,8 +317,8 @@ impl Template {
     /// an error (Go's `template: multiple definition of template "x"`). Across
     /// calls, the later non-empty body replaces the earlier one.
     ///
-    /// Must be called after [`delims`](Self::delims) and [`func`](Self::func)
-    /// so the parser sees the intended configuration.
+    /// Call [`delims`](Self::delims) and [`func`](Self::func) first, so the
+    /// parser sees the intended configuration.
     ///
     /// # Errors
     ///
@@ -340,7 +334,7 @@ impl Template {
         let (tree, defines) = parser.parse()?;
 
         // Go's `parse.(*Tree).add` rejects a non-empty top-level that collides
-        // with a same-named non-empty `{{define}}` in the same parse call —
+        // with a same-named non-empty `{{define}}` in the same parse call:
         // both would occupy the `treeSet[name]` slot. Detect the same here so
         // the error path matches Go's "multiple definition of template" output.
         Self::check_in_file_basename_collision(&self.name, &tree, &defines, src)?;
@@ -350,7 +344,7 @@ impl Template {
         // as an existing entry and drops an in-call *empty* same-name `{{define}}`
         // (Go's `parse.(*Tree).add` rule). An empty top never pre-populates, so a
         // prior call's body survives until a later non-empty entry replaces it.
-        // A non-empty same-name define in the same call can't reach here — it
+        // A non-empty same-name define in the same call can't reach here: it
         // already errored out of `check_in_file_basename_collision` above.
         if !self.name.is_empty() && !tree.is_empty_tree() {
             self.defines
@@ -367,14 +361,14 @@ impl Template {
         // `t.tmpl[t.Name()]`: `self.tree` ends up equal to the entry under
         // `self.defines[self.name]`. No-op for an unnamed receiver. Needed
         // both when a `{{define self.name}}` body replaced the slot via
-        // `merge_defines`, and when a prior call's entry should propagate
+        // `merge_defines`, and when a prior call's entry needs to propagate
         // into a fresh `self.tree`.
         self.sync_tree_to_own_name();
         Ok(self)
     }
 
     /// The template's name as a parser tag, or `None` when empty. Matches Go's
-    /// `parseName` handling — an unnamed template drops the name segment from
+    /// `parseName` handling: an unnamed template drops the name segment from
     /// error displays rather than rendering as `template: :<line>:<col>: …`.
     fn parse_name(&self) -> Option<&str> {
         (!self.name.is_empty()).then_some(self.name.as_str())
@@ -384,15 +378,15 @@ impl Template {
     /// matching Go's `parse.(*Tree).add` + `parse.associate` in a single pass:
     ///
     ///   - A second non-empty body for the same name *within this call* is a
-    ///     parse error (Go's `add`); empty after non-empty in the same call is
-    ///     silently dropped (the non-empty body is preserved).
+    ///     parse error (Go's `add`). An empty body after a non-empty one in
+    ///     the same call is silently dropped, preserving the non-empty body.
     ///   - An empty body never overwrites an existing non-empty define in
     ///     `self.defines` (Go's `associate` IsEmptyTree guard). Non-empty
-    ///     bodies always replace — that's how across-call redefinition works.
+    ///     bodies always replace, which is how across-call redefinition works.
     ///
     /// The `seen_non_empty` set tracks names already written non-empty in this
-    /// call, which is what distinguishes "in-call duplicate → error" from
-    /// "across-call duplicate → replace"; `self.defines` alone can't tell them
+    /// call. That is what distinguishes "in-call duplicate, error" from
+    /// "across-call duplicate, replace": `self.defines` alone can't tell them
     /// apart. `src` is used only for error-position reporting.
     fn merge_defines(&mut self, defines: Vec<DefineNode>, src: &str) -> Result<()> {
         let mut seen_non_empty: alloc::collections::BTreeSet<Arc<str>> =
@@ -425,9 +419,9 @@ impl Template {
         Ok(())
     }
 
-    /// Register a parsed body under `name` using Go's `parse.associate` rule:
-    /// an empty body does not overwrite an existing non-empty define. Used
-    /// by [`parse_files`](Self::parse_files) for the basename registration.
+    /// Register a parsed body under `name` using Go's `parse.associate` rule.
+    /// An empty body does not overwrite an existing non-empty define. Used by
+    /// [`parse_files`](Self::parse_files) for the basename registration.
     fn associate_body(&mut self, name: &str, body: ListNode) {
         if body.is_empty_tree() && self.defines.contains_key(name) {
             return;
@@ -437,9 +431,9 @@ impl Template {
 
     /// Mirror Go's `parse.(*Tree).add` in-call conflict check: if the top-level
     /// tree is non-empty *and* the same parse produced a non-empty
-    /// `{{define name}}`, both would claim the same slot in Go's treeSet and
+    /// `{{define name}}`, both would claim the same slot in Go's treeSet, and
     /// Go errors with "multiple definition of template". `name` is the slot
-    /// the top-level occupies — self.name for `parse`, the basename for
+    /// the top-level occupies: self.name for `parse`, the basename for
     /// `parse_files`. An empty `name` skips the check (the unnamed-receiver
     /// case, like `Template::new("")`, has no define to collide with).
     fn check_in_file_basename_collision(
@@ -466,9 +460,9 @@ impl Template {
     }
 
     /// After a parse merge, mirror Go's final `AddParseTree` step that syncs
-    /// `t.Tree` with `t.tmpl[t.Name()]`. Used when a `{{define}}` body has
-    /// replaced the top-level entry so `execute` and `execute_template(name)`
-    /// render the same thing.
+    /// `t.Tree` with `t.tmpl[t.Name()]`. Needed when a `{{define}}` body has
+    /// replaced the top-level entry, so that `execute` and
+    /// `execute_template(name)` render the same thing.
     fn sync_tree_to_own_name(&mut self) {
         if self.name.is_empty() {
             return;
@@ -478,30 +472,30 @@ impl Template {
         }
     }
 
-    /// Parse template definitions from one or more files and associate them with this template.
+    /// Parse one or more template files and associate them with this template.
     ///
-    /// Equivalent to Go's `(*Template).ParseFiles` **method** (not the package-level
-    /// `template.ParseFiles` constructor). Each file is read and parsed; `{{define}}`
-    /// blocks are hoisted into this template's definition map, and the file's basename
-    /// is registered as an associated template whose body is the file's top-level
-    /// content.
+    /// Mirrors Go's `(*Template).ParseFiles` **method** (not the package-level
+    /// `template.ParseFiles` constructor). Each file is read and parsed;
+    /// `{{define}}` blocks are hoisted into this template's definition map, and
+    /// the file's basename is registered as an associated template whose body
+    /// is the file's top-level content.
     ///
     /// If a file's basename matches this template's own name (as set via
-    /// [`new`](Self::new)), that file's content additionally becomes the receiver's
-    /// main tree — so [`execute`](Self::execute) works directly. Otherwise, the
-    /// receiver's main tree is left unchanged and callers must use
-    /// [`execute_template`](Self::execute_template) with the basename. This matches
-    /// Go's `name == t.Name()` branch in `parseFiles`.
+    /// [`new`](Self::new)), that file's content also becomes the receiver's
+    /// main tree, so [`execute`](Self::execute) works directly. Otherwise the
+    /// main tree is left alone and callers must use
+    /// [`execute_template`](Self::execute_template) with the basename. This
+    /// matches Go's `name == t.Name()` branch in `parseFiles`.
     ///
-    /// To get the constructor-style behavior (receiver's name and tree synthesized
+    /// For the constructor-style behavior (receiver's name and tree synthesized
     /// from the first file's basename), call
-    /// `Template::new(basename).parse_files(&[...])` explicitly, or use the top-level
-    /// [`execute_file`] helper for the single-file case.
+    /// `Template::new(basename).parse_files(&[...])` explicitly, or use the
+    /// top-level [`execute_file`] helper for the single-file case.
     ///
     /// # Errors
     ///
-    /// Returns [`TemplateError::NoFiles`](crate::error::TemplateError::NoFiles) if
-    /// `filenames` is empty, or a read/parse error for the first file that fails.
+    /// Returns [`TemplateError::NoFiles`] if `filenames` is empty, or a
+    /// read/parse error for the first file that fails.
     ///
     /// # Examples
     ///
@@ -546,7 +540,7 @@ impl Template {
             // top-level content becomes the receiver's own tree (so `Execute` works
             // directly). Otherwise it is only registered as an associated template.
             // Go's (*Template).ParseFiles dispatches tmpl.Parse(s) per file, so
-            // define merging follows the same add+associate rules — an in-file
+            // define merging follows the same add+associate rules: an in-file
             // duplicate non-empty define errors, and an empty body never
             // overwrites an existing non-empty one.
             Self::check_in_file_basename_collision(basename, &tree, &defines, &content)?;
@@ -562,8 +556,8 @@ impl Template {
             self.merge_defines(defines, &content)?;
 
             // When this file targets the receiver's own slot, pair `self.tree`
-            // with the final `self.defines[self.name]` entry — Go's
-            // `AddParseTree` invariant. Covers both "empty top + non-empty
+            // with the final `self.defines[self.name]` entry (Go's
+            // `AddParseTree` invariant). Covers both "empty top + non-empty
             // same-name define replaced the slot" and "prior call's body
             // survives a no-op parse".
             if basename == self.name {
@@ -573,12 +567,11 @@ impl Template {
         Ok(self)
     }
 
-    /// Add a pre-built parse tree as a named template definition.
+    /// Add a pre-built parse tree as a named template definition, the
+    /// counterpart to Go's `template.AddParseTree()`. Useful for injecting
+    /// programmatically built ASTs without running the parser.
     ///
-    /// Equivalent to Go's `template.AddParseTree()`. This allows injecting
-    /// programmatically constructed ASTs without going through the parser.
-    ///
-    /// If a definition with the same `name` already exists, it is replaced.
+    /// Replaces any existing definition with the same `name`.
     ///
     /// # Examples
     ///
@@ -621,6 +614,8 @@ impl Template {
     /// - A type error occurs during execution (e.g., ranging over a non-iterable).
     /// - A write error occurs.
     /// - The recursive template call depth exceeds the safety limit.
+    /// - The per-execution `{{range}}` iteration budget
+    ///   ([`max_range_iters`](Self::max_range_iters)) is exhausted.
     pub fn execute_fmt<W: core::fmt::Write>(&self, writer: &mut W, data: &Value) -> Result<()> {
         let tree = self.tree.as_ref().ok_or_else(|| {
             error::TemplateError::Exec(format!("template {:?} has not been parsed", self.name))
@@ -634,14 +629,15 @@ impl Template {
 
     /// Execute a named sub-template, writing output to a [`fmt::Write`](core::fmt::Write) destination.
     ///
-    /// Equivalent to Go's `template.ExecuteTemplate()`. Looks up the named
-    /// template in the definition map and executes it with the given data.
+    /// Looks up the named template in the definition map and executes it with
+    /// the given data. This is the `fmt::Write` counterpart to Go's
+    /// `template.ExecuteTemplate()`.
     ///
     /// # Errors
     ///
-    /// Returns [`TemplateError::UndefinedTemplate`]
-    /// if no template with the given name exists, plus all errors from
-    /// [`execute_fmt`](Self::execute_fmt).
+    /// Returns [`TemplateError::UndefinedTemplate`] if no template with the
+    /// given name exists, plus all errors from [`execute_fmt`](Self::execute_fmt)
+    /// (including [`TemplateError::RangeIterLimit`] and the recursion-limit error).
     pub fn execute_template_fmt<W: core::fmt::Write>(
         &self,
         writer: &mut W,
@@ -661,7 +657,7 @@ impl Template {
 
     /// Execute the template, writing output to the given [`io::Write`](std::io::Write) destination.
     ///
-    /// This is a convenience wrapper around [`execute_fmt`](Self::execute_fmt) for
+    /// Convenience wrapper around [`execute_fmt`](Self::execute_fmt) for
     /// `std::io::Write` targets (files, sockets, `Vec<u8>`, etc.).
     ///
     /// # Errors
@@ -709,8 +705,8 @@ impl Template {
 
     /// Execute the template and return the result as a [`String`].
     ///
-    /// Convenience wrapper around [`execute_fmt`](Self::execute_fmt) that collects
-    /// output into a string.
+    /// Convenience wrapper around [`execute_fmt`](Self::execute_fmt) that
+    /// collects output into a string.
     ///
     /// # Errors
     ///
@@ -735,11 +731,10 @@ impl Template {
         &self.name
     }
 
-    /// Look up a named template definition.
-    ///
-    /// Equivalent to Go's `template.Lookup()`. Returns `None` if no template
-    /// with the given name has been defined (via `{{define}}`, `{{block}}`,
-    /// or [`add_parse_tree`](Self::add_parse_tree)).
+    /// Look up a named template definition, the counterpart to Go's
+    /// `template.Lookup()`. Returns `None` when no template with the given
+    /// name has been defined (via `{{define}}`, `{{block}}`, or
+    /// [`add_parse_tree`](Self::add_parse_tree)).
     ///
     /// # Examples
     ///
@@ -757,13 +752,11 @@ impl Template {
         self.defines.get(name).map(Arc::as_ref)
     }
 
-    /// Returns the names of all defined templates.
+    /// Returns the names of all defined templates, in sorted order.
     ///
-    /// Equivalent to Go's `template.Templates()`, but returns names rather
-    /// than template objects (since definitions share the parent's function
-    /// map and options).
-    ///
-    /// The names are returned in sorted order for deterministic output.
+    /// The counterpart to Go's `template.Templates()`, returning names rather
+    /// than template objects since definitions share the parent's function
+    /// map and options.
     ///
     /// # Examples
     ///
@@ -782,9 +775,8 @@ impl Template {
         names
     }
 
-    /// Returns a human-readable string listing all defined templates.
-    ///
-    /// Equivalent to Go's `template.DefinedTemplates()`. Useful for error
+    /// Returns a human-readable string listing all defined templates, the
+    /// counterpart to Go's `template.DefinedTemplates()`. Useful for error
     /// messages when a template invocation fails.
     ///
     /// # Examples
@@ -812,11 +804,10 @@ impl Template {
 }
 
 impl Clone for Template {
-    /// Create an independent copy of this template.
-    ///
-    /// Equivalent to Go's `template.Clone()`. The cloned template has its
-    /// own copy of all defined templates and shares the same function map
-    /// (via `Arc`-wrapped closures). Modifications to one do not affect the other.
+    /// Create an independent copy of this template, the counterpart to Go's
+    /// `template.Clone()`. The cloned template has its own copy of the define
+    /// map and shares the function map (via `Arc`-wrapped closures);
+    /// modifications to one do not affect the other.
     ///
     /// # Examples
     ///
@@ -859,8 +850,8 @@ impl Clone for Template {
 // Convenience constructors
 /// Parse and execute a template in one shot.
 ///
-/// This is a convenience function for simple cases where you don't need
-/// custom functions, delimiters, or options.
+/// Convenience for simple cases that don't need custom functions, delimiters,
+/// or options.
 ///
 /// # Examples
 ///
@@ -912,9 +903,8 @@ pub fn execute_file(filename: &str, data: &Value) -> Result<String> {
 
 /// Reports whether a [`Value`] is "true" according to Go's template truthiness rules.
 ///
-/// Equivalent to Go's `template.IsTrue()` but without the second "ok" tuple
-/// slot — every [`Value`] variant is always meaningful for truthiness, so
-/// Go's `(true, true)` / `(false, true)` pattern collapsed to a single bool.
+/// The counterpart to Go's `template.IsTrue()`. The second "ok" slot is dropped
+/// because every [`Value`] variant is always meaningful for truthiness.
 ///
 /// # Examples
 ///
@@ -1112,7 +1102,7 @@ mod tests {
     fn test_defined_templates_lists_receiver() {
         // Go parity: `Template::new("t").parse("hello")` seats the top-level
         // into `self.defines["t"]` (Go's `treeSet[t.Name] = topLevelTree`), so
-        // `defined_templates()` names "t" itself — matching Go's
+        // `defined_templates()` names "t" itself, matching Go's
         // `DefinedTemplates` output `"; defined templates are: \"t\""`.
         let tmpl = Template::new("t").parse("hello").unwrap();
         assert_eq!(tmpl.defined_templates(), r#"; defined templates are: "t""#);
@@ -1486,7 +1476,7 @@ mod tests {
     }
 
     // Go parity: a non-empty top-level plus an *empty* same-name `{{define}}`
-    // is not a collision — Go's `parse.(*Tree).add` drops the empty define and
+    // is not a collision. Go's `parse.(*Tree).add` drops the empty define and
     // leaves the non-empty top-level in the treeSet slot. A regression here
     // (empty define clobbering the top-level tree via sync) would render "".
     #[test]

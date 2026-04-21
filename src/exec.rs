@@ -3,16 +3,18 @@
 //! The [`Executor`] evaluates a parsed template tree against a [`Value`] data
 //! context, writing results to any [`core::fmt::Write`] destination.
 //!
-//! This module is used internally by [`Template::execute`](crate::Template::execute);
-//! most users don't need to interact with it directly.
+//! Used internally by [`Template::execute`](crate::Template::execute); most
+//! users don't need it directly.
 //!
 //! # Execution model
 //!
 //! The executor maintains:
-//! - **dot**: the current context value (changes inside `range`/`with`)
-//! - **`$`**: always refers to the root data passed to [`execute`](Executor::execute)
-//! - **variable scopes**: a stack of name-to-[`Value`] frames, pushed/popped for control blocks
-//! - **recursion depth**: prevents stack overflow from recursive `{{template}}` calls
+//! - **dot**: the current context value (changes inside `range`/`with`).
+//! - **`$`**: always the root data passed to [`execute`](Executor::execute).
+//! - **variable scopes**: a stack of name-to-[`Value`] frames, pushed and
+//!   popped for control blocks.
+//! - **recursion depth**: guards against stack overflow from recursive
+//!   `{{template}}` calls.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -41,12 +43,11 @@ use crate::value::ValueFunc;
 /// beyond any reasonable template nesting.
 const MAX_EXEC_DEPTH: usize = 200;
 
-/// Controls behavior when accessing a missing key on a [`Value::Map`].
+/// Controls behavior when accessing a missing key on a [`Value::Map`]. Set via
+/// [`Template::missing_key`](crate::Template::missing_key).
 ///
-/// Set via [`Template::missing_key`](crate::Template::missing_key).
-///
-/// Supports parsing from strings via [`FromStr`](core::str::FromStr):
-/// `"invalid"`, `"default"`, `"zero"`, and `"error"`.
+/// Parseable from strings through [`FromStr`](core::str::FromStr): `"invalid"`,
+/// `"default"`, `"zero"`, and `"error"`.
 ///
 /// ```
 /// use gotmpl::MissingKey;
@@ -93,17 +94,16 @@ impl core::str::FromStr for MissingKey {
 
 // Internal control-flow signaling
 //
-// `{{break}}` and `{{continue}}` are not errors, they're control-flow
-// signals caught by the range walker. We keep them out of the public
-// `TemplateError` enum by using a private error type for the executor's
-// internal methods.
+// `{{break}}` and `{{continue}}` are not errors; they're control-flow signals
+// caught by the range walker. We keep them out of the public `TemplateError`
+// enum by using a private error type for the executor's internal methods.
 
 /// Private error type that carries either a real [`TemplateError`] or an
 /// internal break/continue signal. Only the public [`Executor::execute`]
 /// method converts this into a [`TemplateError`] for the caller.
 ///
-/// The `TemplateError` is boxed to keep `ExecSignal` small (one word + tag)
-/// so that deeply recursive `walk` calls don't blow the stack.
+/// The `TemplateError` is boxed to keep `ExecSignal` small (one word plus
+/// tag), so that deeply recursive `walk` calls don't blow the stack.
 enum ExecSignal {
     /// A real template error to propagate to the caller.
     Err(Box<TemplateError>),
@@ -192,7 +192,6 @@ pub(crate) const DEFAULT_MAX_RANGE_ITERS: u64 = 10_000_000;
 ///
 /// Walks the AST produced by the [`Parser`](crate::parse::Parser), evaluating
 /// pipelines, resolving variables, calling functions, and writing output.
-///
 /// Created internally by [`Template::execute`](crate::Template::execute).
 pub struct Executor<'a> {
     funcs: &'a BTreeMap<String, ValueFunc>,
@@ -274,8 +273,8 @@ macro_rules! range_loop {
 impl<'a> Executor<'a> {
     /// Create a new executor with the given function map and template definitions.
     ///
-    /// The `funcs` map should contain all [built-in](crate::funcs::builtins) and
-    /// user-defined functions. The `templates` map holds named templates from
+    /// `funcs` should contain all [built-in](crate::funcs::builtins) and
+    /// user-defined functions. `templates` holds the named templates from
     /// `{{define}}` blocks.
     pub fn new(
         funcs: &'a BTreeMap<String, ValueFunc>,
@@ -550,7 +549,7 @@ impl<'a> Executor<'a> {
     fn eval_pipeline_value(&mut self, dot: &Value, pipe: &PipeNode) -> ExecResult<Value> {
         let mut val = Value::Nil;
         for (i, cmd) in pipe.commands.iter().enumerate() {
-            // Move the previous stage's result rather than cloning — it is
+            // Move the previous stage's result rather than cloning: it is
             // only used by the next command, and any downstream need for it
             // is already covered by the new `val` we're about to assign.
             let prev = if i > 0 {

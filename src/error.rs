@@ -1,18 +1,17 @@
 //! Error types for the template engine.
 //!
-//! All fallible operations in this crate return [`Result<T>`], which is an alias
-//! for `std::result::Result<T, TemplateError>`.
-//!
-//! Errors are split into phases (lexing, parsing, and execution) so callers
-//! can match on the variant to provide targeted diagnostics.
+//! All fallible operations return [`Result<T>`], an alias for
+//! `std::result::Result<T, TemplateError>`. Variants are split by phase
+//! (lexing, parsing, execution) so callers can pattern-match for targeted
+//! diagnostics.
 
 use alloc::format;
 use alloc::string::String;
 use thiserror::Error;
 
-/// Shared formatter for source-location errors (parse + lex). The format is
-/// Go-compatible when a name is present (`template: foo.tmpl:12:5: msg`) and
-/// drops the name segment when absent, keeping the structure parallel.
+/// Shared formatter for source-location errors (parse and lex). With a name,
+/// the format matches Go: `template: foo.tmpl:12:5: msg`. Without a name, the
+/// name segment is dropped but the rest of the format stays the same.
 fn fmt_src_err(name: &Option<String>, line: usize, col: usize, message: &str) -> String {
     match name {
         Some(n) => format!("template: {n}:{line}:{col}: {message}"),
@@ -22,21 +21,12 @@ fn fmt_src_err(name: &Option<String>, line: usize, col: usize, message: &str) ->
 
 /// The error type returned by all template operations.
 ///
-/// Variants map to the phase where the error originated:
-///
-/// | Phase | Variants |
-/// |-------|----------|
-/// | Lexing | [`Lex`](Self::Lex) |
-/// | Parsing | [`Parse`](Self::Parse) |
-/// | Execution | many: see below |
-/// | I/O | [`Io`](Self::Io), [`ReadFile`](Self::ReadFile) |
-///
-/// Execution errors include [`Exec`](Self::Exec) as a catch-all string
-/// variant for rare cases; prefer pattern-matching on the structured
-/// variants where available.
-///
-/// Marked `#[non_exhaustive]`: future versions may add variants without a
-/// major bump.
+/// Variants group by phase: lexing ([`Lex`](Self::Lex)), parsing
+/// ([`Parse`](Self::Parse)), execution (several structured variants, plus
+/// [`Exec`](Self::Exec) as a catch-all string for rare cases), and I/O
+/// ([`Io`](Self::Io), [`ReadFile`](Self::ReadFile)). Prefer matching on the
+/// structured variants when available rather than parsing [`Exec`](Self::Exec)
+/// strings.
 ///
 /// # Examples
 ///
@@ -49,14 +39,13 @@ fn fmt_src_err(name: &Option<String>, line: usize, col: usize, message: &str) ->
 /// assert!(err.to_string().contains("unclosed action"));
 /// ```
 #[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum TemplateError {
     /// A syntax error found during parsing, with source location.
     ///
     /// The optional `name` tags the template's origin (e.g. the file name
-    /// when parsing via [`parse_files`](crate::Template::parse_files)) and
-    /// is prefixed Go-style in the `Display` output
-    /// (`template: <name>:<line>:<col>: <message>`).
+    /// when parsing via [`parse_files`](crate::Template::parse_files)). It is
+    /// prefixed Go-style in the `Display` output:
+    /// `template: <name>:<line>:<col>: <message>`.
     #[error("{}", fmt_src_err(name, *line, *col, message))]
     Parse {
         /// Source of the template (e.g. file name) if known.
@@ -71,7 +60,7 @@ pub enum TemplateError {
 
     /// An error found during lexical scanning.
     ///
-    /// Shares the `Parse` variant's shape and `Display` format — the message
+    /// Shares the `Parse` variant's shape and `Display` format. The message
     /// itself describes the lex-specific failure, so no extra preamble is
     /// added.
     #[error("{}", fmt_src_err(name, *line, *col, message))]
@@ -204,7 +193,6 @@ impl From<core::fmt::Error> for TemplateError {
     }
 }
 
-/// Alias for `Result<T, TemplateError>`.
-///
-/// This is the return type of all fallible operations in this crate.
+/// Alias for `Result<T, TemplateError>`, the return type of every fallible
+/// operation in this crate.
 pub type Result<T> = core::result::Result<T, TemplateError>;
