@@ -47,3 +47,11 @@ jobs:
         run: cargo check --all --all-features --all-targets
       - name: Run Clippy linter
         run: cargo clippy --all --all-features --all-targets -- -D clippy::all
+
+  publish-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-build-env
+      - name: Dry-run cargo publish
+        run: cargo publish --dry-run
