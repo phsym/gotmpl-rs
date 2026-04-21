@@ -1413,6 +1413,49 @@ fn test_printf_float_zero() {
     ok(r#"{{printf "%f" 0.0}}"#, &Value::Nil, "0.000000");
 }
 
+// `%#0Nx` / `%#0NX` / `%#0Nb` pad the *digit* portion up to N; the `0x` / `0X`
+// / `0b` prefix is not counted against the width, matching Go's fmt.
+#[test]
+fn test_printf_hash_zero_pad_hex() {
+    ok(r#"{{printf "%#08x" 255}}"#, &Value::Nil, "0x000000ff");
+    ok(r#"{{printf "%#08X" 255}}"#, &Value::Nil, "0X000000FF");
+    ok(r#"{{printf "%#04x" 255}}"#, &Value::Nil, "0x00ff");
+    ok(r#"{{printf "%#02x" 255}}"#, &Value::Nil, "0xff");
+}
+
+#[test]
+fn test_printf_hash_zero_pad_binary() {
+    ok(r#"{{printf "%#08b" 5}}"#, &Value::Nil, "0b00000101");
+    ok(r#"{{printf "%#06b" 5}}"#, &Value::Nil, "0b000101");
+}
+
+// For `%#0No`, Go counts the `0` prefix inside the width (the pad zeros and
+// prefix zero merge), and omits the explicit prefix when padding already
+// supplied a leading `0`.
+#[test]
+fn test_printf_hash_zero_pad_octal() {
+    ok(r#"{{printf "%#08o" 255}}"#, &Value::Nil, "00000377");
+    ok(r#"{{printf "%#04o" 255}}"#, &Value::Nil, "0377");
+    ok(r#"{{printf "%#o" 255}}"#, &Value::Nil, "0377");
+}
+
+#[test]
+fn test_printf_hash_zero_pad_negative() {
+    // With a sign, the digit target becomes width − 1 so the sign sits outside
+    // the zero-padded portion.
+    ok(r#"{{printf "%#08x" -255}}"#, &Value::Nil, "-0x00000ff");
+    ok(r#"{{printf "%#08o" -255}}"#, &Value::Nil, "-0000377");
+    ok(r#"{{printf "%08d" -1}}"#, &Value::Nil, "-0000001");
+}
+
+// Space-padding with `#` keeps width as the total field length including the
+// prefix, so `%#8x` of 255 is `    0xff` (two-char prefix inside the width).
+#[test]
+fn test_printf_hash_space_pad_hex() {
+    ok(r#"{{printf "%#8x" 255}}"#, &Value::Nil, "    0xff");
+    ok(r#"{{printf "%-#8x" 255}}"#, &Value::Nil, "0xff    ");
+}
+
 // Fix #4: call builtin
 #[test]
 fn test_call_nil_errors() {

@@ -333,7 +333,10 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
                 _ => match arg.as_int() {
                     Some(n) => {
                         format_int_base_into(out, n, verb, &spec);
-                        spec.pad_in_place(out, start, true);
+                        // Zero-padding is already baked into the digit string
+                        // (Go's scheme: pad digits, then prepend prefix), so
+                        // only space-pad the overall field here.
+                        spec.pad_in_place(out, start, false);
                     }
                     None => write_bad_verb(out, verb, arg),
                 },
@@ -591,18 +594,76 @@ fn write_g_with_precision(out: &mut String, f: f64, prec: usize, upper: bool) {
 
 // Integer base formatting
 /// Write a signed integer in a non-decimal base into `out`, using Go's
-/// conventions (sign is separate from magnitude: `-0xff`, not two's complement).
+/// conventions (sign separate from magnitude; `#` inserts `0x`/`0X`/`0b`/`0`).
+///
+/// Zero-padding is applied to the digits themselves — matching Go, whose
+/// integer formatter builds the digit string, pads it up to
+/// `width − sign_len`, then prepends the `#` prefix. As a result `%#08x` of
+/// 255 yields `0x000000ff` (the `0x` sits outside the padded digit count),
+/// and `%#08o` of 255 yields `00000377` (Go's formatter omits the bare-`0`
+/// octal prefix when the padded digits already start with `0`).
 fn format_int_base_into(out: &mut String, n: i64, base: char, spec: &FmtSpec) {
     let abs = n.unsigned_abs();
-    if n < 0 {
-        out.push('-');
+
+    let sign = if n < 0 {
+        Some('-')
+    } else if spec.plus {
+        Some('+')
+    } else if spec.space {
+        Some(' ')
+    } else {
+        None
+    };
+
+    let mut digits = String::new();
+    let _ = match base {
+        'x' => write!(digits, "{:x}", abs),
+        'X' => write!(digits, "{:X}", abs),
+        'o' => write!(digits, "{:o}", abs),
+        'b' => write!(digits, "{:b}", abs),
+        #[allow(
+            clippy::unreachable,
+            reason = "private helper; callers only pass 'x', 'X', 'o', 'b'"
+        )]
+        _ => unreachable!(),
+    };
+
+    // Go's rule: `0` flag without `-` and without explicit precision turns
+    // into "pad digits up to width − sign_len". An explicit precision wins
+    // over the zero flag.
+    let digit_target = match spec.precision {
+        Some(p) => p,
+        None if spec.zero && !spec.left_align => spec
+            .width
+            .map(|w| w.saturating_sub(sign.is_some() as usize))
+            .unwrap_or(0),
+        None => 0,
+    };
+    if digits.len() < digit_target {
+        let pad = digit_target - digits.len();
+        let mut padded = String::with_capacity(digit_target);
+        for _ in 0..pad {
+            padded.push('0');
+        }
+        padded.push_str(&digits);
+        digits = padded;
+    }
+
+    if let Some(s) = sign {
+        out.push(s);
     }
     if spec.hash {
         match base {
             'x' => out.push_str("0x"),
             'X' => out.push_str("0X"),
-            'o' => out.push('0'),
             'b' => out.push_str("0b"),
+            'o' => {
+                // Go skips the `0` octal prefix when the first digit is
+                // already `0` — which happens naturally after zero-padding.
+                if !digits.starts_with('0') {
+                    out.push('0');
+                }
+            }
             #[allow(
                 clippy::unreachable,
                 reason = "private helper; callers only pass 'x', 'X', 'o', 'b'"
@@ -610,17 +671,7 @@ fn format_int_base_into(out: &mut String, n: i64, base: char, spec: &FmtSpec) {
             _ => unreachable!(),
         }
     }
-    let _ = match base {
-        'x' => write!(out, "{:x}", abs),
-        'X' => write!(out, "{:X}", abs),
-        'o' => write!(out, "{:o}", abs),
-        'b' => write!(out, "{:b}", abs),
-        #[allow(
-            clippy::unreachable,
-            reason = "private helper; callers only pass 'x', 'X', 'o', 'b'"
-        )]
-        _ => unreachable!(),
-    };
+    out.push_str(&digits);
 }
 
 // Escaping functions
@@ -1649,18 +1700,17 @@ mod tests {
 
     #[test]
     fn sprintf_x_hash_zero_pad_negative() {
-        // Trickiest interaction: negative + hash prefix + zero-pad. The
-        // formatter writes "-0xff", then `pad_in_place` sees the leading
-        // '-' and inserts zeros after the sign, before the `0x` prefix.
-        assert_eq!(sf("%#08x", &[Value::Int(-255)]), "-0000xff");
+        // `%#08x` pads the *digit* portion up to width − sign_len (so 7 digits
+        // for a negative value), then prepends `0x` and the sign. Matches Go's
+        // `fmt.Sprintf("%#08x", -255)`.
+        assert_eq!(sf("%#08x", &[Value::Int(-255)]), "-0x00000ff");
     }
 
     #[test]
     fn sprintf_x_hash_zero_pad_positive() {
-        // Positive case has no sign byte, so zeros land at the very start
-        // (before `0x`). This pins the current behavior; a Go-strict
-        // implementation would slot the zeros between `0x` and the digits.
-        assert_eq!(sf("%#08x", &[Value::Int(255)]), "00000xff");
+        // With `#`, the `0x` prefix is *not* counted against the zero-pad
+        // width — Go pads to 8 hex digits, yielding `0x000000ff` (10 chars).
+        assert_eq!(sf("%#08x", &[Value::Int(255)]), "0x000000ff");
     }
 
     #[test]
