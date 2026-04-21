@@ -156,6 +156,45 @@ mod go_crosscheck {
             template_str, rust_result, go_result,
         );
     }
+
+    /// Run the same template+data through Go's text/template and assert it
+    /// also errors. Used by `fail()` to guard against the silent-parity-gap
+    /// where Rust rejects a template that Go actually accepts.
+    pub fn check_fails(template_str: &str, data: &Value) {
+        let data_json = match value_to_json(data) {
+            Some(j) => j,
+            None => return, // skip un-serializable data (e.g. Function values)
+        };
+        let payload = format!(
+            r#"{{"template":"{}","data":{}}}"#,
+            json_escape(template_str),
+            data_json,
+        );
+
+        let mut child = Command::new(GO_BINARY.as_path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn go-crosscheck binary");
+
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .expect("failed to write to go-crosscheck stdin");
+
+        let output = child.wait_with_output().expect("go-crosscheck failed");
+
+        if output.status.success() {
+            let go_output = String::from_utf8_lossy(&output.stdout);
+            panic!(
+                "Go crosscheck: template {:?} was expected to fail but Go produced {:?}",
+                template_str, go_output,
+            );
+        }
+    }
 }
 
 // Helper
@@ -229,6 +268,21 @@ fn ok(input: &str, data: &Value, expected: &str) {
 
 #[allow(dead_code)]
 fn fail(input: &str, data: &Value) {
+    if let Ok(result) = run(input, data) {
+        panic!(
+            "template {:?} should have failed but got {:?}",
+            input, result
+        );
+    }
+    #[cfg(feature = "go-crosscheck")]
+    go_crosscheck::check_fails(input, data);
+}
+
+/// Like `fail`, but asserts only that the Rust implementation errors — Go is
+/// expected to succeed. Use for templates that violate a Rust-only invariant
+/// (e.g. UTF-8 string boundaries) that Go's `[]byte`-backed strings accept.
+#[allow(dead_code)]
+fn fail_rust_only(input: &str, data: &Value) {
     if let Ok(result) = run(input, data) {
         panic!(
             "template {:?} should have failed but got {:?}",
@@ -781,9 +835,10 @@ fn test_slice_start_gt_end_fails() {
 #[test]
 fn test_string_slice_mid_char_utf8_fails() {
     // "é" is 2 bytes in UTF-8 (0xC3 0xA9); slicing at byte 1 is not on a
-    // character boundary and must error, not panic.
+    // character boundary and must error, not panic. Rust-only: Go's strings
+    // are byte slices and accept mid-codepoint indexing.
     let data = tmap! { "S" => "café" };
-    fail("{{slice .S 0 4}}", &data); // 4 is inside 'é'
+    fail_rust_only("{{slice .S 0 4}}", &data); // 4 is inside 'é'
 }
 
 // Len
