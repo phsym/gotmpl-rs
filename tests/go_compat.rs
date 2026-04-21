@@ -2617,12 +2617,16 @@ fn test_one_arg_dot() {
     );
 }
 
-// Go multi_test.go: redefinition
+// Go multi_test.go: TestRedefinition — across *separate* Parse calls,
+// a later non-empty definition replaces the earlier one without error.
+// (Two non-empty defines in a single parse call would error; see
+// `test_redefinition_within_single_parse_errors`.)
 #[test]
 fn test_redefinition() {
-    // Redefining a template multiple times should use the last definition
     let tmpl = Template::new("test")
-        .parse(r#"{{define "x"}}first{{end}}{{define "x"}}second{{end}}{{template "x"}}"#)
+        .parse(r#"{{define "x"}}first{{end}}{{template "x"}}"#)
+        .unwrap()
+        .parse(r#"{{define "x"}}second{{end}}"#)
         .unwrap();
     let result = tmpl.execute_to_string(&Value::Nil).unwrap();
     assert_eq!(result, "second");
@@ -2957,7 +2961,7 @@ fn test_with_as_default_with_value() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Additional tests from review: parse_additional, block override, printf
+// Additional tests from review: successive parse, block override, printf
 // flags, clone options, edge cases, piped-value-into-non-function
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2969,31 +2973,58 @@ fn test_block_override_determinism() {
         let tmpl = Template::new("page")
             .parse(r#"{{block "style" .}}default{{end}}"#)
             .unwrap()
-            .parse_additional(r#"{{define "style"}}custom{{end}}"#)
+            .parse(r#"{{define "style"}}custom{{end}}"#)
             .unwrap();
         assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "custom");
     }
 }
 
-// Redefinition via multiple defines (Go's TestRedefinition)
+// Multiple non-empty defines of the same name within a single parse call
+// are rejected with `multiple definition of template "x"`, matching Go's
+// `parse.(*Tree).add`. (Redefinition across *separate* parse calls is
+// allowed and exercised by `test_parse_define_override` in rust_api.rs.)
 #[test]
-fn test_redefinition_last_wins() {
-    let tmpl = Template::new("t")
+fn test_redefinition_within_single_parse_errors() {
+    let err = Template::new("t")
         .parse(
             r#"{{define "x"}}first{{end}}{{define "x"}}second{{end}}{{define "x"}}third{{end}}{{template "x"}}"#,
         )
-        .unwrap();
-    assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "third");
+        .err()
+        .expect("expected multiple-definition error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains(r#"multiple definition of template "x""#),
+        "unexpected error message: {msg}"
+    );
 }
 
-// Empty template definitions (Go's TestEmptyTemplate)
+// Minimal two-define case: Go rejects this at parse time with
+// `template: t:1: template: multiple definition of template "x"`, so Rust
+// must too (no execution should happen).
 #[test]
-fn test_empty_define_last_wins() {
-    // Non-empty then empty: last (empty) wins
-    let tmpl = Template::new("t")
-        .parse(r#"{{define "x"}}content{{end}}{{define "x"}}{{end}}[{{template "x"}}]"#)
-        .unwrap();
-    assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "[]");
+fn test_two_non_empty_defines_same_parse_errors() {
+    let err = Template::new("t")
+        .parse(r#"{{define "x"}}first{{end}}{{define "x"}}second{{end}}{{template "x"}}"#)
+        .err()
+        .expect("expected multiple-definition error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains(r#"multiple definition of template "x""#),
+        "unexpected error message: {msg}"
+    );
+}
+
+// Empty template definitions: Go's `parse.associate` refuses to overwrite
+// a non-empty define with an empty one (same IsEmptyTree rule as the main
+// body). Routed through `ok()` so go-crosscheck verifies the Rust output
+// matches `text/template`.
+#[test]
+fn test_empty_define_does_not_clobber_existing() {
+    ok(
+        r#"{{define "x"}}content{{end}}{{define "x"}}{{end}}[{{template "x"}}]"#,
+        &Value::Nil,
+        "[content]",
+    );
 }
 
 // Piped value into non-function errors (Go behavior)

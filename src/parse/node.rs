@@ -83,6 +83,35 @@ pub struct ListNode {
     pub nodes: Vec<Node>,
 }
 
+impl ListNode {
+    /// Reports whether this list is empty of everything but whitespace.
+    /// Convenience wrapper around [`is_empty_tree`] for a `ListNode` body.
+    #[must_use]
+    pub fn is_empty_tree(&self) -> bool {
+        self.nodes.iter().all(is_empty_tree)
+    }
+}
+
+/// Reports whether a tree is empty of everything but whitespace.
+///
+/// Mirrors Go's `parse.IsEmptyTree`. The single source of truth for the
+/// "empty body" rule used by [`Template::parse`](crate::Template::parse)
+/// when deciding whether to replace an existing body or define.
+pub fn is_empty_tree(n: &Node) -> bool {
+    match n {
+        Node::List(list) => list.is_empty_tree(),
+        Node::Text(t) => t.text.chars().all(char::is_whitespace),
+        Node::Action(_)
+        | Node::If(_)
+        | Node::Range(_)
+        | Node::With(_)
+        | Node::Template(_)
+        | Node::Define(_)
+        | Node::Break(_)
+        | Node::Continue(_) => false,
+    }
+}
+
 /// Raw text outside delimiters, emitted verbatim during execution.
 #[derive(Debug, Clone)]
 pub struct TextNode {

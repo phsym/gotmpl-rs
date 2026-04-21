@@ -104,15 +104,15 @@ fn test_max_exec_depth() {
     );
 }
 
-// parse_additional API
+// Successive parse calls (Go's Parse method semantics)
 #[test]
-fn test_parse_additional_defines() {
+fn test_parse_defines_merge() {
     let tmpl = Template::new("root")
         .parse(r#"{{template "header" .}}body{{template "footer" .}}"#)
         .unwrap()
-        .parse_additional(r#"{{define "header"}}<h1>{{.Title}}</h1>{{end}}"#)
+        .parse(r#"{{define "header"}}<h1>{{.Title}}</h1>{{end}}"#)
         .unwrap()
-        .parse_additional(r#"{{define "footer"}}<footer>bye</footer>{{end}}"#)
+        .parse(r#"{{define "footer"}}<footer>bye</footer>{{end}}"#)
         .unwrap();
 
     let data = tmap! { "Title" => "Hello" };
@@ -121,24 +121,50 @@ fn test_parse_additional_defines() {
 }
 
 #[test]
-fn test_parse_additional_override() {
-    // Later parse_additional overrides earlier define
+fn test_parse_define_override() {
+    // Later parse overrides earlier define
     let tmpl = Template::new("root")
         .parse(r#"{{define "x"}}first{{end}}{{template "x"}}"#)
         .unwrap()
-        .parse_additional(r#"{{define "x"}}second{{end}}"#)
+        .parse(r#"{{define "x"}}second{{end}}"#)
         .unwrap();
 
     assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "second");
 }
 
 #[test]
-fn test_parse_additional_syntax_error() {
+fn test_parse_syntax_error() {
     let result = Template::new("root")
         .parse("main")
         .unwrap()
-        .parse_additional("{{define}}");
+        .parse("{{define}}");
     assert!(result.is_err());
+}
+
+#[test]
+fn test_parse_empty_body_does_not_replace_existing() {
+    // Go parity: a body of only whitespace/comments does not overwrite an
+    // existing main template body.
+    let tmpl = Template::new("root")
+        .parse("main body")
+        .unwrap()
+        .parse(r#"   {{/* just a comment */}}   {{define "x"}}x{{end}}"#)
+        .unwrap();
+    assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "main body");
+}
+
+#[test]
+fn test_parse_empty_define_does_not_replace_existing() {
+    // Go parity: `associate` refuses to overwrite a non-empty existing
+    // define with an empty one.
+    let tmpl = Template::new("root")
+        .parse(r#"{{template "x"}}"#)
+        .unwrap()
+        .parse(r#"{{define "x"}}first{{end}}"#)
+        .unwrap()
+        .parse(r#"{{define "x"}}{{end}}"#)
+        .unwrap();
+    assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "first");
 }
 
 // Clone API
@@ -443,7 +469,7 @@ fn test_block_override_with_nested_pipeline() {
     let tmpl = Template::new("t")
         .parse(r#"[{{block "b" .}}{{.X | printf "%d"}}{{end}}]"#)
         .unwrap()
-        .parse_additional(r#"{{define "b"}}{{range .Items}}{{.}}/{{end}}{{end}}"#)
+        .parse(r#"{{define "b"}}{{range .Items}}{{.}}/{{end}}{{end}}"#)
         .unwrap();
     let data = tmap! { "Items" => vec!["a", "b", "c"] };
     assert_eq!(tmpl.execute_to_string(&data).unwrap(), "[a/b/c/]");

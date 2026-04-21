@@ -57,6 +57,12 @@ fn shared_builtins() -> Arc<BTreeMap<String, ValueFunc>> {
 fn shared_builtins() -> Arc<BTreeMap<String, ValueFunc>> {
     Arc::new(builtins())
 }
+
+fn col_for_offset(src: &str, offset: usize) -> usize {
+    let end = offset.min(src.len());
+    let line_start = src[..end].rfind('\n').map_or(0, |i| i + 1);
+    src[line_start..end].chars().count() + 1
+}
 pub use go::{html_escape, js_escape, url_encode};
 pub use value::{ToValue, Value, ValueFunc};
 
@@ -71,7 +77,7 @@ use std::io::Write;
 
 use exec::Executor;
 pub use exec::MissingKey;
-use parse::{ListNode, Parser};
+use parse::{DefineNode, ListNode, Parser};
 
 /// A function map mapping names to template functions.
 ///
@@ -299,49 +305,95 @@ impl Template {
         self
     }
 
-    /// Parse the template source string.
+    /// Parse template source and associate it with this template.
     ///
-    /// This lexes and parses the source, extracting `{{define}}` blocks into the
-    /// template's definition map. Must be called after [`delims`](Self::delims)
-    /// and [`func`](Self::func).
+    /// Mirrors Go's `(*Template).Parse` **method**: named template definitions
+    /// (`{{define}}` / `{{block}}`) in `src` are extracted into this template's
+    /// definition map, and the top-level content becomes this template's body.
+    ///
+    /// Successive calls can redefine named templates. A body that reduces to
+    /// only whitespace is considered empty and will **not** overwrite an
+    /// existing body or define of the same name — this is how `parse` can be
+    /// used to add named definitions without clobbering the main template.
+    /// Comment-only bodies behave as empty because the lexer strips comments
+    /// before parsing. If no body has been set yet, an empty body is still
+    /// stored (so executing the template yields `""`).
+    ///
+    /// Within a single call, redeclaring a name with two non-empty bodies is
+    /// an error (Go's `template: multiple definition of template "x"`). Across
+    /// calls, the later non-empty body replaces the earlier one.
+    ///
+    /// Must be called after [`delims`](Self::delims) and [`func`](Self::func)
+    /// so the parser sees the intended configuration.
     ///
     /// # Errors
     ///
-    /// Returns [`TemplateError::Lex`] or
-    /// [`TemplateError::Parse`] if the source
-    /// contains syntax errors.
+    /// Returns [`TemplateError::Lex`] or [`TemplateError::Parse`] if `src`
+    /// contains syntax errors, or if two non-empty definitions of the same
+    /// name appear in the same parse call.
     pub fn parse(mut self, src: &str) -> Result<Self> {
         let parser = Parser::new(src, &self.left_delim, &self.right_delim)?;
         let (tree, defines) = parser.parse()?;
 
-        self.tree = Some(tree);
-        for def in defines {
-            self.defines
-                .insert(def.name.to_string(), Arc::new(def.body));
+        if self.tree.is_none() || !tree.is_empty_tree() {
+            self.tree = Some(tree);
         }
 
+        self.merge_defines(defines, src)?;
         Ok(self)
     }
 
-    /// Parse an additional template string and merge its `{{define}}` blocks.
+    /// Merge one parse call's `{{define}}` bodies into `self.defines`,
+    /// matching Go's `parse.(*Tree).add` + `parse.associate` in a single pass:
     ///
-    /// This allows building a template set from multiple sources, similar to
-    /// Go's `ParseFiles` / `ParseGlob`. Only `{{define}}` blocks from the
-    /// additional source are extracted; top-level content is ignored.
+    ///   - A second non-empty body for the same name *within this call* is a
+    ///     parse error (Go's `add`); empty after non-empty in the same call is
+    ///     silently dropped (the non-empty body is preserved).
+    ///   - An empty body never overwrites an existing non-empty define in
+    ///     `self.defines` (Go's `associate` IsEmptyTree guard). Non-empty
+    ///     bodies always replace — that's how across-call redefinition works.
     ///
-    /// # Errors
-    ///
-    /// Returns a parse error if the source contains syntax errors.
-    pub fn parse_additional(mut self, src: &str) -> Result<Self> {
-        let parser = Parser::new(src, &self.left_delim, &self.right_delim)?;
-        let (_, defines) = parser.parse()?;
-
+    /// The `seen_non_empty` set tracks names already written non-empty in this
+    /// call, which is what distinguishes "in-call duplicate → error" from
+    /// "across-call duplicate → replace"; `self.defines` alone can't tell them
+    /// apart. `src` is used only for error-position reporting.
+    fn merge_defines(&mut self, defines: Vec<DefineNode>, src: &str) -> Result<()> {
+        let mut seen_non_empty: alloc::collections::BTreeSet<Arc<str>> =
+            alloc::collections::BTreeSet::new();
         for def in defines {
-            self.defines
-                .insert(def.name.to_string(), Arc::new(def.body));
+            let new_is_empty = def.body.is_empty_tree();
+            if seen_non_empty.contains(&def.name) {
+                if new_is_empty {
+                    continue;
+                }
+                return Err(error::TemplateError::Parse {
+                    line: def.pos.line,
+                    col: col_for_offset(src, def.pos.offset),
+                    message: alloc::format!(
+                        "multiple definition of template {:?}",
+                        def.name.as_ref()
+                    ),
+                });
+            }
+            if new_is_empty && self.defines.contains_key(def.name.as_ref()) {
+                continue;
+            }
+            if !new_is_empty {
+                seen_non_empty.insert(def.name.clone());
+            }
+            self.defines.insert(def.name.to_string(), Arc::new(def.body));
         }
+        Ok(())
+    }
 
-        Ok(self)
+    /// Register a parsed body under `name` using Go's `parse.associate` rule:
+    /// an empty body does not overwrite an existing non-empty define. Used
+    /// by [`parse_files`](Self::parse_files) for the basename registration.
+    fn associate_body(&mut self, name: &str, body: ListNode) {
+        if body.is_empty_tree() && self.defines.contains_key(name) {
+            return;
+        }
+        self.defines.insert(name.to_string(), Arc::new(body));
     }
 
     /// Parse template definitions from one or more files and associate them with this template.
@@ -403,15 +455,15 @@ impl Template {
             // Go parity: if the basename matches the receiver's name, the file's
             // top-level content becomes the receiver's own tree (so `Execute` works
             // directly). Otherwise it is only registered as an associated template.
-            if basename == self.name {
+            // Go's (*Template).ParseFiles dispatches tmpl.Parse(s) per file, so
+            // define merging follows the same add+associate rules — an in-file
+            // duplicate non-empty define errors, and an empty body never
+            // overwrites an existing non-empty one.
+            if basename == self.name && (self.tree.is_none() || !tree.is_empty_tree()) {
                 self.tree = Some(tree.clone());
             }
-            self.defines.insert(basename.to_string(), Arc::new(tree));
-
-            for def in defines {
-                self.defines
-                    .insert(def.name.to_string(), Arc::new(def.body));
-            }
+            self.associate_body(basename, tree);
+            self.merge_defines(defines, &content)?;
         }
         Ok(self)
     }
@@ -1119,6 +1171,95 @@ mod tests {
             "expected NoFiles error, got {:?}",
             err
         );
+    }
+
+    // Go parity: Two non-empty defines of the same name *within one file* go
+    // through a single `Parse` call in Go and are rejected by `parse.(*Tree).add`.
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_parse_files_in_file_duplicate_define_errors() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("gotmpl_test_parse_files_dup_in_file");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let path = dir.join("dup.tmpl");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(br#"{{define "x"}}first{{end}}{{define "x"}}second{{end}}"#)
+            .unwrap();
+
+        let err = Template::new("t")
+            .parse_files(&[path.to_str().unwrap()])
+            .err()
+            .expect("expected multiple-definition error");
+        assert!(
+            err.to_string()
+                .contains(r#"multiple definition of template "x""#),
+            "unexpected error message: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Go parity: Each file is a separate Parse call, so a non-empty define in
+    // a later file replaces an earlier one via `parse.associate` (across-call
+    // rule). No error.
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_parse_files_across_files_non_empty_replaces() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("gotmpl_test_parse_files_across_replace");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let a = dir.join("a.tmpl");
+        let b = dir.join("b.tmpl");
+        std::fs::File::create(&a)
+            .unwrap()
+            .write_all(br#"{{define "x"}}first{{end}}"#)
+            .unwrap();
+        std::fs::File::create(&b)
+            .unwrap()
+            .write_all(br#"{{define "x"}}second{{end}}"#)
+            .unwrap();
+
+        let tmpl = Template::new("t")
+            .parse(r#"{{template "x"}}"#)
+            .unwrap()
+            .parse_files(&[a.to_str().unwrap(), b.to_str().unwrap()])
+            .unwrap();
+        assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "second");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Go parity: An empty define in a later file does not overwrite an existing
+    // non-empty define (`parse.associate`'s IsEmptyTree guard).
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_parse_files_empty_define_does_not_clobber() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("gotmpl_test_parse_files_empty_clobber");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let a = dir.join("a.tmpl");
+        let b = dir.join("b.tmpl");
+        std::fs::File::create(&a)
+            .unwrap()
+            .write_all(br#"{{define "x"}}content{{end}}"#)
+            .unwrap();
+        std::fs::File::create(&b)
+            .unwrap()
+            .write_all(br#"{{define "x"}}{{end}}"#)
+            .unwrap();
+
+        let tmpl = Template::new("t")
+            .parse(r#"{{template "x"}}"#)
+            .unwrap()
+            .parse_files(&[a.to_str().unwrap(), b.to_str().unwrap()])
+            .unwrap();
+        assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "content");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
