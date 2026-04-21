@@ -39,11 +39,9 @@ fn parse_number(s: &str) -> Option<Number> {
 /// assert_eq!(tree.nodes.len(), 3); // Text, Action, Text
 /// assert!(defines.is_empty());
 /// ```
-/// Maximum nesting depth (for `{{if}}`/`{{with}}`/`{{range}}`/`{{block}}`
-/// bodies and parenthesised pipelines) allowed during parsing. Prevents
-/// attacker-controlled templates from blowing the thread stack. Chosen to
-/// stay well under Rust's default 2 MB thread stack given ~13 KB per
-/// recursive parser frame in debug builds.
+/// Recursion cap for nested `{{if}}`/`{{with}}`/`{{range}}`/`{{block}}`
+/// bodies and parenthesised pipelines, to keep pathological input from
+/// blowing the thread stack.
 const MAX_PARSE_DEPTH: usize = 100;
 
 pub struct Parser<'a> {
@@ -136,6 +134,14 @@ impl<'a> Parser<'a> {
         let tok = &self.tokens[self.pos];
         self.pos += 1;
         tok
+    }
+
+    /// Consume the next token and return just its `(pos, line)`. Lets sites
+    /// that only need the source span advance the cursor without cloning
+    /// the whole `Token`.
+    fn next_span(&mut self) -> (usize, usize) {
+        let t = self.next();
+        (t.pos, t.line)
     }
 
     fn expect(&mut self, kind: TokenKind) -> Result<()> {
@@ -507,18 +513,18 @@ impl<'a> Parser<'a> {
                 }
 
                 TokenKind::Dot => {
-                    let tok = self.next().clone();
+                    let (tok_pos, tok_line) = self.next_span();
                     let mut fields = Vec::new();
-                    let mut chain_end = tok.pos + 1;
+                    let mut chain_end = tok_pos + 1;
                     while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
                         let ftok = self.next().clone();
                         chain_end = ftok.pos + ftok.val.len();
                         fields.extend(self.parse_field_chain(&ftok.val));
                     }
                     if fields.is_empty() {
-                        args.push(Expr::Dot(Pos::new(tok.pos, tok.line)));
+                        args.push(Expr::Dot(Pos::new(tok_pos, tok_line)));
                     } else {
-                        args.push(Expr::Field(Pos::new(tok.pos, tok.line), fields));
+                        args.push(Expr::Field(Pos::new(tok_pos, tok_line), fields));
                     }
                 }
 
@@ -590,12 +596,12 @@ impl<'a> Parser<'a> {
                     args.push(Expr::Number(Pos::new(tok.pos, tok.line), num));
                 }
                 TokenKind::Bool => {
-                    let tok = self.next().clone();
-                    args.push(Expr::Bool(Pos::new(tok.pos, tok.line), tok.val == "true"));
+                    let t = self.next();
+                    args.push(Expr::Bool(Pos::new(t.pos, t.line), t.val == "true"));
                 }
                 TokenKind::Nil => {
-                    let tok = self.next().clone();
-                    args.push(Expr::Nil(Pos::new(tok.pos, tok.line)));
+                    let (pos, line) = self.next_span();
+                    args.push(Expr::Nil(Pos::new(pos, line)));
                 }
                 TokenKind::Char => {
                     let tok = self.next().clone();
