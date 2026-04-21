@@ -2666,7 +2666,7 @@ fn test_block_override() {
     );
 
     // Override via clone + add_parse_tree
-    let overridden = tmpl.clone_template().add_parse_tree(
+    let overridden = tmpl.clone().add_parse_tree(
         "content",
         ListNode {
             pos: Pos::new(0, 1),
@@ -2742,7 +2742,7 @@ fn test_clone_independence() {
         .parse(r#"{{define "x"}}orig{{end}}{{template "x"}}"#)
         .unwrap();
 
-    let clone1 = original.clone_template().add_parse_tree(
+    let clone1 = original.clone().add_parse_tree(
         "x",
         ListNode {
             pos: Pos::new(0, 1),
@@ -2753,7 +2753,7 @@ fn test_clone_independence() {
         },
     );
 
-    let clone2 = original.clone_template().add_parse_tree(
+    let clone2 = original.clone().add_parse_tree(
         "x",
         ListNode {
             pos: Pos::new(0, 1),

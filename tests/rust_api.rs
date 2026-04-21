@@ -149,7 +149,7 @@ fn test_clone_preserves_missingkey_error() {
         .parse("{{.X}}")
         .unwrap();
 
-    let cloned = original.clone_template();
+    let cloned = original.clone();
 
     // Both should error on missing key
     let data = tmap! { "Y" => 1i64 };
@@ -166,14 +166,14 @@ fn test_clone_preserves_custom_delims() {
 
     // Clone should inherit the parsed tree (delims were applied at parse time)
     let data = tmap! { "X" => "hello" };
-    let cloned = original.clone_template();
+    let cloned = original.clone();
     assert_eq!(cloned.execute_to_string(&data).unwrap(), "hello");
 }
 
 #[test]
 fn test_clone_unparsed_template() {
     let t = Template::new("empty");
-    let cloned = t.clone_template();
+    let cloned = t.clone();
     // Should not panic; executing should error gracefully
     assert!(cloned.execute_to_string(&Value::Nil).is_err());
 }

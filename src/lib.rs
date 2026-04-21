@@ -627,7 +627,9 @@ impl Template {
         let quoted: Vec<String> = names.iter().map(|n| format!("{n:?}")).collect();
         format!("; defined templates are: {}", quoted.join(", "))
     }
+}
 
+impl Clone for Template {
     /// Create an independent copy of this template.
     ///
     /// Equivalent to Go's `template.Clone()`. The cloned template has its
@@ -644,7 +646,7 @@ impl Template {
     ///     .parse(r#"{{define "x"}}original{{end}}{{template "x"}}"#)
     ///     .unwrap();
     ///
-    /// let mut cloned = original.clone_template();
+    /// let mut cloned = original.clone();
     ///
     /// // Override "x" in the clone
     /// let cloned = cloned.add_parse_tree("x", ListNode {
@@ -658,9 +660,8 @@ impl Template {
     /// assert_eq!(original.execute_to_string(&tmap!{}).unwrap(), "original");
     /// assert_eq!(cloned.execute_to_string(&tmap!{}).unwrap(), "cloned");
     /// ```
-    #[must_use]
-    pub fn clone_template(&self) -> Self {
-        Template {
+    fn clone(&self) -> Self {
+        Self {
             name: self.name.clone(),
             tree: self.tree.clone(),
             defines: self.defines.clone(),
@@ -908,7 +909,7 @@ mod tests {
             .parse(r#"{{define "x"}}original{{end}}{{template "x"}}"#)
             .unwrap();
 
-        let cloned = original.clone_template().add_parse_tree(
+        let cloned = original.clone().add_parse_tree(
             "x",
             ListNode {
                 pos: parse::Pos::new(0, 1),
