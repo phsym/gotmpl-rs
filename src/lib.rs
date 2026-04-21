@@ -339,11 +339,37 @@ impl Template {
             Parser::with_name(self.parse_name(), src, &self.left_delim, &self.right_delim)?;
         let (tree, defines) = parser.parse()?;
 
+        // Go's `parse.(*Tree).add` rejects a non-empty top-level that collides
+        // with a same-named non-empty `{{define}}` in the same parse call —
+        // both would occupy the `treeSet[name]` slot. Detect the same here so
+        // the error path matches Go's "multiple definition of template" output.
+        Self::check_in_file_basename_collision(&self.name, &tree, &defines, src)?;
+
+        // Mirror Go's `treeSet[t.Name] = topLevelTree` at parse time: pre-populate
+        // the name-keyed slot with the non-empty top so `merge_defines` treats it
+        // as an existing entry and drops an in-call *empty* same-name `{{define}}`
+        // (Go's `parse.(*Tree).add` rule). An empty top never pre-populates, so a
+        // prior call's body survives until a later non-empty entry replaces it.
+        // A non-empty same-name define in the same call can't reach here — it
+        // already errored out of `check_in_file_basename_collision` above.
+        if !self.name.is_empty() && !tree.is_empty_tree() {
+            self.defines
+                .insert(self.name.clone(), Arc::new(tree.clone()));
+        }
+
         if self.tree.is_none() || !tree.is_empty_tree() {
             self.tree = Some(tree);
         }
 
         self.merge_defines(defines, src)?;
+
+        // Mirror Go's final `AddParseTree` that pairs `t.Tree` with
+        // `t.tmpl[t.Name()]`: `self.tree` ends up equal to the entry under
+        // `self.defines[self.name]`. No-op for an unnamed receiver. Needed
+        // both when a `{{define self.name}}` body replaced the slot via
+        // `merge_defines`, and when a prior call's entry should propagate
+        // into a fresh `self.tree`.
+        self.sync_tree_to_own_name();
         Ok(self)
     }
 
@@ -407,6 +433,49 @@ impl Template {
             return;
         }
         self.defines.insert(name.to_string(), Arc::new(body));
+    }
+
+    /// Mirror Go's `parse.(*Tree).add` in-call conflict check: if the top-level
+    /// tree is non-empty *and* the same parse produced a non-empty
+    /// `{{define name}}`, both would claim the same slot in Go's treeSet and
+    /// Go errors with "multiple definition of template". `name` is the slot
+    /// the top-level occupies — self.name for `parse`, the basename for
+    /// `parse_files`. An empty `name` skips the check (the unnamed-receiver
+    /// case, like `Template::new("")`, has no define to collide with).
+    fn check_in_file_basename_collision(
+        name: &str,
+        top: &ListNode,
+        defines: &[DefineNode],
+        src: &str,
+    ) -> Result<()> {
+        if name.is_empty() || top.is_empty_tree() {
+            return Ok(());
+        }
+        if let Some(def) = defines
+            .iter()
+            .find(|d| d.name.as_ref() == name && !d.body.is_empty_tree())
+        {
+            return Err(error::TemplateError::Parse {
+                name: Some(name.to_string()),
+                line: def.pos.line,
+                col: col_for_offset(src, def.pos.offset),
+                message: alloc::format!("multiple definition of template {name:?}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// After a parse merge, mirror Go's final `AddParseTree` step that syncs
+    /// `t.Tree` with `t.tmpl[t.Name()]`. Used when a `{{define}}` body has
+    /// replaced the top-level entry so `execute` and `execute_template(name)`
+    /// render the same thing.
+    fn sync_tree_to_own_name(&mut self) {
+        if self.name.is_empty() {
+            return;
+        }
+        if let Some(entry) = self.defines.get(self.name.as_str()) {
+            self.tree = Some((**entry).clone());
+        }
     }
 
     /// Parse template definitions from one or more files and associate them with this template.
@@ -480,11 +549,26 @@ impl Template {
             // define merging follows the same add+associate rules — an in-file
             // duplicate non-empty define errors, and an empty body never
             // overwrites an existing non-empty one.
+            Self::check_in_file_basename_collision(basename, &tree, &defines, &content)?;
+
             if basename == self.name && (self.tree.is_none() || !tree.is_empty_tree()) {
                 self.tree = Some(tree.clone());
             }
+            // `associate_body` plays the role of the `parse` pre-populate step:
+            // with a non-empty top it seeds `self.defines[basename]` so the
+            // subsequent `merge_defines` drops an in-file empty same-name
+            // `{{define}}` the same way Go's `parse.(*Tree).add` does.
             self.associate_body(basename, tree);
             self.merge_defines(defines, &content)?;
+
+            // When this file targets the receiver's own slot, pair `self.tree`
+            // with the final `self.defines[self.name]` entry — Go's
+            // `AddParseTree` invariant. Covers both "empty top + non-empty
+            // same-name define replaced the slot" and "prior call's body
+            // survives a no-op parse".
+            if basename == self.name {
+                self.sync_tree_to_own_name();
+            }
         }
         Ok(self)
     }
@@ -1025,9 +1109,13 @@ mod tests {
     }
 
     #[test]
-    fn test_defined_templates_empty() {
+    fn test_defined_templates_lists_receiver() {
+        // Go parity: `Template::new("t").parse("hello")` seats the top-level
+        // into `self.defines["t"]` (Go's `treeSet[t.Name] = topLevelTree`), so
+        // `defined_templates()` names "t" itself — matching Go's
+        // `DefinedTemplates` output `"; defined templates are: \"t\""`.
         let tmpl = Template::new("t").parse("hello").unwrap();
-        assert_eq!(tmpl.defined_templates(), "");
+        assert_eq!(tmpl.defined_templates(), r#"; defined templates are: "t""#);
     }
 
     #[test]
@@ -1377,6 +1465,129 @@ mod tests {
             .parse_files(&[a.to_str().unwrap(), b.to_str().unwrap()])
             .unwrap();
         assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "content");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Go parity: `Template::new("X").parse("{{define \"X\"}}body{{end}}")`
+    // makes both `execute` and `execute_template("X")` render the define body.
+    // Go's parse.(*Tree).add leaves the non-empty define in the treeSet slot,
+    // and AddParseTree then syncs t.Tree with it.
+    #[test]
+    fn test_parse_define_name_matches_receiver_syncs_tree() {
+        let tmpl = Template::new("X")
+            .parse(r#"{{define "X"}}body{{end}}"#)
+            .unwrap();
+        assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "body");
+        assert_eq!(
+            tmpl.execute_template_to_string("X", &Value::Nil).unwrap(),
+            "body"
+        );
+    }
+
+    // Go parity: a non-empty top-level plus an *empty* same-name `{{define}}`
+    // is not a collision — Go's `parse.(*Tree).add` drops the empty define and
+    // leaves the non-empty top-level in the treeSet slot. A regression here
+    // (empty define clobbering the top-level tree via sync) would render "".
+    #[test]
+    fn test_parse_toplevel_and_empty_same_name_define_keeps_toplevel() {
+        let tmpl = Template::new("X")
+            .parse(r#"toplevel{{define "X"}}{{end}}"#)
+            .unwrap();
+        assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "toplevel");
+        assert_eq!(
+            tmpl.execute_template_to_string("X", &Value::Nil).unwrap(),
+            "toplevel"
+        );
+    }
+
+    // Go parity: a later `Parse` call whose top-level name matches the receiver
+    // replaces the prior body, even when an earlier `Parse` installed a
+    // `{{define name}}` of the same name. A regression that unconditionally
+    // re-syncs from `self.defines[self.name]` would resurrect the old body.
+    #[test]
+    fn test_parse_second_call_toplevel_replaces_prior_same_name_define() {
+        let tmpl = Template::new("X")
+            .parse(r#"{{define "X"}}body{{end}}"#)
+            .unwrap()
+            .parse("newtop")
+            .unwrap();
+        assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "newtop");
+        assert_eq!(
+            tmpl.execute_template_to_string("X", &Value::Nil).unwrap(),
+            "newtop"
+        );
+    }
+
+    // Go parity: `ParseFiles` analogue of the non-empty-top + empty-same-name
+    // define case. File "X" contains `toplevel{{define "X"}}{{end}}`, receiver
+    // is "X". Go's treeSet["X"] keeps the top-level; the empty define is
+    // dropped. A regression would render "".
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_parse_files_toplevel_and_empty_same_name_define_keeps_toplevel() {
+        use std::io::Write as _;
+        let dir =
+            std::env::temp_dir().join("gotmpl_test_parse_files_toplevel_empty_define_keeps_top");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let path = dir.join("X");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(br#"toplevel{{define "X"}}{{end}}"#)
+            .unwrap();
+
+        let tmpl = Template::new("X")
+            .parse_files(&[path.to_str().unwrap()])
+            .unwrap();
+        assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "toplevel");
+        assert_eq!(
+            tmpl.execute_template_to_string("X", &Value::Nil).unwrap(),
+            "toplevel"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Go parity: a non-empty top-level plus a non-empty `{{define name}}` where
+    // name matches the receiver is `template: multiple definition of template`.
+    #[test]
+    fn test_parse_toplevel_and_same_name_define_errors() {
+        let err = Template::new("X")
+            .parse(r#"toplevel {{define "X"}}body{{end}}"#)
+            .err()
+            .expect("expected multiple-definition error");
+        assert!(
+            err.to_string()
+                .contains(r#"multiple definition of template "X""#),
+            "unexpected error message: {err}"
+        );
+    }
+
+    // Go parity: `ParseFiles` on a file whose basename matches the receiver
+    // and whose only content is `{{define basename}}body{{end}}` renders
+    // `body` for both `execute` and `execute_template(basename)`.
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_parse_files_define_name_matches_basename_syncs_tree() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("gotmpl_test_parse_files_basename_define_sync");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let path = dir.join("X");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(br#"{{define "X"}}body{{end}}"#)
+            .unwrap();
+
+        let tmpl = Template::new("X")
+            .parse_files(&[path.to_str().unwrap()])
+            .unwrap();
+        assert_eq!(tmpl.execute_to_string(&Value::Nil).unwrap(), "body");
+        assert_eq!(
+            tmpl.execute_template_to_string("X", &Value::Nil).unwrap(),
+            "body"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
