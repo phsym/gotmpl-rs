@@ -111,11 +111,9 @@ mod go_crosscheck {
                 format!(r#"{{"type":"map","map":{{{}}}}}"#, entries.join(","))
             }
             Value::Function(_) => {
-                return Err(
-                    "Value::Function cannot be serialized for cross-check; use \
+                return Err("Value::Function cannot be serialized for cross-check; use \
                      Template::new(...).func(...).parse(...).execute_to_string(...) \
-                     directly in a #[test] fn instead of ok()/fail()",
-                );
+                     directly in a #[test] fn instead of ok()/fail()");
             }
         })
     }
@@ -3872,11 +3870,7 @@ fn test_printf_extra_args_multiple() {
 // printf — argument reordering with `%[N]verb`.
 #[test]
 fn test_printf_reorder_two_args() {
-    ok(
-        r#"{{printf "%[2]s %[1]s" "a" "b"}}"#,
-        &Value::Nil,
-        "b a",
-    );
+    ok(r#"{{printf "%[2]s %[1]s" "a" "b"}}"#, &Value::Nil, "b a");
 }
 
 #[test]
@@ -3911,31 +3905,19 @@ fn test_printf_dynamic_width_and_precision() {
 
 #[test]
 fn test_printf_dynamic_width_bad_type() {
-    ok(
-        r#"{{printf "%*d" "x" 42}}"#,
-        &Value::Nil,
-        "%!(BADWIDTH)42",
-    );
+    ok(r#"{{printf "%*d" "x" 42}}"#, &Value::Nil, "%!(BADWIDTH)42");
 }
 
 #[test]
 fn test_printf_dynamic_precision_bad_type() {
-    ok(
-        r#"{{printf "%.*d" "x" 42}}"#,
-        &Value::Nil,
-        "%!(BADPREC)42",
-    );
+    ok(r#"{{printf "%.*d" "x" 42}}"#, &Value::Nil, "%!(BADPREC)42");
 }
 
 #[test]
 fn test_printf_dynamic_width_float_is_bad() {
     // Go's `*` accepts only `int`-typed args — float64 yields BADWIDTH.
     // The float arg is still consumed (matches Go's `intFromArg`).
-    ok(
-        r#"{{printf "%*d" 1.5 42}}"#,
-        &Value::Nil,
-        "%!(BADWIDTH)42",
-    );
+    ok(r#"{{printf "%*d" 1.5 42}}"#, &Value::Nil, "%!(BADWIDTH)42");
 }
 
 #[test]
@@ -4021,11 +4003,7 @@ fn test_printf_reorder_index_then_dynamic_width() {
     // `%[2]*d` — `[2]` sets the cursor to arg 2 (1-based), `*` reads its
     // width from there and advances. Verb `d` then needs arg 3, which is
     // missing. Go and Rust both emit MISSING here.
-    ok(
-        r#"{{printf "%[2]*d" 42 5}}"#,
-        &Value::Nil,
-        "%!d(MISSING)",
-    );
+    ok(r#"{{printf "%[2]*d" 42 5}}"#, &Value::Nil, "%!d(MISSING)");
 }
 
 #[test]
@@ -4042,11 +4020,7 @@ fn test_printf_reorder_index_position_is_after_flags() {
 fn test_printf_reorder_index_then_dynamic_width_three_args() {
     // Same shape with a third arg supplied: `[2]` → cursor=1, `*` consumes
     // arg[1]=5 (width), verb `d` consumes arg[2]=42 → "   42".
-    ok(
-        r#"{{printf "%[2]*d" 99 5 42}}"#,
-        &Value::Nil,
-        "   42",
-    );
+    ok(r#"{{printf "%[2]*d" 99 5 42}}"#, &Value::Nil, "   42");
 }
 
 #[test]
@@ -4083,11 +4057,7 @@ fn test_printf_unicode_verb_supplementary() {
 #[test]
 fn test_printf_unicode_verb_negative_int_wraps() {
     // Go casts the int to uint64 and prints as hex — `-1` wraps to all-ones.
-    ok(
-        r#"{{printf "%U" -1}}"#,
-        &Value::Nil,
-        "U+FFFFFFFFFFFFFFFF",
-    );
+    ok(r#"{{printf "%U" -1}}"#, &Value::Nil, "U+FFFFFFFFFFFFFFFF");
 }
 
 #[test]
@@ -4124,11 +4094,7 @@ fn test_printf_unicode_verb_hash_on_control_skips_quote() {
 #[test]
 fn test_printf_unicode_verb_on_string_is_bad() {
     // `%U` is integer-only.
-    ok(
-        r#"{{printf "%U" "x"}}"#,
-        &Value::Nil,
-        "%!U(string=x)",
-    );
+    ok(r#"{{printf "%U" "x"}}"#, &Value::Nil, "%!U(string=x)");
 }
 
 #[test]
@@ -4309,7 +4275,8 @@ fn test_print_map_format() {
 
 #[test]
 fn test_print_list_format() {
-    let data = tmap! { "L" => Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into()) };
+    let data =
+        tmap! { "L" => Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into()) };
     ok("{{print .L}}", &data, "[1 2 3]");
 }
 
@@ -4395,11 +4362,7 @@ fn test_index_map_missing_key_returns_nil() {
     // Go: missing map key → zero value (nil for interface{}).
     // Printed via println so the bare `<nil>` form surfaces.
     let data = tmap! { "M" => tmap! { "k" => 1i64 } };
-    ok(
-        r#"{{println (index .M "missing")}}"#,
-        &data,
-        "<nil>\n",
-    );
+    ok(r#"{{println (index .M "missing")}}"#, &data, "<nil>\n");
 }
 
 #[test]
@@ -4608,9 +4571,8 @@ fn test_len_hello_with_e_acute_byte_count() {
 #[test]
 fn test_call_propagates_function_error() {
     use alloc::sync::Arc;
-    let f: gotmpl::ValueFunc = Arc::new(|_args| {
-        Err(gotmpl::TemplateError::Exec("boom from fn".into()))
-    });
+    let f: gotmpl::ValueFunc =
+        Arc::new(|_args| Err(gotmpl::TemplateError::Exec("boom from fn".into())));
     let data = tmap! { "F" => Value::Function(f) };
     let result = Template::new("test")
         .parse("{{call .F}}")
@@ -4765,11 +4727,7 @@ fn test_js_control_chars() {
 fn test_js_line_paragraph_separators_escaped() {
     // U+2028 / U+2029 are escaped — required for safe JSON-in-`<script>`
     // payloads under pre-ES2019 JS engines.
-    ok(
-        "{{js \"\\u2028\\u2029\"}}",
-        &Value::Nil,
-        "\\u2028\\u2029",
-    );
+    ok("{{js \"\\u2028\\u2029\"}}", &Value::Nil, "\\u2028\\u2029");
 }
 
 // urlquery — character coverage.

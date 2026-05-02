@@ -10,6 +10,8 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use super::SmolStr;
+
 /// Byte-level position in the template source, used for error reporting.
 ///
 /// Carried by every AST node so that execution errors can point back to the
@@ -152,7 +154,7 @@ pub struct PipeNode {
     /// Variable names being declared or assigned (e.g., `["$x"]` or `["$i", "$v"]`).
     ///
     /// Empty when the pipeline has no variable binding.
-    pub decl: Vec<Arc<str>>,
+    pub decl: Vec<SmolStr>,
     /// The sequence of commands in the pipeline, left to right.
     pub commands: Vec<CommandNode>,
     /// `true` for assignment (`=`), `false` for declaration (`:=`).
@@ -197,17 +199,17 @@ pub enum Expr {
     /// Field access on dot: `.Name`, `.User.Email`.
     ///
     /// The vector contains the chain of field names (e.g., `["User", "Email"]`).
-    Field(Pos, Vec<Arc<str>>),
+    Field(Pos, Vec<SmolStr>),
 
     /// Variable access: `$x`, or chained: `$x.Name`.
     ///
     /// Fields: `(pos, variable_name, field_chain)`.
-    Variable(Pos, Arc<str>, Vec<Arc<str>>),
+    Variable(Pos, SmolStr, Vec<SmolStr>),
 
     /// A function or method identifier (e.g., `printf`, `len`).
     ///
     /// Resolved to a [`ValueFunc`](crate::ValueFunc) during execution.
-    Identifier(Pos, Arc<str>),
+    Identifier(Pos, SmolStr),
 
     /// A string literal (`"hello"` or `` `raw` ``).
     ///
@@ -234,7 +236,7 @@ pub enum Expr {
     /// Chained field access on an expression result: `(expr).Field` or `func.Field`.
     ///
     /// Fields: `(pos, inner_expression, field_chain)`.
-    Chain(Pos, Box<Expr>, Vec<Arc<str>>),
+    Chain(Pos, Box<Expr>, Vec<SmolStr>),
 }
 
 impl Expr {
@@ -297,7 +299,7 @@ pub struct TemplateNode {
     /// Source position of the `template` keyword.
     pub pos: Pos,
     /// The name of the template to invoke (from a `{{define}}` or `{{block}}`).
-    pub name: Arc<str>,
+    pub name: SmolStr,
     /// Optional pipeline whose result becomes dot inside the invoked template.
     ///
     /// `None` when invoked without arguments: `{{template "name"}}`.
@@ -313,7 +315,7 @@ pub struct DefineNode {
     /// Source position of the `define` keyword.
     pub pos: Pos,
     /// The name of the defined template.
-    pub name: Arc<str>,
+    pub name: SmolStr,
     /// The body of the defined template.
     pub body: ListNode,
 }

@@ -389,7 +389,7 @@ impl Template {
     /// "across-call duplicate, replace": `self.defines` alone can't tell them
     /// apart. `src` is used only for error-position reporting.
     fn merge_defines(&mut self, defines: Vec<DefineNode>, src: &str) -> Result<()> {
-        let mut seen_non_empty: alloc::collections::BTreeSet<Arc<str>> =
+        let mut seen_non_empty: alloc::collections::BTreeSet<crate::parse::SmolStr> =
             alloc::collections::BTreeSet::new();
         for def in defines {
             let new_is_empty = def.body.is_empty_tree();
@@ -403,11 +403,11 @@ impl Template {
                     col: col_for_offset(src, def.pos.offset),
                     message: alloc::format!(
                         "multiple definition of template {:?}",
-                        def.name.as_ref()
+                        def.name.as_str()
                     ),
                 });
             }
-            if new_is_empty && self.defines.contains_key(def.name.as_ref()) {
+            if new_is_empty && self.defines.contains_key(def.name.as_str()) {
                 continue;
             }
             if !new_is_empty {
@@ -447,7 +447,7 @@ impl Template {
         }
         if let Some(def) = defines
             .iter()
-            .find(|d| d.name.as_ref() == name && !d.body.is_empty_tree())
+            .find(|d| d.name.as_str() == name && !d.body.is_empty_tree())
         {
             return Err(error::TemplateError::Parse {
                 name: Some(name.to_string()),

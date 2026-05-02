@@ -24,3 +24,13 @@ pub use node::{
 
 // Re-export the parser
 pub use parser::Parser;
+
+/// Short-string type used in AST identifier and name fields
+/// ([`Expr::Identifier`], [`Expr::Field`], [`PipeNode::decl`],
+/// [`TemplateNode::name`], [`DefineNode::name`], etc.).
+///
+/// Inlines payloads up to 22 bytes (typical for field/variable/template
+/// names) and falls back to a refcounted heap pointer for longer ones.
+/// Re-exported so callers building AST nodes by hand don't need to depend
+/// on `smol_str` directly.
+pub use smol_str::SmolStr;

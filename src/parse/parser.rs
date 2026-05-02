@@ -7,6 +7,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use super::SmolStr;
 use super::lexer::{Lexer, Token, TokenKind};
 use super::node::*;
 use crate::error::{Result, TemplateError};
@@ -24,6 +25,11 @@ fn parse_number(s: &str) -> Option<Number> {
     }
 }
 
+/// Recursion cap for nested `{{if}}`/`{{with}}`/`{{range}}`/`{{block}}`
+/// bodies and parenthesised pipelines, to keep pathological input from
+/// blowing the thread stack.
+const MAX_PARSE_DEPTH: usize = 100;
+
 /// Recursive-descent parser for Go template source.
 ///
 /// Created from a source string via [`new`](Self::new), then invoked via
@@ -39,11 +45,6 @@ fn parse_number(s: &str) -> Option<Number> {
 /// assert_eq!(tree.nodes.len(), 3); // Text, Action, Text
 /// assert!(defines.is_empty());
 /// ```
-/// Recursion cap for nested `{{if}}`/`{{with}}`/`{{range}}`/`{{block}}`
-/// bodies and parenthesised pipelines, to keep pathological input from
-/// blowing the thread stack.
-const MAX_PARSE_DEPTH: usize = 100;
-
 pub struct Parser<'a> {
     tokens: Vec<Token<'a>>,
     pos: usize,
@@ -346,7 +347,7 @@ impl<'a> Parser<'a> {
 
         Ok(DefineNode {
             pos,
-            name: Arc::from(name_tok.val.as_ref()),
+            name: SmolStr::from(name_tok.val.as_ref()),
             body,
         })
     }
@@ -372,7 +373,7 @@ impl<'a> Parser<'a> {
 
         Ok(Node::Template(TemplateNode {
             pos,
-            name: Arc::from(name_tok.val.as_ref()),
+            name: SmolStr::from(name_tok.val.as_ref()),
             pipe,
         }))
     }
@@ -397,10 +398,10 @@ impl<'a> Parser<'a> {
         self.expect_close_delim()?;
         let body = self.parse_list(defines)?;
 
-        let name: Arc<str> = Arc::from(name_tok.val.as_ref());
+        let name = SmolStr::from(name_tok.val.as_ref());
         let define = DefineNode {
             pos,
-            name: Arc::clone(&name),
+            name: name.clone(),
             body: body.clone(),
         };
 
@@ -429,7 +430,7 @@ impl<'a> Parser<'a> {
 
             while self.peek().kind == TokenKind::Variable {
                 let var_tok = self.next().clone();
-                vars.push(Arc::from(var_tok.val.as_ref()));
+                vars.push(SmolStr::from(var_tok.val.as_ref()));
 
                 if self.peek().kind == TokenKind::Comma {
                     self.next();
@@ -551,7 +552,7 @@ impl<'a> Parser<'a> {
                     }
                     args.push(Expr::Variable(
                         Pos::new(tok.pos, tok.line),
-                        Arc::from(tok.val.as_ref()),
+                        SmolStr::from(tok.val.as_ref()),
                         fields,
                     ));
                 }
@@ -566,7 +567,7 @@ impl<'a> Parser<'a> {
                         fields.extend(self.parse_field_chain(&ftok.val));
                     }
                     let ident_pos = Pos::new(tok.pos, tok.line);
-                    let name: Arc<str> = Arc::from(tok.val.as_ref());
+                    let name = SmolStr::from(tok.val.as_ref());
                     if fields.is_empty() {
                         args.push(Expr::Identifier(ident_pos, name));
                     } else {
@@ -622,11 +623,11 @@ impl<'a> Parser<'a> {
         Ok(CommandNode { pos, args })
     }
 
-    fn parse_field_chain(&self, field_str: &str) -> Vec<Arc<str>> {
+    fn parse_field_chain(&self, field_str: &str) -> Vec<SmolStr> {
         field_str
             .split('.')
             .filter(|s| !s.is_empty())
-            .map(Arc::from)
+            .map(SmolStr::from)
             .collect()
     }
 

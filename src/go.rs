@@ -209,12 +209,12 @@ fn try_parse_index(chars: &mut core::iter::Peekable<core::str::Chars<'_>>) -> Pa
     }
     let mut probe = chars.clone();
     probe.next(); // consume '['
-    if let Some(n) = parse_uint_digits(&mut probe) {
-        if probe.peek() == Some(&']') {
-            probe.next(); // consume ']'
-            *chars = probe;
-            return ParsedIndex::Found(n);
-        }
+    if let Some(n) = parse_uint_digits(&mut probe)
+        && probe.peek() == Some(&']')
+    {
+        probe.next(); // consume ']'
+        *chars = probe;
+        return ParsedIndex::Found(n);
     }
     chars.next(); // consume '['
     // Only the malformed path needs to know whether a `]` exists later, so

@@ -565,16 +565,13 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 '$' => self.lex_variable()?,
-                '-' | '+' => {
+                '-' | '+'
                     // Could be a sign for a number, or just a minus/plus
                     if self
                         .peek_ahead(1)
-                        .is_some_and(|c| c.is_ascii_digit() || c == '.')
-                    {
-                        self.lex_number()?;
-                    } else {
-                        return Err(self.error(format!("unexpected character: {:?}", ch)));
-                    }
+                        .is_some_and(|c| c.is_ascii_digit() || c == '.') =>
+                {
+                    self.lex_number()?;
                 }
                 '0'..='9' => self.lex_number()?,
                 '\'' => self.lex_char_literal()?,

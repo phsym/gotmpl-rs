@@ -28,6 +28,7 @@ go-crosscheck = []
 
 [dependencies]
 thiserror = "2"
+smol_str = { version = "0.3", default-features = false }
 
 [profile.bench]
 opt-level = 3

@@ -40,17 +40,17 @@ are the median of five `-count=5` runs.
 
 | Scenario        | Rust `gotmpl` | Go `text/template` | Go allocs    | Speedup |
 | --------------- | ------------- | ------------------ | ------------ | ------- |
-| `parse/simple`  | 546 ns        | 1.07 µs            | 31 / 3.0 KiB | 1.95×   |
-| `parse/complex` | 2.15 µs       | 3.19 µs            | 69 / 4.6 KiB | 1.48×   |
+| `parse/simple`  | 509 ns        | 1.07 µs            | 31 / 3.0 KiB | 2.11×   |
+| `parse/complex` | 1.96 µs       | 3.21 µs            | 69 / 4.6 KiB | 1.64×   |
 
 ### Execute
 
 | Scenario                | Rust `gotmpl` | Go `text/template` | Go allocs      | Speedup |
 | ----------------------- | ------------- | ------------------ | -------------- | ------- |
-| `exec/simple`           | 125.8 ns      | 147.3 ns           | 4 / 160 B      | 1.17×   |
-| `exec/printf`           | 372.7 ns      | 618.5 ns           | 14 / 456 B     | 1.66×   |
-| `exec/range_100`        | 3.42 µs       | 9.09 µs            | 103 / 960 B    | 2.66×   |
-| `exec/complex_50_users` | 9.09 µs       | 22.46 µs           | 455 / 12.0 KiB | 2.47×   |
+| `exec/simple`           | 89.8 ns       | 147.2 ns           | 4 / 160 B      | 1.64×   |
+| `exec/printf`           | 364.8 ns      | 618.9 ns           | 14 / 456 B     | 1.70×   |
+| `exec/range_100`        | 3.36 µs       | 9.30 µs            | 103 / 960 B    | 2.77×   |
+| `exec/complex_50_users` | 9.84 µs       | 22.46 µs           | 455 / 12.0 KiB | 2.28×   |
 
 The gap opens up fast once there's iteration or any real data to walk. Go pays
 for reflection on every field access; here we dispatch directly on the `Value`

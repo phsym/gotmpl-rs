@@ -25,6 +25,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Write;
 
+use crate::parse::SmolStr;
+
 #[cfg(feature = "std")]
 use std::any::Any;
 #[cfg(feature = "std")]
@@ -136,11 +138,12 @@ impl From<core::fmt::Error> for ExecSignal {
 type ExecResult<T> = core::result::Result<T, ExecSignal>;
 
 /// Variable scope: a stack of name→value mappings.
-/// New scopes are pushed for range/with blocks. Keys are `Arc<str>` so that
-/// identifiers coming from the parser (already stored as `Arc<str>`) can be
-/// inserted without re-allocating a `String` per `set`/`assign`.
+/// New scopes are pushed for range/with blocks. Keys are [`SmolStr`] so that
+/// short identifiers coming from the parser (already stored as `SmolStr`)
+/// inline up to 22 bytes — avoiding the heap allocation and atomic refcount
+/// bump that `Arc<str>` would incur on every `set`/`assign`.
 struct VarScope {
-    frames: Vec<BTreeMap<Arc<str>, Value>>,
+    frames: Vec<BTreeMap<SmolStr, Value>>,
 }
 
 impl VarScope {
@@ -158,16 +161,16 @@ impl VarScope {
         self.frames.pop();
     }
 
-    fn set(&mut self, name: &Arc<str>, val: Value) {
+    fn set(&mut self, name: &SmolStr, val: Value) {
         if let Some(frame) = self.frames.last_mut() {
-            frame.insert(Arc::clone(name), val);
+            frame.insert(name.clone(), val);
         }
     }
 
     /// Set a variable in any existing scope (for assignment with =).
-    fn assign(&mut self, name: &Arc<str>, val: Value) {
+    fn assign(&mut self, name: &SmolStr, val: Value) {
         for frame in self.frames.iter_mut().rev() {
-            if let Some(slot) = frame.get_mut(name.as_ref()) {
+            if let Some(slot) = frame.get_mut(name.as_str()) {
                 *slot = val;
                 return;
             }
@@ -189,10 +192,8 @@ impl VarScope {
 /// Caps attacker-controlled `{{range 10000000000}}` / nested-range DoS.
 pub(crate) const DEFAULT_MAX_RANGE_ITERS: u64 = 10_000_000;
 
-/// Build the `Arc<str>` key used for the template's implicit `$` variable.
-fn dollar_key() -> Arc<str> {
-    Arc::from("$")
-}
+/// Key used for the template's implicit `$` variable.
+const DOLLAR_KEY: SmolStr = SmolStr::new_static("$");
 
 /// The template execution context.
 ///
@@ -321,7 +322,7 @@ impl<'a> Executor<'a> {
         tree: &ListNode,
         dot: &Value,
     ) -> Result<()> {
-        self.vars.set(&dollar_key(), dot.clone());
+        self.vars.set(&DOLLAR_KEY, dot.clone());
         self.walk(writer, tree, dot).map_err(|sig| match sig {
             ExecSignal::Err(e) => *e,
             ExecSignal::Break => TemplateError::Exec("unexpected break outside of range".into()),
@@ -539,7 +540,7 @@ impl<'a> Executor<'a> {
 
         let tree = Arc::clone(
             self.templates
-                .get(tmpl.name.as_ref())
+                .get(tmpl.name.as_str())
                 .ok_or_else(|| TemplateError::UndefinedTemplate(tmpl.name.to_string()))?,
         );
 
@@ -547,7 +548,7 @@ impl<'a> Executor<'a> {
         // a fresh scope containing only `$`, matching Go's walkTemplate which
         // rebuilds `state.vars` as `[{"$", dot}]` before recursing.
         let saved = core::mem::replace(&mut self.vars, VarScope::new());
-        self.vars.set(&dollar_key(), new_dot.clone());
+        self.vars.set(&DOLLAR_KEY, new_dot.clone());
         let result = self.walk(w, &tree, &new_dot);
         self.vars = saved;
         result
@@ -604,7 +605,7 @@ impl<'a> Executor<'a> {
         // If the first arg is an identifier, it's a function call
         if let Expr::Identifier(_, name) = first {
             // Special-case and/or for short-circuit evaluation
-            if name.as_ref() == "and" || name.as_ref() == "or" {
+            if name.as_str() == "and" || name.as_str() == "or" {
                 return self.eval_short_circuit(dot, name, &cmd.args[1..], piped);
             }
             return self.eval_function_call(dot, name, &cmd.args[1..], piped);
@@ -615,7 +616,7 @@ impl<'a> Executor<'a> {
         if let Expr::Chain(_, inner, fields) = first
             && let Expr::Identifier(_, name) = inner.as_ref()
         {
-            if name.as_ref() == "and" || name.as_ref() == "or" {
+            if name.as_str() == "and" || name.as_str() == "or" {
                 let mut val = self.eval_short_circuit(dot, name, &cmd.args[1..], piped)?;
                 for field in fields {
                     val = self.field_access(&val, field)?;
@@ -802,7 +803,7 @@ impl<'a> Executor<'a> {
 
             Expr::Identifier(_, name) => {
                 // Bare identifier, could be a zero-arg function call
-                if let Some(func) = self.funcs.get(name.as_ref()) {
+                if let Some(func) = self.funcs.get(name.as_str()) {
                     return self.invoke_func(name, func, &[]);
                 }
                 Err(TemplateError::UndefinedFunction(name.to_string()).into())
