@@ -1595,7 +1595,8 @@ mod tests {
 
     #[test]
     fn test_url_encode() {
-        assert_eq!(url_encode("hello world"), "hello%20world");
+        // Form-encoding: space → '+', matching Go's url.QueryEscape.
+        assert_eq!(url_encode("hello world"), "hello+world");
     }
 
     #[test]

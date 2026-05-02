@@ -52,6 +52,7 @@ fn clamp_fmt_len(n: usize) -> usize {
 /// Parsed printf format specifier (`flags`, `width`, `precision`).
 ///
 /// Mirrors the subset of Go's `fmt` format grammar that `text/template` uses.
+#[derive(Default)]
 struct FmtSpec {
     left_align: bool,
     plus: bool,
@@ -63,17 +64,8 @@ struct FmtSpec {
 }
 
 impl FmtSpec {
-    fn parse(chars: &mut core::iter::Peekable<core::str::Chars<'_>>) -> Self {
-        let mut spec = FmtSpec {
-            left_align: false,
-            plus: false,
-            space: false,
-            hash: false,
-            zero: false,
-            width: None,
-            precision: None,
-        };
-        // Flags
+    fn from_flags(chars: &mut core::iter::Peekable<core::str::Chars<'_>>) -> Self {
+        let mut spec = FmtSpec::default();
         loop {
             match chars.peek() {
                 Some('-') => {
@@ -98,27 +90,6 @@ impl FmtSpec {
                 }
                 _ => break,
             }
-        }
-        // Width
-        let mut w = String::new();
-        while let Some(c) = chars.next_if(|c| c.is_ascii_digit()) {
-            w.push(c);
-        }
-        if !w.is_empty() {
-            spec.width = w.parse().ok().map(clamp_fmt_len);
-        }
-        // Precision
-        if chars.peek() == Some(&'.') {
-            chars.next();
-            let mut p = String::new();
-            while let Some(c) = chars.next_if(|c| c.is_ascii_digit()) {
-                p.push(c);
-            }
-            spec.precision = Some(if p.is_empty() {
-                0
-            } else {
-                clamp_fmt_len(p.parse().unwrap_or(0))
-            });
         }
         spec
     }
@@ -196,14 +167,156 @@ pub(crate) fn sprintf(fmt_str: &str, args: &[Value]) -> Result<String> {
     Ok(out)
 }
 
+/// Read a run of ASCII digits as a `usize` (saturating on overflow).
+///
+/// Returns `None` if no digits were consumed.
+fn parse_uint_digits(chars: &mut core::iter::Peekable<core::str::Chars<'_>>) -> Option<usize> {
+    let mut n: usize = 0;
+    let mut any = false;
+    while let Some(c) = chars.next_if(|c| c.is_ascii_digit()) {
+        n = n
+            .saturating_mul(10)
+            .saturating_add((c as u8 - b'0') as usize);
+        any = true;
+    }
+    any.then_some(n)
+}
+
+enum ParsedIndex {
+    Absent,
+    /// 1-based; caller validates `N` against `args.len()`.
+    Found(usize),
+    Bad,
+}
+
+enum IndexOutcome {
+    None,
+    Applied,
+    /// Marker was malformed/out-of-range; BADINDEX has been written and the
+    /// caller must `continue`.
+    Bad,
+}
+
+/// Try to parse a `[N]` argument-index marker at the current position.
+///
+/// On a malformed bracket: if a `]` exists later in the format, consume up
+/// to and past it; otherwise consume only the `[` so the remaining chars
+/// (digits, verb) flow back through the regular parse path — `%[1d` ends
+/// up as `%!d(BADINDEX)` rather than a swallowed directive.
+fn try_parse_index(chars: &mut core::iter::Peekable<core::str::Chars<'_>>) -> ParsedIndex {
+    if chars.peek() != Some(&'[') {
+        return ParsedIndex::Absent;
+    }
+    let mut probe = chars.clone();
+    probe.next(); // consume '['
+    if let Some(n) = parse_uint_digits(&mut probe) {
+        if probe.peek() == Some(&']') {
+            probe.next(); // consume ']'
+            *chars = probe;
+            return ParsedIndex::Found(n);
+        }
+    }
+    chars.next(); // consume '['
+    // Only the malformed path needs to know whether a `]` exists later, so
+    // we do the scan here rather than up front.
+    if chars.clone().any(|c| c == ']') {
+        for c in chars.by_ref() {
+            if c == ']' {
+                break;
+            }
+        }
+    }
+    ParsedIndex::Bad
+}
+
+/// Parse an optional `[N]` argument-index marker and apply its effect.
+///
+/// On a valid in-range index, updates `arg_idx`/`reordered` and returns
+/// `Applied`. On out-of-range or malformed `[…]`, writes the BADINDEX marker
+/// into `out`, sets `reordered` (so a trailing `%!(EXTRA …)` doesn't fire
+/// over an unconsumed arg), and returns `Bad` for the caller to `continue`.
+fn consume_index(
+    chars: &mut core::iter::Peekable<core::str::Chars<'_>>,
+    out: &mut String,
+    arg_idx: &mut usize,
+    reordered: &mut bool,
+    args_len: usize,
+) -> IndexOutcome {
+    match try_parse_index(chars) {
+        ParsedIndex::Absent => IndexOutcome::None,
+        ParsedIndex::Found(n) if n >= 1 && n <= args_len => {
+            *arg_idx = n - 1;
+            *reordered = true;
+            IndexOutcome::Applied
+        }
+        ParsedIndex::Found(_) | ParsedIndex::Bad => {
+            let verb = skip_to_verb(chars);
+            let _ = write!(out, "%!{}(BADINDEX)", verb);
+            *reordered = true;
+            IndexOutcome::Bad
+        }
+    }
+}
+
+/// Read `args[*arg_idx]` for `*` width / `.*` precision.
+///
+/// A wrong-type arg is still considered "consumed" (the cursor advances and
+/// `Err(())` is returned); a missing arg does not advance the cursor. This
+/// asymmetry matches Go's behavior so a trailing `MISSING` marker still
+/// fires for the verb when no width arg was actually present.
+fn take_int_arg(args: &[Value], arg_idx: &mut usize) -> core::result::Result<i64, ()> {
+    match args.get(*arg_idx) {
+        Some(&Value::Int(n)) => {
+            *arg_idx += 1;
+            Ok(n)
+        }
+        Some(_) => {
+            *arg_idx += 1;
+            Err(())
+        }
+        None => Err(()),
+    }
+}
+
+/// Skip ahead to the verb char (the next non-flag/digit/dot/star/bracket).
+/// Used after a BADINDEX to drain the rest of the directive.
+fn skip_to_verb(chars: &mut core::iter::Peekable<core::str::Chars<'_>>) -> char {
+    let mut in_brackets = false;
+    while let Some(&c) = chars.peek() {
+        if in_brackets {
+            chars.next();
+            if c == ']' {
+                in_brackets = false;
+            }
+            continue;
+        }
+        match c {
+            '-' | '+' | ' ' | '#' | '0' | '.' | '*' => {
+                chars.next();
+            }
+            '[' => {
+                chars.next();
+                in_brackets = true;
+            }
+            c if c.is_ascii_digit() => {
+                chars.next();
+            }
+            _ => {
+                chars.next();
+                return c;
+            }
+        }
+    }
+    '?'
+}
+
 /// Format directly into `out`. Each verb writes its value at `out.len()`,
-/// then pads in place. The only remaining per-verb intermediate `String`
-/// allocations are the unavoidable `format!("{:e}", f)` temps used by
-/// `write_g_*` and the `%e`/`%E` verbs to produce Rust's scientific form
-/// before normalizing it into Go's format.
+/// then pads in place. Supports Go's `[N]` argument indexing and `*` /
+/// `.*` dynamic width/precision.
 fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
     let mut chars = fmt_str.chars().peekable();
-    let mut arg_idx = 0;
+    let mut arg_idx: usize = 0;
+    let mut reordered = false;
 
     while let Some(ch) = chars.next() {
         if ch != '%' {
@@ -211,7 +324,68 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
             continue;
         }
 
-        let spec = FmtSpec::parse(&mut chars);
+        let mut spec = FmtSpec::from_flags(&mut chars);
+
+        // Optional `[N]` after flags (the grammar puts the index *after*
+        // flags, not before — so `%[1]-d` parses `-` as the verb, not as
+        // a left-align flag).
+        let first_index = consume_index(&mut chars, out, &mut arg_idx, &mut reordered, args.len());
+        if matches!(first_index, IndexOutcome::Bad) {
+            continue;
+        }
+        let had_index_marker = !matches!(first_index, IndexOutcome::None);
+
+        let mut bad_width = false;
+        if chars.peek() == Some(&'*') {
+            chars.next();
+            // `*` accepts only `int` (float64, string, etc. all yield
+            // BADWIDTH) — matched on `Value::Int` directly so floats don't
+            // silently truncate via `as_int`.
+            match take_int_arg(args, &mut arg_idx) {
+                Ok(n) if n >= 0 => spec.width = Some(clamp_fmt_len(n as usize)),
+                Ok(n) => {
+                    // Negative width → left-align with magnitude as width.
+                    // `as usize` may truncate on 32-bit targets for very
+                    // large magnitudes, but `clamp_fmt_len` caps the final
+                    // width at u16::MAX regardless, so the bound holds.
+                    spec.left_align = true;
+                    let mag = n.unsigned_abs() as usize;
+                    spec.width = Some(clamp_fmt_len(mag));
+                }
+                Err(()) => bad_width = true,
+            }
+        } else if let Some(w) = parse_uint_digits(&mut chars) {
+            spec.width = Some(clamp_fmt_len(w));
+        }
+
+        let mut bad_prec = false;
+        if chars.peek() == Some(&'.') {
+            chars.next();
+            if chars.peek() == Some(&'*') {
+                chars.next();
+                // Same int-only rule as `*` width; negative precision is bad.
+                match take_int_arg(args, &mut arg_idx) {
+                    Ok(n) if n >= 0 => spec.precision = Some(clamp_fmt_len(n as usize)),
+                    _ => bad_prec = true,
+                }
+            } else {
+                // Empty digits (`%.f`) → precision 0.
+                let p = parse_uint_digits(&mut chars).unwrap_or(0);
+                spec.precision = Some(clamp_fmt_len(p));
+            }
+        }
+
+        // Optional `[N]` immediately before the verb. Skipped if a prior
+        // `[N]` already fired in this directive, to avoid double-reorder
+        // on `%[1][2]d`.
+        if !had_index_marker
+            && matches!(
+                consume_index(&mut chars, out, &mut arg_idx, &mut reordered, args.len()),
+                IndexOutcome::Bad
+            )
+        {
+            continue;
+        }
 
         let verb = match chars.next() {
             Some(v) => v,
@@ -226,7 +400,13 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
             continue;
         }
 
-        // Consume the next argument, or emit MISSING.
+        if bad_width {
+            out.push_str("%!(BADWIDTH)");
+        }
+        if bad_prec {
+            out.push_str("%!(BADPREC)");
+        }
+
         let arg = if arg_idx < args.len() {
             arg_idx += 1;
             &args[arg_idx - 1]
@@ -237,15 +417,18 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
 
         let start = out.len();
         match verb {
-            's' => {
-                match spec.precision {
-                    Some(prec) => write_display_truncated(out, arg, prec),
-                    None => {
-                        let _ = write!(out, "{}", arg);
+            's' => match arg {
+                Value::String(_) => {
+                    match spec.precision {
+                        Some(prec) => write_display_truncated(out, arg, prec),
+                        None => {
+                            let _ = write!(out, "{}", arg);
+                        }
                     }
+                    spec.pad_in_place(out, start, false);
                 }
-                spec.pad_in_place(out, start, false);
-            }
+                _ => write_bad_verb(out, verb, arg),
+            },
             'd' => match arg.as_int() {
                 Some(n) => {
                     spec.write_signed(out, n);
@@ -300,6 +483,30 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
                 let _ = write!(out, "{}", arg);
                 spec.pad_in_place(out, start, false);
             }
+            'U' => match arg {
+                Value::Int(n) => {
+                    // Go casts the int to uint64 and prints as hex with min 4 digits,
+                    // so negative ints wrap (`-1` → `U+FFFFFFFFFFFFFFFF`) and values
+                    // outside the Unicode range still format as bare hex.
+                    let u = *n as u64;
+                    let _ = write!(out, "U+{:04X}", u);
+                    if spec.hash {
+                        // Only quote when the value is a valid, non-control rune.
+                        // Surrogates, > U+10FFFF, and control chars get no quote —
+                        // matching Go's `strconv.IsPrint` gate (close enough for
+                        // ASCII; full Unicode-graphic parity would need a table).
+                        if let Some(c) = u32::try_from(u)
+                            .ok()
+                            .and_then(char::from_u32)
+                            .filter(|c| !c.is_control())
+                        {
+                            let _ = write!(out, " '{}'", c);
+                        }
+                    }
+                    spec.pad_in_place(out, start, false);
+                }
+                _ => write_bad_verb(out, verb, arg),
+            },
             'q' => match arg {
                 Value::String(s) => {
                     if !(spec.hash && try_backquote_into(out, s)) {
@@ -352,6 +559,22 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
         }
     }
 
+    // Trailing %!(EXTRA …) marker for unconsumed args.
+    //
+    // Go suppresses EXTRA when any [N] indexing was used in the directive —
+    // tracking which args got read in that case is too expensive and not
+    // unambiguous anyway.
+    if !reordered && arg_idx < args.len() {
+        out.push_str("%!(EXTRA ");
+        for (i, v) in args[arg_idx..].iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            write_bad_arg(out, v);
+        }
+        out.push(')');
+    }
+
     Ok(())
 }
 
@@ -401,15 +624,30 @@ fn apply_float_sign_in_place(out: &mut String, start: usize, f: f64, spec: &FmtS
 }
 
 /// Emit Go's `%!verb(type=value)` marker for a type-mismatched or unknown verb.
+///
+/// Nil is a special case: Go emits `%!verb(<nil>)` without the `nil=` prefix.
 fn write_bad_verb(out: &mut String, verb: char, arg: &Value) {
-    let _ = write!(out, "%!{}({}=", verb, arg.type_name());
+    out.push_str("%!");
+    out.push(verb);
+    out.push('(');
+    write_bad_arg(out, arg);
+    out.push(')');
+}
+
+/// Emit the `type=value` (or bare `<nil>`) form used inside `%!verb(...)`
+/// and `%!(EXTRA …)` markers.
+fn write_bad_arg(out: &mut String, arg: &Value) {
+    if matches!(arg, Value::Nil) {
+        out.push_str("<nil>");
+        return;
+    }
+    let _ = write!(out, "{}=", arg.type_name());
     match arg {
         Value::String(s) => out.push_str(s),
         other => {
             let _ = write!(out, "{}", other);
         }
     }
-    out.push(')');
 }
 
 /// `%x` / `%X` on strings: hex-encode each byte into `out`.
@@ -470,6 +708,10 @@ fn try_backquote_into(out: &mut String, s: &str) -> bool {
         return false;
     }
     for ch in s.chars() {
+        // Mirrors Go's strconv.CanBackquote: reject ASCII control chars
+        // (U+0000..U+001F plus DEL) except tab, which is allowed inside
+        // backticks. Non-ASCII chars pass through — Rust's &str already
+        // guarantees valid UTF-8, which is the other half of Go's rule.
         if ch != '\t' && (ch < ' ' || ch == '\x7F') {
             return false;
         }
@@ -699,8 +941,9 @@ pub fn html_escape(s: &str) -> String {
 /// JavaScript-escape a string for safe embedding in JS string literals.
 ///
 /// Matches Go's `template.JSEscapeString`. Escapes backslash, quotes,
-/// newlines, tabs, angle brackets (`<`, `>`), ampersand, equals sign,
-/// and all control characters below U+0020 as `\uXXXX`.
+/// angle brackets (`<`, `>`), ampersand, equals sign, all control
+/// characters below U+0020, and the JSON-in-HTML-hostile line/paragraph
+/// separators U+2028 / U+2029 — all as `\uXXXX`.
 pub fn js_escape(s: &str) -> String {
     let mut out = String::new();
     for ch in s.chars() {
@@ -714,6 +957,11 @@ pub fn js_escape(s: &str) -> String {
             '>' => out.push_str("\\u003E"),
             '&' => out.push_str("\\u0026"),
             '=' => out.push_str("\\u003D"),
+            // U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR — valid
+            // in JSON but illegal mid-string in JavaScript pre-ES2019.
+            // Go escapes both to keep `<script>` payloads safe.
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
             _ if (ch as u32) < 0x20 => {
                 write!(out, "\\u{:04X}", ch as u32).ok();
             }
@@ -723,10 +971,11 @@ pub fn js_escape(s: &str) -> String {
     out
 }
 
-/// Percent-encode a string for use in URL query parameters (RFC 3986).
+/// Percent-encode a string for use in URL query parameters (form-encoding).
 ///
-/// Unreserved characters (`A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `~`) are
-/// passed through; everything else is encoded as `%XX`.
+/// Matches Go's `template.URLQueryEscaper` / `url.QueryEscape`: unreserved
+/// characters (`A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `~`) pass through, space
+/// becomes `+`, and everything else is `%XX`-encoded.
 pub fn url_encode(s: &str) -> String {
     let mut out = String::new();
     for byte in s.bytes() {
@@ -734,6 +983,7 @@ pub fn url_encode(s: &str) -> String {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(byte as char);
             }
+            b' ' => out.push('+'),
             _ => {
                 write!(out, "%{:02X}", byte).ok();
             }
@@ -1264,7 +1514,8 @@ mod tests {
     // url_encode
     #[test]
     fn url_basic() {
-        assert_eq!(url_encode("hello world"), "hello%20world");
+        // Form-encoding: space → '+', not '%20'.
+        assert_eq!(url_encode("hello world"), "hello+world");
     }
 
     #[test]
@@ -1346,9 +1597,11 @@ mod tests {
 
     #[test]
     fn sprintf_s_non_string() {
-        assert_eq!(sf("%s", &[Value::Int(42)]), "42");
-        assert_eq!(sf("%s", &[Value::Bool(true)]), "true");
-        assert_eq!(sf("%s", &[Value::Nil]), "<nil>");
+        // Go's `%s` rejects non-string args, emitting `%!s(type=value)`.
+        assert_eq!(sf("%s", &[Value::Int(42)]), "%!s(int=42)");
+        assert_eq!(sf("%s", &[Value::Bool(true)]), "%!s(bool=true)");
+        // Nil: bare `<nil>` (no `nil=` prefix), matching Go.
+        assert_eq!(sf("%s", &[Value::Nil]), "%!s(<nil>)");
     }
 
     #[test]

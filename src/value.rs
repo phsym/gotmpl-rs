@@ -179,11 +179,14 @@ impl Value {
         }
     }
 
-    /// Index into a [`Value::List`] (by integer) or [`Value::Map`] (by string).
+    /// Index into a [`Value::List`] (by integer), [`Value::Map`] (by string),
+    /// or [`Value::String`] (by integer, returning the raw byte).
     ///
     /// Mirrors Go's `index` builtin semantics:
     /// - **List + Int**: returns the element, or an error if out of bounds.
     /// - **Map + String**: returns the value, or [`Value::Nil`] for missing keys.
+    /// - **String + Int**: returns the byte at that offset as a [`Value::Int`]
+    ///   (Go indexes strings as `[]byte`; mid-codepoint offsets are valid).
     /// - **Nil + anything**: returns an error (`index of untyped nil`).
     /// - **Other combinations**: returns an error (type mismatch).
     ///
@@ -192,17 +195,15 @@ impl Value {
     /// Returns an error on out-of-bounds list access, indexing with an
     /// incompatible key type, or indexing a non-indexable value.
     pub fn index(&self, idx: &Value) -> Result<Value> {
-        match (self, idx) {
-            (Value::List(v), Value::Int(i)) => {
-                if *i < 0 {
-                    return Err(crate::error::TemplateError::IndexOutOfRange { index: *i });
-                }
-                let idx = *i as usize;
-                if idx >= v.len() {
-                    return Err(crate::error::TemplateError::IndexOutOfRange { index: *i });
-                }
-                Ok(v[idx].clone())
+        fn check_bounds(i: i64, len: usize) -> Result<usize> {
+            if i < 0 || (i as usize) >= len {
+                Err(crate::error::TemplateError::IndexOutOfRange { index: i })
+            } else {
+                Ok(i as usize)
             }
+        }
+        match (self, idx) {
+            (Value::List(v), Value::Int(i)) => Ok(v[check_bounds(*i, v.len())?].clone()),
             (Value::List(_), _) => Err(crate::error::TemplateError::Exec(format!(
                 "cannot index list with type {}",
                 idx.type_name()
@@ -212,6 +213,17 @@ impl Value {
             }
             (Value::Map(_), _) => Err(crate::error::TemplateError::Exec(format!(
                 "cannot index map with type {}",
+                idx.type_name()
+            ))),
+            // Go indexes strings as `[]byte` — mid-codepoint offsets are
+            // valid since Go has no UTF-8 invariant. We surface the byte as
+            // a `Value::Int` to keep that semantic without breaking ours.
+            (Value::String(s), Value::Int(i)) => {
+                let bytes = s.as_bytes();
+                Ok(Value::Int(bytes[check_bounds(*i, bytes.len())?] as i64))
+            }
+            (Value::String(_), _) => Err(crate::error::TemplateError::Exec(format!(
+                "cannot index string with type {}",
                 idx.type_name()
             ))),
             (Value::Nil, _) => Err(crate::error::TemplateError::Exec(

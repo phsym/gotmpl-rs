@@ -24,13 +24,16 @@
 //! - `html` does **not** escape backticks and is only safe inside
 //!   double-quoted attribute values or text nodes. Never use it in unquoted
 //!   attributes, `<script>` blocks, or inline event handlers.
-//! - `js` does **not** escape U+2028 / U+2029 (line / paragraph separator),
-//!   which terminate string literals when embedded in `<script>` tags.
-//! - `urlquery` percent-encodes for query strings; it is not a replacement
-//!   for full URL-construction logic when building paths.
+//! - `js` escapes the JS string-literal metacharacters plus `<`, `>`, `&`,
+//!   `=`, control chars, and U+2028 / U+2029 — but produces output suitable
+//!   for embedding inside a JS string literal, not arbitrary JS contexts.
+//! - `urlquery` percent-encodes for query strings (form-encoded: space → `+`)
+//!   and is not a replacement for full URL-construction logic when building
+//!   paths.
 //!
 //! For context-aware escaping use a dedicated `html/template`-style crate.
 
+use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -331,7 +334,7 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
         "html".into(),
         Arc::new(|args: &[Value]| {
             check_args("html", args, 1)?;
-            let s = format!("{}", args[0]);
+            let s = stringify_for_escaper(&args[0]);
             Ok(Value::String(Arc::from(go::html_escape(&s))))
         }),
     );
@@ -340,7 +343,7 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
         "js".into(),
         Arc::new(|args: &[Value]| {
             check_args("js", args, 1)?;
-            let s = format!("{}", args[0]);
+            let s = stringify_for_escaper(&args[0]);
             Ok(Value::String(Arc::from(go::js_escape(&s))))
         }),
     );
@@ -349,12 +352,26 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
         "urlquery".into(),
         Arc::new(|args: &[Value]| {
             check_args("urlquery", args, 1)?;
-            let s = format!("{}", args[0]);
+            let s = stringify_for_escaper(&args[0]);
             Ok(Value::String(Arc::from(go::url_encode(&s))))
         }),
     );
 
     m
+}
+
+/// Stringify a value the way Go's `evalArgs` does for `html` / `js` /
+/// `urlquery`: nil renders as `<no value>` (the template engine's missing-
+/// value sentinel), not `<nil>` (which is what `fmt.Sprint(nil)` gives).
+///
+/// Returns `Cow` so the `Value::String` case — the typical input — borrows
+/// instead of cloning.
+fn stringify_for_escaper(v: &Value) -> Cow<'_, str> {
+    match v {
+        Value::Nil => Cow::Borrowed("<no value>"),
+        Value::String(s) => Cow::Borrowed(s.as_ref()),
+        _ => Cow::Owned(format!("{}", v)),
+    }
 }
 
 // Argument validation helpers

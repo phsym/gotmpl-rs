@@ -124,11 +124,11 @@ Actions are delimited by `{{` and `}}` (configurable via `.delims()`).
 ### `printf` verbs and flags
 
 Format strings follow Go's [`fmt`](https://pkg.go.dev/fmt) syntax:
-`%[flags][width][.precision]verb`.
+`%[flags][width][.precision][argument index]verb`.
 
 | Verb       | Applies to        | Output                                          |
 | ---------- | ----------------- | ----------------------------------------------- |
-| `%s`       | any               | Default string representation (`Display`)       |
+| `%s`       | string            | The string itself                               |
 | `%q`       | string, int(rune) | Go-quoted string, or single-quoted rune literal |
 | `%v`       | any               | Default formatted value                         |
 | `%d`       | int               | Decimal                                         |
@@ -136,6 +136,7 @@ Format strings follow Go's [`fmt`](https://pkg.go.dev/fmt) syntax:
 | `%o`       | int               | Octal                                           |
 | `%x`, `%X` | int, string       | Lower/upper hex (on strings: hex of each byte)  |
 | `%c`       | int               | Unicode scalar                                  |
+| `%U`       | int               | Unicode `U+XXXX` (with `#`: appends `'c'`)      |
 | `%f`       | float             | Decimal, no exponent                            |
 | `%e`, `%E` | float             | Scientific notation (lower/upper `e`)           |
 | `%g`, `%G` | float             | `%e`/`%E` for large exponents, else `%f`        |
@@ -143,9 +144,19 @@ Format strings follow Go's [`fmt`](https://pkg.go.dev/fmt) syntax:
 | `%%`       | —                 | Literal `%`                                     |
 
 Flags: `-` (left-align), `+` (always sign numerics), ` ` (leading space for non-negative
-numerics), `#` (alternate form: `0b`/`0o`/`0x`/`0X` prefix), `0` (zero-pad numerics).
-Width and `.precision` are both supported. Mismatched verb/argument pairs produce Go's
-`%!v(BADVERB)` / `%!v(MISSING)` markers rather than panicking.
+numerics), `#` (alternate form: `0b`/`0o`/`0x`/`0X` prefix, or quoted rune for `%U`),
+`0` (zero-pad numerics).
+
+Width and `.precision` accept either a literal number or `*` / `.*` to read the value
+from the next argument (which must be an `int` — floats and other types yield
+`%!(BADWIDTH)` / `%!(BADPREC)`).
+
+Argument indexing with `%[N]verb` selects the N-th (1-based) argument and resets the
+sequential cursor. Out-of-range or malformed indices produce `%!verb(BADINDEX)`.
+
+Mismatched verb/argument pairs produce Go's error markers rather than panicking:
+`%!v(BADVERB)`, `%!v(MISSING)`, `%!(EXTRA …)` for unconsumed args, and the
+`BADWIDTH` / `BADPREC` / `BADINDEX` forms above.
 
 ## Custom functions
 
@@ -293,6 +304,29 @@ Rust has no runtime reflection, so:
 - **No pointer/interface indirection**: `Value` is always concrete
 - **No complex numbers, channels, or `iter.Seq`**
 - **NaN comparisons** return an error instead of Go's silently wrong results
+
+API shape is also a bit different:
+
+- **`Template::lookup`** returns the parsed body (`Option<&ListNode>`) rather
+  than a re-executable `*Template`. To run a named definition, use
+  `execute_template_to_string("name", ...)` on the parent.
+- **`Template::templates`** returns the list of defined names, not `Template`
+  objects — definitions share the parent's func map and options, so there's
+  no per-definition handle to hand back.
+- **`parse_files`** requires the files to be valid UTF-8. Go's `os.ReadFile` +
+  `string(b)` is a zero-copy reinterpret and accepts any bytes; we use
+  `std::fs::read_to_string`, which validates.
+
+A few formatting and slicing edge cases diverge too:
+
+- **`%#v`** falls back to `%v`. Go's Go-syntax output (`[]interface {}{1, 2, 3}`,
+  `map[string]interface {}{"a":1}`) needs concrete-type info we don't carry.
+- **`%#U`** quotes some non-ASCII codepoints that Go skips. Our gate is
+  `char::is_control`; Go uses the full `strconv.IsPrint` table, which also
+  rejects non-ASCII spacing characters like U+00A0.
+- **`slice` on a string** at a mid-codepoint offset returns an error. Go would
+  hand back the raw bytes (potentially invalid UTF-8); we can't store invalid
+  UTF-8 in `Value::String`, so we reject the slice instead.
 
 ## Go cross-check
 

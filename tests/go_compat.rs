@@ -71,16 +71,20 @@ mod go_crosscheck {
     }
 
     /// Encode a `Value` as our typed-JSON protocol.
-    /// Returns `None` for `Value::Function` (cannot be serialized).
-    fn value_to_json(v: &Value) -> Option<String> {
-        Some(match v {
+    ///
+    /// Returns `Err(reason)` for values that can't survive the round-trip:
+    /// `Value::Function` (closures have no JSON representation) and
+    /// non-finite `Value::Float` (NaN / ±∞ aren't valid JSON numbers).
+    /// Callers panic on `Err` rather than silently skipping — see
+    /// [`check`] for the rationale.
+    fn value_to_json(v: &Value) -> Result<String, &'static str> {
+        Ok(match v {
             Value::Nil => r#"{"type":"nil"}"#.to_string(),
             Value::Bool(b) => format!(r#"{{"type":"bool","value":{b}}}"#),
             Value::Int(n) => format!(r#"{{"type":"int","value":{n}}}"#),
             Value::Float(f) => {
-                // JSON doesn't support inf/nan; bail out.
                 if f.is_infinite() || f.is_nan() {
-                    return None;
+                    return Err("Value::Float is NaN or infinite (not representable in JSON)");
                 }
                 // Ensure there's always a decimal point so Go reads float64.
                 let s = if f.fract() == 0.0 && !f.is_nan() {
@@ -94,7 +98,7 @@ mod go_crosscheck {
                 format!(r#"{{"type":"string","value":"{}"}}"#, json_escape(s))
             }
             Value::List(items) => {
-                let encoded: Option<Vec<String>> = items.iter().map(value_to_json).collect();
+                let encoded: Result<Vec<String>, _> = items.iter().map(value_to_json).collect();
                 let encoded = encoded?;
                 format!(r#"{{"type":"list","items":[{}]}}"#, encoded.join(","))
             }
@@ -106,16 +110,30 @@ mod go_crosscheck {
                 }
                 format!(r#"{{"type":"map","map":{{{}}}}}"#, entries.join(","))
             }
-            Value::Function(_) => return None,
+            Value::Function(_) => {
+                return Err(
+                    "Value::Function cannot be serialized for cross-check; use \
+                     Template::new(...).func(...).parse(...).execute_to_string(...) \
+                     directly in a #[test] fn instead of ok()/fail()",
+                );
+            }
         })
     }
 
     /// Run the same template+data through Go's text/template and assert the
     /// output matches `rust_result`.
+    ///
+    /// Panics if `data` can't be JSON-serialized for the Go helper. Silent
+    /// skipping risked tests that *looked* cross-checked but weren't — better
+    /// to fail loudly so the author switches to the direct
+    /// `Template::new().execute_to_string()` pattern instead of `ok()`/`fail()`.
     pub fn check(template_str: &str, data: &Value, rust_result: &str) {
         let data_json = match value_to_json(data) {
-            Some(j) => j,
-            None => return, // skip un-serializable data (e.g. Function values)
+            Ok(j) => j,
+            Err(reason) => panic!(
+                "Cross-check refused for template {:?}: {}",
+                template_str, reason
+            ),
         };
         let payload = format!(
             r#"{{"template":"{}","data":{}}}"#,
@@ -160,10 +178,15 @@ mod go_crosscheck {
     /// Run the same template+data through Go's text/template and assert it
     /// also errors. Used by `fail()` to guard against the silent-parity-gap
     /// where Rust rejects a template that Go actually accepts.
+    ///
+    /// Panics on un-serializable data — see [`check`] for the rationale.
     pub fn check_fails(template_str: &str, data: &Value) {
         let data_json = match value_to_json(data) {
-            Some(j) => j,
-            None => return, // skip un-serializable data (e.g. Function values)
+            Ok(j) => j,
+            Err(reason) => panic!(
+                "Cross-check refused for template {:?}: {}",
+                template_str, reason
+            ),
         };
         let payload = format!(
             r#"{{"template":"{}","data":{}}}"#,
@@ -3798,4 +3821,999 @@ fn test_huge_range_rejected() {
         "expected range-budget error, got {:?}",
         r
     );
+}
+
+// printf — wrong-type and error markers end-to-end.
+#[test]
+fn test_printf_bad_verb_d_on_string() {
+    ok(r#"{{printf "%d" "foo"}}"#, &Value::Nil, "%!d(string=foo)");
+}
+
+#[test]
+fn test_printf_bad_verb_s_on_int() {
+    // Go's `%s` is string-only and emits `%!s(int=42)` for non-strings.
+    ok(r#"{{printf "%s" 42}}"#, &Value::Nil, "%!s(int=42)");
+}
+
+#[test]
+fn test_printf_bad_verb_f_on_string() {
+    ok(r#"{{printf "%f" "x"}}"#, &Value::Nil, "%!f(string=x)");
+}
+
+#[test]
+fn test_printf_bad_verb_t_on_int() {
+    ok(r#"{{printf "%t" 1}}"#, &Value::Nil, "%!t(int=1)");
+}
+
+#[test]
+fn test_printf_missing_single() {
+    ok(r#"{{printf "%d"}}"#, &Value::Nil, "%!d(MISSING)");
+}
+
+#[test]
+fn test_printf_missing_second() {
+    ok(r#"{{printf "%d %d" 1}}"#, &Value::Nil, "1 %!d(MISSING)");
+}
+
+#[test]
+fn test_printf_extra_arg() {
+    ok(r#"{{printf "%d" 1 2}}"#, &Value::Nil, "1%!(EXTRA int=2)");
+}
+
+#[test]
+fn test_printf_extra_args_multiple() {
+    ok(
+        r#"{{printf "%d" 1 2 3}}"#,
+        &Value::Nil,
+        "1%!(EXTRA int=2, int=3)",
+    );
+}
+
+// printf — argument reordering with `%[N]verb`.
+#[test]
+fn test_printf_reorder_two_args() {
+    ok(
+        r#"{{printf "%[2]s %[1]s" "a" "b"}}"#,
+        &Value::Nil,
+        "b a",
+    );
+}
+
+#[test]
+fn test_printf_reorder_repeat_same_arg() {
+    ok(r#"{{printf "%[1]d %[1]d" 7}}"#, &Value::Nil, "7 7");
+}
+
+#[test]
+fn test_printf_reorder_bad_index() {
+    ok(r#"{{printf "%[3]d" 1 2}}"#, &Value::Nil, "%!d(BADINDEX)");
+}
+
+// printf — dynamic width / precision via `*`.
+#[test]
+fn test_printf_dynamic_width() {
+    ok(r#"{{printf "%*d" 5 42}}"#, &Value::Nil, "   42");
+}
+
+#[test]
+fn test_printf_dynamic_precision() {
+    ok(r#"{{printf "%.*f" 3 3.14159}}"#, &Value::Nil, "3.142");
+}
+
+#[test]
+fn test_printf_dynamic_width_and_precision() {
+    ok(
+        r#"{{printf "%*.*f" 10 3 3.14159}}"#,
+        &Value::Nil,
+        "     3.142",
+    );
+}
+
+#[test]
+fn test_printf_dynamic_width_bad_type() {
+    ok(
+        r#"{{printf "%*d" "x" 42}}"#,
+        &Value::Nil,
+        "%!(BADWIDTH)42",
+    );
+}
+
+#[test]
+fn test_printf_dynamic_precision_bad_type() {
+    ok(
+        r#"{{printf "%.*d" "x" 42}}"#,
+        &Value::Nil,
+        "%!(BADPREC)42",
+    );
+}
+
+#[test]
+fn test_printf_dynamic_width_float_is_bad() {
+    // Go's `*` accepts only `int`-typed args — float64 yields BADWIDTH.
+    // The float arg is still consumed (matches Go's `intFromArg`).
+    ok(
+        r#"{{printf "%*d" 1.5 42}}"#,
+        &Value::Nil,
+        "%!(BADWIDTH)42",
+    );
+}
+
+#[test]
+fn test_printf_dynamic_precision_float_is_bad() {
+    // Bad precision falls through to %f's default precision (6).
+    ok(
+        r#"{{printf "%.*f" 1.5 3.14}}"#,
+        &Value::Nil,
+        "%!(BADPREC)3.140000",
+    );
+}
+
+#[test]
+fn test_printf_dynamic_mixed_good_width_bad_prec() {
+    // `%*.*f` — width arg good (5), precision arg bad (string), value 3.14.
+    // Both args are consumed in order; BADPREC marker fires; width still
+    // applies to the (default-precision) formatted value.
+    ok(
+        r#"{{printf "%*.*f" 5 "x" 3.14}}"#,
+        &Value::Nil,
+        "%!(BADPREC)3.140000",
+    );
+}
+
+#[test]
+fn test_printf_dynamic_mixed_bad_width_good_prec() {
+    // Width arg bad (string), precision arg good (2), value 3.14.
+    // BADWIDTH marker fires before the value, but precision still applies.
+    ok(
+        r#"{{printf "%*.*f" "x" 2 3.14}}"#,
+        &Value::Nil,
+        "%!(BADWIDTH)3.14",
+    );
+}
+
+#[test]
+fn test_printf_dynamic_mixed_both_bad() {
+    // Both bad: both markers emit, in width-then-precision order.
+    ok(
+        r#"{{printf "%*.*f" "x" "y" 3.14}}"#,
+        &Value::Nil,
+        "%!(BADWIDTH)%!(BADPREC)3.140000",
+    );
+}
+
+#[test]
+fn test_printf_reorder_zero_index() {
+    // `[0]` is invalid — Go emits BADINDEX (indices are 1-based).
+    ok(r#"{{printf "%[0]d" 1}}"#, &Value::Nil, "%!d(BADINDEX)");
+}
+
+#[test]
+fn test_printf_reorder_unterminated_bracket() {
+    // Unterminated `[` (no closing `]` anywhere): Go consumes just the `[`
+    // and continues parsing — `1` becomes the width, `d` the verb. The
+    // bracket flagged BADINDEX, so the marker uses the resolved verb.
+    ok(r#"{{printf "%[1d" 1}}"#, &Value::Nil, "%!d(BADINDEX)");
+}
+
+#[test]
+fn test_printf_reorder_malformed_bracket_with_closing() {
+    // Malformed `[…]` where `…` isn't a number: Go drains through `]`,
+    // verb is what follows.
+    ok(r#"{{printf "%[x]d" 1}}"#, &Value::Nil, "%!d(BADINDEX)");
+}
+
+#[test]
+fn test_printf_reorder_double_index_second_ignored() {
+    // Go's `argNumber` is only called a second time when no prior `[N]`
+    // fired in this directive (`afterIndex` flag). For `%[1][2]d` the first
+    // `[1]` reorders to arg 1, then `[2]` is left for the verb-parse path:
+    // `[` is the verb, the value of arg 1 is consumed, and the trailing
+    // `]2]d` is plain text.
+    ok(
+        r#"{{printf "%[1][2]d" "a" "b"}}"#,
+        &Value::Nil,
+        "%![(string=a)2]d",
+    );
+}
+
+#[test]
+fn test_printf_reorder_index_then_dynamic_width() {
+    // `%[2]*d` — `[2]` sets the cursor to arg 2 (1-based), `*` reads its
+    // width from there and advances. Verb `d` then needs arg 3, which is
+    // missing. Go and Rust both emit MISSING here.
+    ok(
+        r#"{{printf "%[2]*d" 42 5}}"#,
+        &Value::Nil,
+        "%!d(MISSING)",
+    );
+}
+
+#[test]
+fn test_printf_reorder_index_position_is_after_flags() {
+    // Go's grammar puts `[N]` *after* flags, not before. So `%[1]-d` parses
+    // `-` as the verb (BADVERB) and leaves `d` as plain text, while the
+    // canonical `%-[1]d` parses `-` as a left-align flag and `d` as the
+    // verb. Pinning both to guard against the parse-position regressing.
+    ok(r#"{{printf "%[1]-d" "a"}}"#, &Value::Nil, "%!-(string=a)d");
+    ok(r#"{{printf "%-[1]d" "a"}}"#, &Value::Nil, "%!d(string=a)");
+}
+
+#[test]
+fn test_printf_reorder_index_then_dynamic_width_three_args() {
+    // Same shape with a third arg supplied: `[2]` → cursor=1, `*` consumes
+    // arg[1]=5 (width), verb `d` consumes arg[2]=42 → "   42".
+    ok(
+        r#"{{printf "%[2]*d" 99 5 42}}"#,
+        &Value::Nil,
+        "   42",
+    );
+}
+
+#[test]
+fn test_printf_dynamic_width_negative_left_aligns() {
+    // Go: a negative `*` width sets the left-align flag and uses |n| as the
+    // width. `%*d` with width=-5, value=42 → "42   " (5-wide, left-aligned).
+    ok(r#"{{printf "%*d" -5 42}}"#, &Value::Nil, "42   ");
+}
+
+#[test]
+fn test_printf_dynamic_width_negative_with_explicit_minus() {
+    // `-` flag and negative `*` width: still left-aligns, |n| is the width.
+    // No double-flip — this is just two ways of saying the same thing.
+    ok(r#"{{printf "%-*d" -5 42}}"#, &Value::Nil, "42   ");
+}
+
+// printf — `%U` Unicode verb.
+#[test]
+fn test_printf_unicode_verb_basic() {
+    ok(r#"{{printf "%U" 65}}"#, &Value::Nil, "U+0041");
+}
+
+#[test]
+fn test_printf_unicode_verb_hash_flag() {
+    ok(r#"{{printf "%#U" 65}}"#, &Value::Nil, "U+0041 'A'");
+}
+
+#[test]
+fn test_printf_unicode_verb_supplementary() {
+    // U+1F600 — grinning face emoji.
+    ok(r#"{{printf "%U" 128512}}"#, &Value::Nil, "U+1F600");
+}
+
+#[test]
+fn test_printf_unicode_verb_negative_int_wraps() {
+    // Go casts the int to uint64 and prints as hex — `-1` wraps to all-ones.
+    ok(
+        r#"{{printf "%U" -1}}"#,
+        &Value::Nil,
+        "U+FFFFFFFFFFFFFFFF",
+    );
+}
+
+#[test]
+fn test_printf_unicode_verb_surrogate_no_quote() {
+    // 0xD800 is a high surrogate — invalid as a standalone codepoint.
+    // Bare `%U` prints the hex; `%#U` skips the quoted form (matches Go's
+    // `IsPrint` guard).
+    ok(r#"{{printf "%U" 55296}}"#, &Value::Nil, "U+D800");
+    ok(r#"{{printf "%#U" 55296}}"#, &Value::Nil, "U+D800");
+}
+
+#[test]
+fn test_printf_unicode_verb_above_max_no_quote() {
+    // 0x110000 is one past the Unicode max — print the hex, no quote.
+    ok(r#"{{printf "%U" 1114112}}"#, &Value::Nil, "U+110000");
+    ok(r#"{{printf "%#U" 1114112}}"#, &Value::Nil, "U+110000");
+}
+
+#[test]
+fn test_printf_unicode_verb_hash_on_single_quote() {
+    // `'` (0x27) is printable, so `%#U` quotes it — three single quotes
+    // appear in the output: the opening quote, the literal `'`, the closing
+    // quote. Matches Go.
+    ok(r#"{{printf "%#U" 39}}"#, &Value::Nil, "U+0027 '''");
+}
+
+#[test]
+fn test_printf_unicode_verb_hash_on_control_skips_quote() {
+    // Tab (U+0009) is a control char — Go's `IsPrint` returns false, so
+    // `%#U` does NOT append the quoted form.
+    ok(r#"{{printf "%#U" 9}}"#, &Value::Nil, "U+0009");
+}
+
+#[test]
+fn test_printf_unicode_verb_on_string_is_bad() {
+    // `%U` is integer-only.
+    ok(
+        r#"{{printf "%U" "x"}}"#,
+        &Value::Nil,
+        "%!U(string=x)",
+    );
+}
+
+#[test]
+fn test_printf_unicode_verb_hash_on_nbsp_diverges_from_go() {
+    // U+00A0 NO-BREAK SPACE: Go's `strconv.IsPrint` rejects non-ASCII spacing
+    // as non-printable, so Go's `%#U` skips the quoted form. We gate on
+    // `char::is_control` (category Cc only), so the quote is emitted. Pinned
+    // here so any move to a full IsPrint table is an intentional change.
+    let result = run("{{printf \"%#U\" 160}}", &Value::Nil).unwrap();
+    assert_eq!(result, "U+00A0 '\u{A0}'");
+}
+
+// printf — `%+v` and `%#v`.
+//
+// `%+v` collapses to `%v` since we have no structs to print field names for.
+// `%#v` would need Go-syntax output (`[]interface {}{...}`); we don't track
+// concrete types, so it also falls back to `%v`. The tests below pin that.
+#[test]
+fn test_printf_plus_v_on_list() {
+    let data = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into());
+    ok(r#"{{printf "%+v" .}}"#, &data, "[1 2 3]");
+}
+
+#[test]
+fn test_printf_plus_v_on_map() {
+    let data = tmap! { "a" => 1i64, "b" => 2i64 };
+    ok(r#"{{printf "%+v" .}}"#, &data, "map[a:1 b:2]");
+}
+
+#[test]
+fn test_printf_hash_v_list_diverges_from_go() {
+    // Go would print `[]interface {}{1, 2, 3}`; we fall back to `%v`.
+    let data = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into());
+    let result = run(r#"{{printf "%#v" .}}"#, &data).unwrap();
+    assert_eq!(result, "[1 2 3]");
+}
+
+#[test]
+fn test_printf_hash_v_map_diverges_from_go() {
+    // Go would print `map[string]interface {}{"a":1}`; we fall back to `%v`.
+    let data = tmap! { "a" => 1i64 };
+    let result = run(r#"{{printf "%#v" .}}"#, &data).unwrap();
+    assert_eq!(result, "map[a:1]");
+}
+
+// printf — nil arguments.
+#[test]
+fn test_printf_s_on_nil() {
+    let data = tmap! { "Nil" => Value::Nil };
+    ok(r#"{{printf "%s" .Nil}}"#, &data, "%!s(<nil>)");
+}
+
+#[test]
+fn test_printf_v_on_nil() {
+    let data = tmap! { "Nil" => Value::Nil };
+    ok(r#"{{printf "%v" .Nil}}"#, &data, "<nil>");
+}
+
+#[test]
+fn test_printf_d_on_nil() {
+    let data = tmap! { "Nil" => Value::Nil };
+    ok(r#"{{printf "%d" .Nil}}"#, &data, "%!d(<nil>)");
+}
+
+// printf — escaped chars in format strings.
+#[test]
+fn test_printf_escape_newline() {
+    ok(r#"{{printf "\n"}}"#, &Value::Nil, "\n");
+}
+
+#[test]
+fn test_printf_escape_literal_backslash_n() {
+    // `\\n` in template source → backslash + 'n' literal in the format string.
+    ok(r#"{{printf "\\n"}}"#, &Value::Nil, "\\n");
+}
+
+#[test]
+fn test_printf_escape_quote() {
+    ok(r#"{{printf "\""}}"#, &Value::Nil, "\"");
+}
+
+#[test]
+fn test_printf_escape_tab_with_arg() {
+    ok("{{printf \"\\t%s\" \"x\"}}", &Value::Nil, "\tx");
+}
+
+// `print` and `println` spacing.
+//
+// `print` is `fmt.Sprint`: a space goes between two args only when neither is
+// a string. `println` is `fmt.Sprintln`: always spaces, trailing `\n`.
+
+// print — spacing pairs by type. Other type combinations are covered by the
+// existing `test_print_*` tests above.
+#[test]
+fn test_print_bool_bool_space() {
+    ok("{{print true false}}", &Value::Nil, "true false");
+}
+
+#[test]
+fn test_print_string_bool_no_space() {
+    ok(r#"{{print "a" true}}"#, &Value::Nil, "atrue");
+}
+
+#[test]
+fn test_print_nil_nil_space() {
+    // Two non-strings → space, even when both are nil.
+    ok("{{print nil nil}}", &Value::Nil, "<nil> <nil>");
+}
+
+#[test]
+fn test_print_string_nil_no_space() {
+    ok(r#"{{print "a" nil}}"#, &Value::Nil, "a<nil>");
+}
+
+#[test]
+fn test_print_nil_string_no_space() {
+    ok(r#"{{print nil "a"}}"#, &Value::Nil, "<nil>a");
+}
+
+#[test]
+fn test_print_float_int_space() {
+    ok("{{print 1.5 2}}", &Value::Nil, "1.5 2");
+}
+
+#[test]
+fn test_print_list_list_space() {
+    let data = tmap! { "L" => Value::List(vec![Value::Int(1), Value::Int(2)].into()) };
+    ok("{{print .L .L}}", &data, "[1 2] [1 2]");
+}
+
+#[test]
+fn test_print_string_list_no_space() {
+    let data = tmap! { "L" => Value::List(vec![Value::Int(1), Value::Int(2)].into()) };
+    ok(r#"{{print "a" .L}}"#, &data, "a[1 2]");
+}
+
+#[test]
+fn test_print_list_int_space() {
+    let data = tmap! { "L" => Value::List(vec![Value::Int(1), Value::Int(2)].into()) };
+    ok("{{print .L 1}}", &data, "[1 2] 1");
+}
+
+#[test]
+fn test_print_list_nil_space() {
+    let data = tmap! { "L" => Value::List(vec![Value::Int(1), Value::Int(2)].into()) };
+    ok("{{print .L nil}}", &data, "[1 2] <nil>");
+}
+
+#[test]
+fn test_print_map_int_space() {
+    let data = tmap! { "M" => tmap! { "k" => 1i64 } };
+    ok("{{print .M 1}}", &data, "map[k:1] 1");
+}
+
+// println — edge cases (the no-arg case is already covered above).
+#[test]
+fn test_println_empty_string() {
+    // One arg → no inter-arg space; just the value + newline.
+    ok(r#"{{println ""}}"#, &Value::Nil, "\n");
+}
+
+#[test]
+fn test_println_two_strings() {
+    ok(r#"{{println "a" "b"}}"#, &Value::Nil, "a b\n");
+}
+
+#[test]
+fn test_println_nil() {
+    ok("{{println nil}}", &Value::Nil, "<nil>\n");
+}
+
+// print — composite values.
+#[test]
+fn test_print_map_format() {
+    let data = tmap! { "M" => tmap! { "k" => 1i64 } };
+    ok("{{print .M}}", &data, "map[k:1]");
+}
+
+#[test]
+fn test_print_list_format() {
+    let data = tmap! { "L" => Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into()) };
+    ok("{{print .L}}", &data, "[1 2 3]");
+}
+
+// Comparison builtins: `eq`, `ne`, `lt`, `le`, `gt`, `ge`.
+//
+// Cross-numeric (int↔float) comparisons are rejected by Go 1.22+ and by us;
+// the existing `test_eq_int_float` / `test_lt_int_float` / `test_gt_float_int`
+// (and the `_mixed_` variants) already pin that. The cases below cover the
+// gaps those tests don't reach.
+
+// eq — variadic form: matches when the first arg equals any of the rest.
+#[test]
+fn test_eq_variadic_match_mid() {
+    // 1 0 2 1 → true (matches arg[3])
+    ok("{{eq 1 0 2 1}}", &Value::Nil, "true");
+}
+
+#[test]
+fn test_eq_variadic_no_match() {
+    ok("{{eq 1 0 2 3}}", &Value::Nil, "false");
+}
+
+#[test]
+fn test_eq_variadic_strings() {
+    ok(r#"{{eq "a" "b" "c" "a"}}"#, &Value::Nil, "true");
+}
+
+// Comparison — nil handling. The straight nil/nil and nil/non-nil cases are
+// covered by `test_eq_nil_*` / `test_ne_nil_*` above; these check the corner
+// cases (zero-value int, empty string, bool).
+#[test]
+fn test_eq_nil_zero_int() {
+    // Go: nil != 0 (no implicit zero-value comparison)
+    ok("{{eq nil 0}}", &Value::Nil, "false");
+}
+
+#[test]
+fn test_eq_nil_empty_string() {
+    ok(r#"{{eq nil ""}}"#, &Value::Nil, "false");
+}
+
+#[test]
+fn test_eq_nil_bool() {
+    ok("{{eq nil true}}", &Value::Nil, "false");
+}
+
+#[test]
+fn test_ne_nil_nil_is_false() {
+    ok("{{ne nil nil}}", &Value::Nil, "false");
+}
+
+// Comparison — incompatible types must error rather than coerce.
+#[test]
+fn test_eq_string_int_error() {
+    fail(r#"{{eq "a" 1}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_lt_string_int_error() {
+    fail(r#"{{lt "a" 1}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_eq_int_bool_error() {
+    fail("{{eq 1 true}}", &Value::Nil);
+}
+
+// `index` and `slice`.
+//
+// Many cases are already pinned by existing tests (`test_index_nil_fails`,
+// `test_index_out_of_range`, `test_slice_negative_*`, etc.); the cases below
+// fill the gaps.
+
+// index — edge cases.
+#[test]
+fn test_index_list_negative_fails() {
+    let data = tmap! { "L" => vec![1i64, 2, 3] };
+    fail("{{index .L -1}}", &data);
+}
+
+#[test]
+fn test_index_map_missing_key_returns_nil() {
+    // Go: missing map key → zero value (nil for interface{}).
+    // Printed via println so the bare `<nil>` form surfaces.
+    let data = tmap! { "M" => tmap! { "k" => 1i64 } };
+    ok(
+        r#"{{println (index .M "missing")}}"#,
+        &data,
+        "<nil>\n",
+    );
+}
+
+#[test]
+fn test_index_chained_map_map_list() {
+    // `index .Nested "a" "b" 0` — chains two map lookups then a list index.
+    let data = tmap! {
+        "Nested" => tmap! {
+            "a" => tmap! {
+                "b" => Value::List(vec![Value::Int(10), Value::Int(20)].into())
+            }
+        }
+    };
+    ok(r#"{{index .Nested "a" "b" 0}}"#, &data, "10");
+}
+
+#[test]
+fn test_index_string_returns_byte() {
+    // Go indexes strings as []byte; "héllo" = 0x68 0xC3 0xA9 0x6C 0x6C 0x6F.
+    // Index 0 → 'h' (104). Index 1 → first byte of 'é' (195).
+    ok(r#"{{index "héllo" 0}}"#, &Value::Nil, "104");
+    ok(r#"{{index "héllo" 1}}"#, &Value::Nil, "195");
+    // Mid-char offset is fine for byte indexing.
+    ok(r#"{{index "héllo" 2}}"#, &Value::Nil, "169");
+}
+
+#[test]
+fn test_index_string_out_of_range_fails() {
+    fail(r#"{{index "abc" 5}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_index_string_negative_fails() {
+    fail(r#"{{index "abc" -1}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_index_string_empty_out_of_range_fails() {
+    // Empty string has no bytes — index 0 is out of range, like Go.
+    fail(r#"{{index "" 0}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_index_nil_with_int_still_errors() {
+    // Indexing a `nil` value must hit the existing nil arm, not the new
+    // string-byte arm. Pin the behavior so a future refactor doesn't
+    // accidentally route nil through the string path.
+    let data = tmap! { "Nil" => Value::Nil };
+    fail("{{index .Nil 0}}", &data);
+}
+
+// slice — multibyte strings.
+#[test]
+fn test_slice_string_multibyte_aligned() {
+    // "héllo" — bytes 1..3 are exactly the two bytes of 'é' → "é".
+    ok(r#"{{slice "héllo" 1 3}}"#, &Value::Nil, "é");
+}
+
+#[test]
+fn test_slice_string_cjk_aligned() {
+    // "日本語" — first 3 bytes are the full 3-byte char 日.
+    ok(r#"{{slice "日本語" 0 3}}"#, &Value::Nil, "日");
+}
+
+#[test]
+fn test_slice_string_mid_codepoint_rust_rejects() {
+    // Go would return `\xe6` (a stray byte from 日). We can't store that in
+    // `Value::String` since it has to be valid UTF-8, so we reject the slice
+    // outright — same rationale as `test_string_slice_mid_char_utf8_fails`.
+    fail_rust_only(r#"{{slice "日本語" 0 1}}"#, &Value::Nil);
+}
+
+// slice — boundary positives.
+#[test]
+fn test_slice_list_zero_zero_empty() {
+    let data = tmap! { "L" => vec![1i64, 2, 3] };
+    ok("{{slice .L 0 0}}", &data, "[]");
+}
+
+#[test]
+fn test_slice_list_full_to_full_empty() {
+    let data = tmap! { "L" => vec![1i64, 2, 3] };
+    ok("{{slice .L (len .L) (len .L)}}", &data, "[]");
+}
+
+#[test]
+fn test_slice_list_three_index_zero_zero_zero() {
+    let data = tmap! { "L" => vec![1i64, 2, 3] };
+    ok("{{slice .L 0 0 0}}", &data, "[]");
+}
+
+#[test]
+fn test_slice_list_three_index_zero_zero_cap() {
+    // Capacity = len is also valid for a 3-index slice with an empty range.
+    let data = tmap! { "L" => vec![1i64, 2, 3] };
+    ok("{{slice .L 0 0 3}}", &data, "[]");
+}
+
+// slice — error paths not already covered above (negative start, inverted
+// range, 3-index form on a string).
+#[test]
+fn test_slice_map_fails() {
+    let data = tmap! { "M" => tmap! { "k" => 1i64 } };
+    fail("{{slice .M 0 1}}", &data);
+}
+
+// Logic builtins: `and`, `or`, `not`.
+//
+// Which value is returned by `and` / `or` is already pinned by the existing
+// `test_and_*` / `test_or_*` tests. The cases below go a step further: they
+// register a counter func and assert that short-circuited args are not
+// evaluated at all (Rust-only, since the counter would need a parallel
+// Go-side fixture to cross-check).
+fn run_with_counter(template_str: &str) -> (String, usize) {
+    use alloc::sync::Arc;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = Arc::clone(&counter);
+    let result = Template::new("test")
+        .func("watchFn", move |_args| {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+            Ok(Value::Bool(true))
+        })
+        .parse(template_str)
+        .expect("parse")
+        .execute_to_string(&Value::Nil)
+        .expect("execute");
+    (result, counter.load(Ordering::SeqCst))
+}
+
+#[test]
+fn test_and_false_does_not_invoke_later_args() {
+    let (result, calls) = run_with_counter("{{and false watchFn}}");
+    assert_eq!(result, "false");
+    assert_eq!(calls, 0, "watchFn must NOT be invoked after `and false`");
+}
+
+#[test]
+fn test_or_true_does_not_invoke_later_args() {
+    let (result, calls) = run_with_counter("{{or true watchFn}}");
+    assert_eq!(result, "true");
+    assert_eq!(calls, 0, "watchFn must NOT be invoked after `or true`");
+}
+
+#[test]
+fn test_and_truthy_truthy_falls_through_to_watch_fn() {
+    let (result, calls) = run_with_counter("{{and true true watchFn}}");
+    assert_eq!(result, "true");
+    assert_eq!(
+        calls, 1,
+        "watchFn must be invoked exactly once when both prior args are truthy"
+    );
+}
+
+// Logic — multi-arg cases.
+#[test]
+fn test_and_returns_last_truthy_with_string() {
+    // 1 truthy, "x" truthy, 2 truthy → returns last (2).
+    ok(r#"{{and 1 "x" 2}}"#, &Value::Nil, "2");
+}
+
+#[test]
+fn test_or_with_nil_in_chain_returns_first_truthy() {
+    // 0 falsy, "" falsy, nil falsy, "fallback" truthy → "fallback".
+    ok(r#"{{or 0 "" nil "fallback"}}"#, &Value::Nil, "fallback");
+}
+
+#[test]
+fn test_and_no_args_errors() {
+    fail("{{and}}", &Value::Nil);
+}
+
+#[test]
+fn test_or_no_args_errors() {
+    fail("{{or}}", &Value::Nil);
+}
+
+// `len` and `call`.
+//
+// `len` on a string is the byte count (matching Go's `len` on `string`); the
+// UTF-8 cases for "café" / "🎉" are already covered by `test_utf8_len_*`.
+// `call` tests register one-off funcs because our `Value::Function` doesn't
+// carry arity info — arity is enforced by the closure body itself.
+
+// len.
+#[test]
+fn test_len_empty_string() {
+    ok(r#"{{len ""}}"#, &Value::Nil, "0");
+}
+
+#[test]
+fn test_len_of_empty_slice_expression() {
+    let data = tmap! { "L" => vec![1i64, 2, 3] };
+    ok("{{len (slice .L 0 0)}}", &data, "0");
+}
+
+#[test]
+fn test_len_hello_with_e_acute_byte_count() {
+    // "héllo" = h(1) + é(2) + l(1) + l(1) + o(1) = 6 bytes.
+    ok(r#"{{len "héllo"}}"#, &Value::Nil, "6");
+}
+
+// call. Rust-only — bridging the closure target into Go's funcMap would need
+// parallel registration, and what's under test here (arity checks, error
+// propagation, variadic-style closures) is pure runtime behaviour that
+// doesn't benefit from cross-check.
+#[test]
+fn test_call_propagates_function_error() {
+    use alloc::sync::Arc;
+    let f: gotmpl::ValueFunc = Arc::new(|_args| {
+        Err(gotmpl::TemplateError::Exec("boom from fn".into()))
+    });
+    let data = tmap! { "F" => Value::Function(f) };
+    let result = Template::new("test")
+        .parse("{{call .F}}")
+        .unwrap()
+        .execute_to_string(&data);
+    let err = result.expect_err("expected error to propagate");
+    assert!(
+        err.to_string().contains("boom from fn"),
+        "expected error to mention 'boom from fn', got: {err}"
+    );
+}
+
+#[test]
+fn test_call_arity_too_few_errors() {
+    use alloc::sync::Arc;
+    // Mimic Go's behavior: a 2-arg fn errors when called with 1.
+    let f: gotmpl::ValueFunc = Arc::new(|args| {
+        if args.len() != 2 {
+            return Err(gotmpl::TemplateError::Exec(format!(
+                "wrong number of args: got {} want 2",
+                args.len()
+            )));
+        }
+        Ok(Value::Nil)
+    });
+    let data = tmap! { "F" => Value::Function(f) };
+    let result = Template::new("test")
+        .parse(r#"{{call .F "x"}}"#)
+        .unwrap()
+        .execute_to_string(&data);
+    assert!(
+        result.is_err(),
+        "expected error for too-few args, got Ok({:?})",
+        result.ok()
+    );
+}
+
+#[test]
+fn test_call_arity_too_many_errors() {
+    use alloc::sync::Arc;
+    let f: gotmpl::ValueFunc = Arc::new(|args| {
+        if args.len() != 2 {
+            return Err(gotmpl::TemplateError::Exec(format!(
+                "wrong number of args: got {} want 2",
+                args.len()
+            )));
+        }
+        Ok(Value::Nil)
+    });
+    let data = tmap! { "F" => Value::Function(f) };
+    let result = Template::new("test")
+        .parse(r#"{{call .F "x" "y" "z"}}"#)
+        .unwrap()
+        .execute_to_string(&data);
+    assert!(
+        result.is_err(),
+        "expected error for too-many args, got Ok({:?})",
+        result.ok()
+    );
+}
+
+// Escape funcs: `html`, `js`, `urlquery`.
+//
+// String-input cases are already covered by `test_html_escape`,
+// `test_html_pipeline`, `test_js_escape`, `test_urlquery`, `test_html_nul_byte`,
+// `test_js_escape_*`, `test_html_ps`. The cases below fill in non-string
+// inputs and round out the per-escaper character matrix.
+
+// Escape funcs — non-string inputs. Go's escaper builtins run `fmt.Sprint`
+// on the value first (so nil becomes `<no value>`), then escape.
+#[test]
+fn test_html_int_arg() {
+    ok("{{html 42}}", &Value::Nil, "42");
+}
+
+#[test]
+fn test_html_bool_arg() {
+    ok("{{html true}}", &Value::Nil, "true");
+}
+
+#[test]
+fn test_html_list_arg() {
+    let data = tmap! { "L" => vec![1i64, 2, 3] };
+    ok("{{html .L}}", &data, "[1 2 3]");
+}
+
+#[test]
+fn test_html_nil_arg_is_no_value() {
+    // Go's text/template escapers render nil as `<no value>`, then escape.
+    ok("{{html nil}}", &Value::Nil, "&lt;no value&gt;");
+}
+
+#[test]
+fn test_js_int_arg() {
+    ok("{{js 42}}", &Value::Nil, "42");
+}
+
+#[test]
+fn test_js_nil_arg_is_no_value() {
+    ok("{{js nil}}", &Value::Nil, "\\u003Cno value\\u003E");
+}
+
+#[test]
+fn test_urlquery_int_arg() {
+    ok("{{urlquery 42}}", &Value::Nil, "42");
+}
+
+#[test]
+fn test_urlquery_nil_arg_is_no_value() {
+    ok("{{urlquery nil}}", &Value::Nil, "%3Cno+value%3E");
+}
+
+// html — character coverage.
+#[test]
+fn test_html_all_basic_chars() {
+    // & < > " '  →  &amp; &lt; &gt; &#34; &#39;  (single template).
+    ok(
+        r#"{{html "&<>\"'"}}"#,
+        &Value::Nil,
+        "&amp;&lt;&gt;&#34;&#39;",
+    );
+}
+
+#[test]
+fn test_html_backtick_passthrough() {
+    // Backtick is intentionally not escaped — same as Go.
+    ok("{{html \"a`b\"}}", &Value::Nil, "a`b");
+}
+
+// js — character coverage.
+#[test]
+fn test_js_all_meta_chars() {
+    // ' " \  →  \' \" \\.   < > &  →  unicode escapes (uppercase hex).
+    ok(
+        r#"{{js "'\"\\<>&"}}"#,
+        &Value::Nil,
+        "\\'\\\"\\\\\\u003C\\u003E\\u0026",
+    );
+}
+
+#[test]
+fn test_js_control_chars() {
+    // \x00, \x01, \x1F →  , , .
+    ok(
+        "{{js \"\\x00\\x01\\x1f\"}}",
+        &Value::Nil,
+        "\\u0000\\u0001\\u001F",
+    );
+}
+
+#[test]
+fn test_js_line_paragraph_separators_escaped() {
+    // U+2028 / U+2029 are escaped — required for safe JSON-in-`<script>`
+    // payloads under pre-ES2019 JS engines.
+    ok(
+        "{{js \"\\u2028\\u2029\"}}",
+        &Value::Nil,
+        "\\u2028\\u2029",
+    );
+}
+
+// urlquery — character coverage.
+#[test]
+fn test_urlquery_space_becomes_plus() {
+    // Form-encoding: space → '+', not '%20'.
+    ok(r#"{{urlquery "a b"}}"#, &Value::Nil, "a+b");
+}
+
+#[test]
+fn test_urlquery_special_chars() {
+    ok(
+        r#"{{urlquery "a+b#c&d=e/f?g"}}"#,
+        &Value::Nil,
+        "a%2Bb%23c%26d%3De%2Ff%3Fg",
+    );
+}
+
+#[test]
+fn test_urlquery_utf8_bytes() {
+    // Each non-ASCII char is encoded as its UTF-8 bytes.
+    ok(r#"{{urlquery "héllo"}}"#, &Value::Nil, "h%C3%A9llo");
+}
+
+#[test]
+fn test_call_variadic_style_func() {
+    // Our `ValueFunc` is `Fn(&[Value]) -> Result`, so every closure is
+    // implicitly variadic — calling with 0 or N args is the same code path.
+    use alloc::sync::Arc;
+    let f: gotmpl::ValueFunc = Arc::new(|args| {
+        let parts: alloc::vec::Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
+        Ok(Value::String(parts.join(",").into()))
+    });
+    let data = tmap! { "V" => Value::Function(f) };
+    let zero = Template::new("t")
+        .parse("{{call .V}}")
+        .unwrap()
+        .execute_to_string(&data)
+        .unwrap();
+    assert_eq!(zero, "");
+    let three = Template::new("t")
+        .parse(r#"{{call .V "a" "b" "c"}}"#)
+        .unwrap()
+        .execute_to_string(&data)
+        .unwrap();
+    assert_eq!(three, "a,b,c");
 }
