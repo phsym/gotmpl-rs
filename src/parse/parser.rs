@@ -494,14 +494,9 @@ impl<'a> Parser<'a> {
                     self.leave();
                     let pipe = pipe_result?;
                     self.expect(TokenKind::RightParen)?;
-                    let rparen = &self.tokens[self.pos - 1];
-                    let mut chain_end = rparen.pos + 1;
+                    let chain_end = self.tokens[self.pos - 1].pos + 1;
                     let mut fields = Vec::new();
-                    while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
-                        let ftok = self.next().clone();
-                        chain_end = ftok.pos + ftok.val.len();
-                        fields.extend(self.parse_field_chain(&ftok.val));
-                    }
+                    self.extend_field_chain(chain_end, &mut fields);
                     if fields.is_empty() {
                         args.push(Expr::Pipe(paren_pos, pipe));
                     } else {
@@ -516,12 +511,7 @@ impl<'a> Parser<'a> {
                 TokenKind::Dot => {
                     let (tok_pos, tok_line) = self.next_span();
                     let mut fields = Vec::new();
-                    let mut chain_end = tok_pos + 1;
-                    while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
-                        let ftok = self.next().clone();
-                        chain_end = ftok.pos + ftok.val.len();
-                        fields.extend(self.parse_field_chain(&ftok.val));
-                    }
+                    self.extend_field_chain(tok_pos + 1, &mut fields);
                     if fields.is_empty() {
                         args.push(Expr::Dot(Pos::new(tok_pos, tok_line)));
                     } else {
@@ -531,25 +521,16 @@ impl<'a> Parser<'a> {
 
                 TokenKind::Field => {
                     let tok = self.next().clone();
-                    let mut fields = self.parse_field_chain(&tok.val);
-                    let mut chain_end = tok.pos + tok.val.len();
-                    while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
-                        let ftok = self.next().clone();
-                        chain_end = ftok.pos + ftok.val.len();
-                        fields.extend(self.parse_field_chain(&ftok.val));
-                    }
+                    let mut fields = Vec::new();
+                    Self::push_field_chain(&tok.val, &mut fields);
+                    self.extend_field_chain(tok.pos + tok.val.len(), &mut fields);
                     args.push(Expr::Field(Pos::new(tok.pos, tok.line), fields));
                 }
 
                 TokenKind::Variable => {
                     let tok = self.next().clone();
                     let mut fields = Vec::new();
-                    let mut chain_end = tok.pos + tok.val.len();
-                    while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
-                        let ftok = self.next().clone();
-                        chain_end = ftok.pos + ftok.val.len();
-                        fields.extend(self.parse_field_chain(&ftok.val));
-                    }
+                    self.extend_field_chain(tok.pos + tok.val.len(), &mut fields);
                     args.push(Expr::Variable(
                         Pos::new(tok.pos, tok.line),
                         SmolStr::from(tok.val.as_ref()),
@@ -560,12 +541,7 @@ impl<'a> Parser<'a> {
                 TokenKind::Identifier => {
                     let tok = self.next().clone();
                     let mut fields = Vec::new();
-                    let mut chain_end = tok.pos + tok.val.len();
-                    while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
-                        let ftok = self.next().clone();
-                        chain_end = ftok.pos + ftok.val.len();
-                        fields.extend(self.parse_field_chain(&ftok.val));
-                    }
+                    self.extend_field_chain(tok.pos + tok.val.len(), &mut fields);
                     let ident_pos = Pos::new(tok.pos, tok.line);
                     let name = SmolStr::from(tok.val.as_ref());
                     if fields.is_empty() {
@@ -623,12 +599,23 @@ impl<'a> Parser<'a> {
         Ok(CommandNode { pos, args })
     }
 
-    fn parse_field_chain(&self, field_str: &str) -> Vec<SmolStr> {
-        field_str
-            .split('.')
-            .filter(|s| !s.is_empty())
-            .map(SmolStr::from)
-            .collect()
+    fn push_field_chain(field_str: &str, out: &mut Vec<SmolStr>) {
+        out.extend(
+            field_str
+                .split('.')
+                .filter(|s| !s.is_empty())
+                .map(SmolStr::from),
+        );
+    }
+
+    /// Consume any `Field` tokens that immediately follow a chain's tail
+    /// (no whitespace between them) and append their components to `fields`.
+    fn extend_field_chain(&mut self, mut chain_end: usize, fields: &mut Vec<SmolStr>) {
+        while self.peek().kind == TokenKind::Field && self.peek().pos == chain_end {
+            let ftok = self.next().clone();
+            chain_end = ftok.pos + ftok.val.len();
+            Self::push_field_chain(&ftok.val, fields);
+        }
     }
 
     // Delimiter helpers

@@ -617,17 +617,11 @@ impl<'a> Executor<'a> {
             && let Expr::Identifier(_, name) = inner.as_ref()
         {
             if name.as_str() == "and" || name.as_str() == "or" {
-                let mut val = self.eval_short_circuit(dot, name, &cmd.args[1..], piped)?;
-                for field in fields {
-                    val = self.field_access(&val, field)?;
-                }
-                return Ok(val);
+                let val = self.eval_short_circuit(dot, name, &cmd.args[1..], piped)?;
+                return self.walk_fields(val, fields);
             }
-            let mut val = self.eval_function_call(dot, name, &cmd.args[1..], piped)?;
-            for field in fields {
-                val = self.field_access(&val, field)?;
-            }
-            return Ok(val);
+            let val = self.eval_function_call(dot, name, &cmd.args[1..], piped)?;
+            return self.walk_fields(val, fields);
         }
 
         // Non-function command: cannot accept piped values or extra arguments.
@@ -726,6 +720,14 @@ impl<'a> Executor<'a> {
         self.invoke_func(name, func, &args)
     }
 
+    /// Walk a chain of field accesses on `val`.
+    fn walk_fields(&self, mut val: Value, fields: &[SmolStr]) -> ExecResult<Value> {
+        for field in fields {
+            val = self.field_access(&val, field)?;
+        }
+        Ok(val)
+    }
+
     /// Access a field on a value, respecting missingkey option.
     fn field_access(&self, val: &Value, name: &str) -> ExecResult<Value> {
         match val.field(name) {
@@ -768,13 +770,7 @@ impl<'a> Executor<'a> {
         match expr {
             Expr::Dot(_) => Ok(dot.clone()),
 
-            Expr::Field(_, fields) => {
-                let mut val = dot.clone();
-                for field in fields {
-                    val = self.field_access(&val, field)?;
-                }
-                Ok(val)
-            }
+            Expr::Field(_, fields) => self.walk_fields(dot.clone(), fields),
 
             Expr::Variable(_, name, fields) => {
                 let val = self
@@ -782,11 +778,7 @@ impl<'a> Executor<'a> {
                     .get(name)
                     .cloned()
                     .ok_or_else(|| TemplateError::UndefinedVariable(name.to_string()))?;
-                let mut result = val;
-                for field in fields {
-                    result = self.field_access(&result, field)?;
-                }
-                Ok(result)
+                self.walk_fields(val, fields)
             }
 
             Expr::String(_, s) => Ok(Value::String(Arc::clone(s))),
@@ -810,11 +802,8 @@ impl<'a> Executor<'a> {
             }
 
             Expr::Chain(_, inner, fields) => {
-                let mut val = self.eval_expr(dot, inner)?;
-                for field in fields {
-                    val = self.field_access(&val, field)?;
-                }
-                Ok(val)
+                let val = self.eval_expr(dot, inner)?;
+                self.walk_fields(val, fields)
             }
         }
     }

@@ -202,19 +202,20 @@ impl Value {
                 Ok(i as usize)
             }
         }
+        fn bad_index(kind: &str, idx: &Value) -> crate::error::TemplateError {
+            crate::error::TemplateError::Exec(format!(
+                "cannot index {} with type {}",
+                kind,
+                idx.type_name()
+            ))
+        }
         match (self, idx) {
             (Value::List(v), Value::Int(i)) => Ok(v[check_bounds(*i, v.len())?].clone()),
-            (Value::List(_), _) => Err(crate::error::TemplateError::Exec(format!(
-                "cannot index list with type {}",
-                idx.type_name()
-            ))),
+            (Value::List(_), _) => Err(bad_index("list", idx)),
             (Value::Map(m), Value::String(k)) => {
                 Ok(m.get(k.as_ref()).cloned().unwrap_or(Value::Nil))
             }
-            (Value::Map(_), _) => Err(crate::error::TemplateError::Exec(format!(
-                "cannot index map with type {}",
-                idx.type_name()
-            ))),
+            (Value::Map(_), _) => Err(bad_index("map", idx)),
             // Go indexes strings as `[]byte` — mid-codepoint offsets are
             // valid since Go has no UTF-8 invariant. We surface the byte as
             // a `Value::Int` to keep that semantic without breaking ours.
@@ -222,10 +223,7 @@ impl Value {
                 let bytes = s.as_bytes();
                 Ok(Value::Int(bytes[check_bounds(*i, bytes.len())?] as i64))
             }
-            (Value::String(_), _) => Err(crate::error::TemplateError::Exec(format!(
-                "cannot index string with type {}",
-                idx.type_name()
-            ))),
+            (Value::String(_), _) => Err(bad_index("string", idx)),
             (Value::Nil, _) => Err(crate::error::TemplateError::Exec(
                 "index of untyped nil".into(),
             )),

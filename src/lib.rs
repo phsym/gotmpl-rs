@@ -422,6 +422,7 @@ impl Template {
     /// Register a parsed body under `name` using Go's `parse.associate` rule.
     /// An empty body does not overwrite an existing non-empty define. Used by
     /// [`parse_files`](Self::parse_files) for the basename registration.
+    #[cfg(feature = "std")]
     fn associate_body(&mut self, name: &str, body: ListNode) {
         if body.is_empty_tree() && self.defines.contains_key(name) {
             return;

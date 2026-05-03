@@ -637,8 +637,26 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lex_field(&mut self) -> Result<()> {
-        // We've already consumed the '.', now consume the identifier part
+    /// Read exactly `digits` ASCII hex characters and return the resulting
+    /// `char`, or `'\0'` if the value is not a valid Unicode scalar (matching
+    /// Go's behavior for surrogates and out-of-range escapes). Emits `err_msg`
+    /// on the first non-hex / EOF byte. Used by `\x`, `\u`, and `\U`.
+    fn read_hex_escape(&mut self, digits: usize, err_msg: &'static str) -> Result<char> {
+        let mut n: u32 = 0;
+        for _ in 0..digits {
+            match self.next_char() {
+                Some(c) if c.is_ascii_hexdigit() => {
+                    #[allow(clippy::unwrap_used, reason = "validated ASCII hex digit")]
+                    let d = c.to_digit(16).unwrap();
+                    n = n * 16 + d;
+                }
+                _ => return Err(self.error(err_msg)),
+            }
+        }
+        Ok(char::from_u32(n).unwrap_or('\0'))
+    }
+
+    fn consume_ident_chars(&mut self) {
         while let Some(ch) = self.peek() {
             if ch.is_alphanumeric() || ch == '_' {
                 self.next_char();
@@ -646,19 +664,18 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+    }
+
+    fn lex_field(&mut self) -> Result<()> {
+        // We've already consumed the '.', now consume the identifier part
+        self.consume_ident_chars();
         self.emit(TokenKind::Field);
         Ok(())
     }
 
     fn lex_variable(&mut self) -> Result<()> {
         self.next_char(); // consume $
-        while let Some(ch) = self.peek() {
-            if ch.is_alphanumeric() || ch == '_' {
-                self.next_char();
-            } else {
-                break;
-            }
-        }
+        self.consume_ident_chars();
         self.emit(TokenKind::Variable);
         Ok(())
     }
@@ -940,61 +957,12 @@ impl<'a> Lexer<'a> {
                     Some('b') => '\x08', // backspace
                     Some('f') => '\x0C', // form feed
                     Some('v') => '\x0B', // vertical tab
-                    Some('x') => {
-                        // \xHH
-                        let mut hex = String::new();
-                        for _ in 0..2 {
-                            match self.next_char() {
-                                Some(c) if c.is_ascii_hexdigit() => hex.push(c),
-                                _ => return Err(self.error("invalid hex escape in char literal")),
-                            }
-                        }
-                        #[allow(
-                            clippy::unwrap_used,
-                            reason = "hex is 2 validated ASCII hex digits, always parses"
-                        )]
-                        let n = u32::from_str_radix(&hex, 16).unwrap();
-                        char::from_u32(n).unwrap_or('\0')
-                    }
+                    Some('x') => self.read_hex_escape(2, "invalid hex escape in char literal")?,
                     Some('u') => {
-                        // \uHHHH
-                        let mut hex = String::new();
-                        for _ in 0..4 {
-                            match self.next_char() {
-                                Some(c) if c.is_ascii_hexdigit() => hex.push(c),
-                                _ => {
-                                    return Err(
-                                        self.error("invalid unicode escape in char literal")
-                                    );
-                                }
-                            }
-                        }
-                        #[allow(
-                            clippy::unwrap_used,
-                            reason = "hex is 4 validated ASCII hex digits, always parses"
-                        )]
-                        let n = u32::from_str_radix(&hex, 16).unwrap();
-                        char::from_u32(n).unwrap_or('\0')
+                        self.read_hex_escape(4, "invalid unicode escape in char literal")?
                     }
                     Some('U') => {
-                        // \UHHHHHHHH
-                        let mut hex = String::new();
-                        for _ in 0..8 {
-                            match self.next_char() {
-                                Some(c) if c.is_ascii_hexdigit() => hex.push(c),
-                                _ => {
-                                    return Err(
-                                        self.error("invalid unicode escape in char literal")
-                                    );
-                                }
-                            }
-                        }
-                        #[allow(
-                            clippy::unwrap_used,
-                            reason = "hex is 8 validated ASCII hex digits, always parses"
-                        )]
-                        let n = u32::from_str_radix(&hex, 16).unwrap();
-                        char::from_u32(n).unwrap_or('\0')
+                        self.read_hex_escape(8, "invalid unicode escape in char literal")?
                     }
                     Some(c) if c.is_ascii_digit() => {
                         // Octal: \NNN
@@ -1029,13 +997,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_identifier(&mut self) -> Result<()> {
-        while let Some(ch) = self.peek() {
-            if ch.is_alphanumeric() || ch == '_' {
-                self.next_char();
-            } else {
-                break;
-            }
-        }
+        self.consume_ident_chars();
         let kind = match self.current_str() {
             "if" => TokenKind::If,
             "else" => TokenKind::Else,

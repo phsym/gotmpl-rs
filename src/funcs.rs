@@ -79,42 +79,19 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
 
     m.insert(
         "lt".into(),
-        Arc::new(|args: &[Value]| {
-            check_args("lt", args, 2)?;
-            Ok(Value::Bool(
-                compare_order(&args[0], &args[1])? == Ordering::Less,
-            ))
-        }),
+        Arc::new(|args| cmp_builtin("lt", args, |o| o == Ordering::Less)),
     );
-
     m.insert(
         "le".into(),
-        Arc::new(|args: &[Value]| {
-            check_args("le", args, 2)?;
-            let ord = compare_order(&args[0], &args[1])?;
-            Ok(Value::Bool(ord == Ordering::Less || ord == Ordering::Equal))
-        }),
+        Arc::new(|args| cmp_builtin("le", args, |o| o != Ordering::Greater)),
     );
-
     m.insert(
         "gt".into(),
-        Arc::new(|args: &[Value]| {
-            check_args("gt", args, 2)?;
-            Ok(Value::Bool(
-                compare_order(&args[0], &args[1])? == Ordering::Greater,
-            ))
-        }),
+        Arc::new(|args| cmp_builtin("gt", args, |o| o == Ordering::Greater)),
     );
-
     m.insert(
         "ge".into(),
-        Arc::new(|args: &[Value]| {
-            check_args("ge", args, 2)?;
-            let ord = compare_order(&args[0], &args[1])?;
-            Ok(Value::Bool(
-                ord == Ordering::Greater || ord == Ordering::Equal,
-            ))
-        }),
+        Arc::new(|args| cmp_builtin("ge", args, |o| o != Ordering::Less)),
     );
 
     // Logic
@@ -163,31 +140,12 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
     // Output formatting
     m.insert(
         "print".into(),
-        Arc::new(|args: &[Value]| {
-            let mut result = String::new();
-            for (i, arg) in args.iter().enumerate() {
-                if i > 0 && go::needs_space(&args[i - 1], arg) {
-                    result.push(' ');
-                }
-                write!(result, "{}", arg).ok();
-            }
-            Ok(Value::String(Arc::from(result)))
-        }),
+        Arc::new(|args: &[Value]| Ok(Value::String(join_print(args, false)))),
     );
 
     m.insert(
         "println".into(),
-        Arc::new(|args: &[Value]| {
-            let mut result = String::new();
-            for (i, arg) in args.iter().enumerate() {
-                if i > 0 {
-                    result.push(' ');
-                }
-                write!(result, "{}", arg).ok();
-            }
-            result.push('\n');
-            Ok(Value::String(Arc::from(result)))
-        }),
+        Arc::new(|args: &[Value]| Ok(Value::String(join_print(args, true)))),
     );
 
     m.insert(
@@ -360,6 +318,23 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
     m
 }
 
+/// Body shared by the `print` and `println` builtins. When `as_println` is
+/// true, args are always space-separated and a trailing newline is appended;
+/// otherwise spaces follow Go's [`go::needs_space`] rule.
+fn join_print(args: &[Value], as_println: bool) -> Arc<str> {
+    let mut result = String::with_capacity(args.len() * 8);
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 && (as_println || go::needs_space(&args[i - 1], arg)) {
+            result.push(' ');
+        }
+        write!(result, "{}", arg).ok();
+    }
+    if as_println {
+        result.push('\n');
+    }
+    Arc::from(result)
+}
+
 /// Stringify a value the way Go's `evalArgs` does for `html` / `js` /
 /// `urlquery`: nil renders as `<no value>` (the template engine's missing-
 /// value sentinel), not `<nil>` (which is what `fmt.Sprint(nil)` gives).
@@ -417,6 +392,11 @@ fn compare_eq(left: &Value, right: &Value) -> Result<bool> {
             right.type_name()
         ))),
     }
+}
+
+fn cmp_builtin(name: &str, args: &[Value], pred: fn(Ordering) -> bool) -> Result<Value> {
+    check_args(name, args, 2)?;
+    Ok(Value::Bool(pred(compare_order(&args[0], &args[1])?)))
 }
 
 fn compare_order(left: &Value, right: &Value) -> Result<Ordering> {
