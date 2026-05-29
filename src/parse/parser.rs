@@ -466,7 +466,7 @@ impl<'a> Parser<'a> {
         // variable. `range_loop!` only binds decl[0]/decl[1], so without this
         // a `{{range $i, $v, $w := …}}` would otherwise drop `$w` unnoticed.
         if allow_multi_decl && decl.len() > 2 {
-            return Err(self.error("too many declarations in range".to_string()));
+            return Err(self.error("too many declarations in range"));
         }
 
         let mut commands = Vec::new();
