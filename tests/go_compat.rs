@@ -4775,3 +4775,359 @@ fn test_call_variadic_style_func() {
         .unwrap();
     assert_eq!(three, "a,b,c");
 }
+
+// Octal escape sequences in string literals (Phase 2.1).
+//
+// Go's text/template re-uses Go string-literal rules: `\NNN` is exactly three
+// octal digits with value 0..=255. Our `unescape` previously only handled
+// `\x`/`\u`/`\U` and dropped octal back into the literal stream — these tests
+// pin the fixed behavior and feed every accepted form through go-crosscheck.
+
+#[test]
+fn test_octal_escape_ascii() {
+    // \101 = 0o101 = 65 = 'A'
+    ok(r#"{{"\101"}}"#, &Value::Nil, "A");
+}
+
+#[test]
+fn test_octal_escape_newline() {
+    // \012 = 0o012 = 10 = '\n'
+    ok(r#"{{"\012"}}"#, &Value::Nil, "\n");
+}
+
+#[test]
+fn test_octal_escape_high_byte_diverges_from_go_in_bytes() {
+    // \377 = 255. Go emits a single byte 0xFF; we encode as Unicode codepoint
+    // U+00FF, which is a 2-byte UTF-8 sequence. Visually identical when read
+    // as Latin-1 / ISO-8859-1, but byte-different from Go's output. This is
+    // tested Rust-only because the cross-check binary would (correctly) flag
+    // the byte mismatch.
+    let out = run(r#"{{"\377"}}"#, &Value::Nil).expect("template should parse and execute");
+    assert_eq!(out, "\u{00FF}");
+    assert_eq!(out.as_bytes(), &[0xC3, 0xBF]);
+}
+
+#[test]
+fn test_octal_escape_too_few_digits_errors() {
+    // Bare \1 must be a parse error (Go strconv requires three octal digits).
+    fail(r#"{{"\1"}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_octal_escape_two_digits_errors() {
+    // \12 has only two digits — also rejected.
+    fail(r#"{{"\12"}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_octal_escape_out_of_range_errors() {
+    // \777 = 511, out of byte range.
+    fail(r#"{{"\777"}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_octal_escape_bare_zero_errors() {
+    // \0 alone — too few digits. Go rejects it at parse time. Pinning this
+    // breaks any caller that depended on the old "\0 → NUL" lenience, which
+    // none did at the time of writing.
+    fail(r#"{{"\0"}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_octal_escape_inside_pipeline() {
+    // Confirm escapes survive through the print pipeline (sanity).
+    ok(r#"{{print "\101\102\103"}}"#, &Value::Nil, "ABC");
+}
+
+// Hex escape sequences in string literals (Phase 2.1).
+//
+// `\xNN` shares the high-byte divergence with `\NNN`: low bytes match Go
+// exactly, but values ≥ 0x80 encode as the Unicode codepoint U+0080..U+00FF
+// (a 2-byte UTF-8 sequence) where Go emits the single byte 0xNN. Pinned here
+// because the `unescape` doc comment claims this case is tested.
+
+#[test]
+fn test_hex_escape_ascii() {
+    // \x41 = 65 = 'A' — low byte, matches Go exactly (cross-checked).
+    ok(r#"{{"\x41"}}"#, &Value::Nil, "A");
+}
+
+#[test]
+fn test_hex_escape_high_byte_diverges_from_go_in_bytes() {
+    // \xFF = 255. Same divergence as \377: Go emits a single byte 0xFF; we
+    // encode as Unicode codepoint U+00FF, a 2-byte UTF-8 sequence. Rust-only
+    // because the cross-check binary would (correctly) flag the byte mismatch.
+    let out = run(r#"{{"\xFF"}}"#, &Value::Nil).expect("template should parse and execute");
+    assert_eq!(out, "\u{00FF}");
+    assert_eq!(out.as_bytes(), &[0xC3, 0xBF]);
+}
+
+// Char-literal octal escapes (Phase 2.1, char path).
+//
+// Go applies the same `\NNN` rule to rune constants: exactly three octal
+// digits, value 0..=255. `'\1'`, `'\12'`, `'\0'`, and `'\18'` are parse
+// errors; `'\123'` is rune 0o123 = 83. The lexer shares `decode_octal_escape`
+// with the string-literal path so the two cannot drift apart. Char constants
+// render as their integer code point (Go parity), so the high-byte UTF-8
+// divergence of the string path does not arise here — `'\377'` renders `255`
+// in both engines and is therefore cross-checked.
+
+#[test]
+fn test_char_octal_escape_three_digits() {
+    ok(r#"{{'\123'}}"#, &Value::Nil, "83");
+}
+
+#[test]
+fn test_char_octal_escape_high_value_matches_go() {
+    ok(r#"{{'\377'}}"#, &Value::Nil, "255");
+}
+
+#[test]
+fn test_char_octal_escape_one_digit_errors() {
+    // Previously accepted (→ rune 1); Go requires three octal digits.
+    fail(r#"{{'\1'}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_char_octal_escape_two_digits_errors() {
+    fail(r#"{{'\12'}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_char_octal_escape_bare_zero_errors() {
+    // Previously mapped to NUL; now a parse error, matching Go.
+    fail(r#"{{'\0'}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_char_octal_escape_non_octal_digit_errors() {
+    // `\18`: `8` is not an octal digit, so the three-digit sequence is
+    // incomplete. Previously the old `is_ascii_digit` gate accepted `8` and
+    // `from_str_radix(_, 8).unwrap_or(0)` silently produced NUL.
+    fail(r#"{{'\18'}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_char_octal_escape_out_of_range_errors() {
+    // `\400` = 256 > 255.
+    fail(r#"{{'\400'}}"#, &Value::Nil);
+}
+
+// uint family (Phase 5.1).
+//
+// Our `Value` has only `Value::Int(i64)`; every integer goes through the
+// `ToValue for u8/u16/u32/u64/usize` blanket impl which casts to `i64`. For
+// values that fit in i64 (everything up to and including u32::MAX), this is
+// equivalent to Go. For u64 values above i64::MAX it wraps to a negative
+// number — pinned as a divergence in `rust_api.rs`. These tests cover the
+// in-range cases that should match Go exactly.
+
+#[test]
+fn test_uint_u8_renders() {
+    let data = tmap! { "U" => 200u8 };
+    ok("{{.U}}", &data, "200");
+}
+
+#[test]
+fn test_uint_u16_renders() {
+    let data = tmap! { "U" => 60000u16 };
+    ok("{{.U}}", &data, "60000");
+}
+
+#[test]
+fn test_uint_u32_renders() {
+    // u32::MAX = 4_294_967_295 — fits in i64.
+    let data = tmap! { "U" => 4_000_000_000u32 };
+    ok("{{.U}}", &data, "4000000000");
+}
+
+#[test]
+fn test_uint_u32_via_printf_d() {
+    let data = tmap! { "U" => 42u32 };
+    ok(r#"{{printf "%d" .U}}"#, &data, "42");
+}
+
+#[test]
+fn test_uint_eq_with_int_in_range() {
+    // u32 and i64 with the same numeric value compare equal because both
+    // resolve to the same Value::Int internally.
+    let data = tmap! { "U" => 17u32, "I" => 17i64 };
+    ok("{{if eq .U .I}}same{{else}}diff{{end}}", &data, "same");
+}
+
+#[test]
+fn test_uint_index_list_with_u32_key() {
+    // index a List using a u32 key (in-range).
+    let data = tmap! {
+        "List" => alloc::vec![Value::String("a".into()), Value::String("b".into()), Value::String("c".into())],
+        "I" => 1u32,
+    };
+    ok("{{index .List .I}}", &data, "b");
+}
+
+// Parser edge cases (Phase 3).
+//
+// Empty actions, pipelines whose stages fail, and parenthesized commands are
+// all easy mis-spec areas. These cases cross-check structural parser behavior
+// against Go.
+
+#[test]
+fn test_parse_empty_action_errors() {
+    // {{}} must be a parse error (no command between delimiters).
+    fail("{{}}", &Value::Nil);
+}
+
+#[test]
+fn test_parse_empty_action_in_text_errors() {
+    // Embedded mid-text — same outcome.
+    fail("hello {{}} world", &Value::Nil);
+}
+
+#[test]
+fn test_pipeline_first_stage_undefined_func_errors() {
+    // First stage references an unknown function — must propagate, never
+    // silently feed nil to `print`.
+    fail("{{badFn | print}}", &Value::Nil);
+}
+
+#[test]
+fn test_pipeline_missing_field_under_error_mode_propagates() {
+    // {{.Missing | len}} under MissingKey::Error must abort before `len`.
+    let data = tmap! { "X" => 1i64 };
+    let res = Template::new("test")
+        .missing_key(gotmpl::MissingKey::Error)
+        .parse("{{.Missing | len}}")
+        .unwrap()
+        .execute_to_string(&data);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_parenthesized_command_as_index_argument() {
+    // `(printf "%s" "X")` evaluated lazily and passed as the index key.
+    let data = tmap! {
+        "M" => tmap! { "X" => "value-x" }
+    };
+    ok(
+        r#"{{index .M (printf "%s" "X")}}"#,
+        &data,
+        "value-x",
+    );
+}
+
+// I/O edges (Phase 7).
+//
+// `\r` is part of Go's whitespace set for trim markers, so `\r\n` line
+// endings must trim symmetrically with `\n`. BOMs (U+FEFF) in plain text are
+// preserved verbatim — Go does not strip them.
+
+#[test]
+fn test_crlf_line_endings_passthrough() {
+    let data = tmap! { "X" => "X" };
+    ok(
+        "line1\r\nline2\r\n{{.X}}\r\nline4",
+        &data,
+        "line1\r\nline2\r\nX\r\nline4",
+    );
+}
+
+#[test]
+fn test_crlf_with_trim_markers() {
+    // `{{- … -}}` must consume the surrounding `\r\n` whitespace.
+    let data = tmap! { "X" => "X" };
+    ok("  \r\n{{- .X -}}\r\n  ", &data, "X");
+}
+
+#[test]
+fn test_mixed_line_endings_passthrough() {
+    let data = tmap! { "X" => "X" };
+    ok("a\nb\r\nc{{.X}}\nd", &data, "a\nb\r\ncX\nd");
+}
+
+#[test]
+fn test_bom_mid_text_preserved() {
+    // BOM (U+FEFF) inside text is rendered verbatim; we only strip a leading
+    // BOM, not embedded ones.
+    let data = tmap! { "X" => "X" };
+    ok("abc\u{FEFF}def{{.X}}", &data, "abc\u{FEFF}defX");
+}
+
+// Raw string literals (Phase 2.2).
+//
+// Go's raw strings are bounded by backticks; backslashes are not escape
+// characters, and the literal can span multiple lines. The lexer already
+// supports `lex_raw_string`; these tests pin the contract.
+
+#[test]
+fn test_raw_string_backslash_is_literal() {
+    // `hello\nworld` — the `\n` must render as backslash + n, NOT a newline.
+    ok(r"{{`hello\nworld`}}", &Value::Nil, r"hello\nworld");
+}
+
+#[test]
+fn test_raw_string_double_quote_is_literal() {
+    // Double quotes inside raw strings are literal; no escaping needed.
+    ok(r#"{{`he said "hi"`}}"#, &Value::Nil, r#"he said "hi""#);
+}
+
+#[test]
+fn test_raw_string_spans_newlines() {
+    // Raw strings can contain literal newlines.
+    ok("{{`a\nb\nc`}}", &Value::Nil, "a\nb\nc");
+}
+
+#[test]
+fn test_raw_string_unterminated_errors() {
+    // No closing backtick — must be a parse error.
+    fail("{{`unterminated", &Value::Nil);
+}
+
+#[test]
+fn test_raw_string_empty() {
+    // An empty raw string passed through `print` (avoids the "can't give
+    // argument to non-function" error a bare `{{``}}` produces — that's a
+    // separate Go-parity behavior, not specific to raw strings).
+    ok("{{print ``}}", &Value::Nil, "");
+}
+
+// Range error-message format (Phase 1.3).
+//
+// `range` accepts list/map/int/nil; everything else must error. The TODO
+// originally listed `range 42` as "should error", but Go 1.22+ added
+// range-over-int and our impl follows. Pinning both behaviors here.
+
+#[test]
+fn test_range_over_int_iterates() {
+    // Go 1.22+: range over int N produces N iterations of 0..N.
+    let data = tmap! { "N" => 3i64 };
+    ok("{{range .N}}{{.}};{{end}}", &data, "0;1;2;");
+}
+
+#[test]
+fn test_range_over_int_literal() {
+    ok("{{range 4}}.{{end}}", &Value::Nil, "....");
+}
+
+#[test]
+fn test_range_over_nil_takes_else_branch() {
+    // Nil should fall into `{{else}}` without erroring.
+    ok(
+        "{{range .Missing}}x{{else}}none{{end}}",
+        &Value::Nil,
+        "none",
+    );
+}
+
+#[test]
+fn test_range_over_string_errors() {
+    // Strings are not rangeable in Go's text/template (they're rangeable in
+    // language, but not in templates). Pin the error.
+    let data = tmap! { "S" => "abc" };
+    fail("{{range .S}}x{{end}}", &data);
+}
+
+#[test]
+fn test_range_over_bool_errors() {
+    let data = tmap! { "B" => true };
+    fail("{{range .B}}x{{end}}", &data);
+}

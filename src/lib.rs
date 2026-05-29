@@ -568,6 +568,110 @@ impl Template {
         Ok(self)
     }
 
+    /// Parse every file matching `pattern` and add it to this template.
+    ///
+    /// Equivalent to Go's `(*Template).ParseGlob`. Forwards each match to
+    /// [`parse_files`](Self::parse_files) in the order the [`glob`] crate
+    /// yields them (sorted within each directory, depth-first across
+    /// directories). When two matches define the same `{{define "name"}}`
+    /// block, the later one wins — so the traversal order is observable for
+    /// patterns that cross multiple directories, and may differ from Go's
+    /// `filepath.Glob` in that case.
+    ///
+    /// # Pattern syntax
+    ///
+    /// Powered by the [`glob`] crate, which accepts a strict superset of
+    /// Go's `filepath.Match`:
+    ///
+    /// - `*` matches any sequence of non-separator characters
+    /// - `?` matches any single non-separator character
+    /// - `[abc]` / `[!abc]` character classes
+    /// - `**` matches zero or more path components (Go does not support this)
+    ///
+    /// # Matching behavior
+    ///
+    /// Matching is case-sensitive and `*` matches leading-dot files, so
+    /// `*.tmpl` also matches `.hidden.tmpl`. Both properties agree with Go's
+    /// `filepath.Match` / `filepath.Glob`, which likewise match dotfiles
+    /// (unlike shell globbing). Concretely this is the `glob` crate default
+    /// used by `glob::glob` (i.e. `MatchOptions::new()`: `case_sensitive =
+    /// true`, `require_literal_leading_dot = false`).
+    ///
+    /// # Divergences from Go
+    ///
+    /// - **`**` recursive descent**: not supported by Go's `filepath.Match`.
+    /// - **Match ordering across directories** may differ from Go's
+    ///   `filepath.Glob`, which matters only when distinct matches redefine
+    ///   the same `{{define}}` name (last-wins).
+    ///
+    /// # Security
+    ///
+    /// If `pattern` is user-controlled, anchor it to a trusted base directory
+    /// before calling — `**` plus a permissive prefix can fan out across the
+    /// filesystem. The [`glob`] crate performs no symlink-cycle detection and
+    /// classifies entries via `fs::metadata` (which follows symlinks), so `**`
+    /// will descend into symlinked directories and traverse a symlink cycle
+    /// until the OS symlink-resolution limit (`ELOOP`) breaks it. Nothing here
+    /// bounds reachable paths beyond what the pattern allows.
+    ///
+    /// # Errors
+    ///
+    /// - [`TemplateError::BadPattern`] for malformed patterns (e.g. unbalanced `[`).
+    /// - [`TemplateError::ReadFile`] if a matched path cannot be read, or if a
+    ///   matched path is not valid UTF-8 (our [`parse_files`](Self::parse_files)
+    ///   API takes `&str`, so non-UTF-8 paths from the OS are rejected up-front
+    ///   rather than silently lossy-converted).
+    /// - [`TemplateError::NoFiles`] if no file matches the pattern, mirroring
+    ///   Go's "pattern matches no files" error.
+    /// - Any error returned by [`parse_files`](Self::parse_files) for the
+    ///   matched files.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use gotmpl::Template;
+    ///
+    /// let tmpl = Template::new("site")
+    ///     .parse_glob("templates/*.tmpl")
+    ///     .unwrap();
+    /// ```
+    #[cfg(feature = "glob")]
+    pub fn parse_glob(self, pattern: &str) -> Result<Self> {
+        let paths = glob::glob(pattern).map_err(|e| error::TemplateError::BadPattern {
+            pattern: pattern.to_string(),
+            pos: e.pos,
+            msg: e.msg,
+        })?;
+
+        // A per-entry I/O error (e.g. EACCES while traversing a directory) is
+        // surfaced as `ReadFile` and takes precedence over the `NoFiles` check
+        // below — Go's `filepath.Glob` instead silently ignores such errors.
+        // We prefer to surface a genuine I/O problem rather than swallow it.
+        let mut matched: Vec<String> = Vec::new();
+        for entry in paths {
+            let path = entry.map_err(|e| error::TemplateError::ReadFile {
+                path: e.path().display().to_string(),
+                source: e.into_error(),
+            })?;
+            // Reject non-UTF-8 paths explicitly. `to_string_lossy` would
+            // silently substitute U+FFFD and then `parse_files` would fail at
+            // open-time with a misleading ENOENT — surface the real cause.
+            let s = path.to_str().ok_or_else(|| error::TemplateError::ReadFile {
+                path: path.to_string_lossy().into_owned(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "path is not valid UTF-8",
+                ),
+            })?;
+            matched.push(s.to_owned());
+        }
+        if matched.is_empty() {
+            return Err(error::TemplateError::NoFiles);
+        }
+        let refs: Vec<&str> = matched.iter().map(String::as_str).collect();
+        self.parse_files(&refs)
+    }
+
     /// Add a pre-built parse tree as a named template definition, the
     /// counterpart to Go's `template.AddParseTree()`. Useful for injecting
     /// programmatically built ASTs without running the parser.

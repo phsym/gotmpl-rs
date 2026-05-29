@@ -177,6 +177,21 @@ pub enum TemplateError {
     #[error("no files named in call to parse_files")]
     NoFiles,
 
+    /// A glob pattern passed to
+    /// [`Template::parse_glob`](crate::Template::parse_glob) was malformed
+    /// (e.g. unbalanced `[`).
+    #[cfg(feature = "glob")]
+    #[error("invalid pattern {pattern:?} at position {pos}: {msg}")]
+    BadPattern {
+        /// The offending pattern.
+        pattern: String,
+        /// Approximate character index into `pattern` where the failure was
+        /// detected, as reported by the [`glob`] crate.
+        pos: usize,
+        /// Static description of the failure, as reported by the [`glob`] crate.
+        msg: &'static str,
+    },
+
     /// An I/O error occurred while writing template output.
     #[cfg(feature = "std")]
     #[error("io error: {0}")]

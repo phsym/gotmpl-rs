@@ -609,7 +609,7 @@ impl<'a> Lexer<'a> {
                     let inner = &raw[1..raw.len() - 1];
                     // Only allocate when the literal actually contains escapes.
                     let val = if inner.contains('\\') {
-                        Cow::Owned(unescape(inner)?)
+                        Cow::Owned(unescape(inner).map_err(|m| self.error(m))?)
                     } else {
                         Cow::Borrowed(inner)
                     };
@@ -952,7 +952,6 @@ impl<'a> Lexer<'a> {
                     Some('r') => '\r',
                     Some('\\') => '\\',
                     Some('\'') => '\'',
-                    Some('0') => '\0',
                     Some('a') => '\x07', // bell
                     Some('b') => '\x08', // backspace
                     Some('f') => '\x0C', // form feed
@@ -964,20 +963,15 @@ impl<'a> Lexer<'a> {
                     Some('U') => {
                         self.read_hex_escape(8, "invalid unicode escape in char literal")?
                     }
-                    Some(c) if c.is_ascii_digit() => {
-                        // Octal: \NNN
-                        let mut oct = String::new();
-                        oct.push(c);
-                        for _ in 0..2 {
-                            match self.peek() {
-                                Some(c) if c.is_ascii_digit() => {
-                                    oct.push(c);
-                                    self.next_char();
-                                }
-                                _ => break,
-                            }
-                        }
-                        char::from_u32(u32::from_str_radix(&oct, 8).unwrap_or(0)).unwrap_or('\0')
+                    // Octal: \NNN — exactly three octal digits, value ≤ 255
+                    // (Go parity). Shares `decode_octal_escape` with the
+                    // string-literal path so the two cannot drift; `\0`, `\12`,
+                    // and `\8` are rejected just as Go rejects them in char
+                    // constants.
+                    Some(d1 @ '0'..='7') => {
+                        let byte = decode_octal_escape(d1, self.next_char(), self.next_char())
+                            .map_err(|m| self.error(m))?;
+                        char::from(byte)
                     }
                     Some(c) => c,
                     None => return Err(self.error("unterminated character literal")),
@@ -1018,8 +1012,20 @@ impl<'a> Lexer<'a> {
     }
 }
 
-// String escape processing
-fn unescape(s: &str) -> Result<String> {
+// String escape processing.
+//
+// Returns the message (without position) on the first invalid escape so the
+// caller can wrap it via `Lexer::error` to attach line/col. The whole string
+// has already been scanned at this point, so the reported position will land
+// just after the closing quote — imprecise but unambiguous.
+//
+// Divergence from Go: `\NNN` and `\xNN` escapes with values ≥ 0x80 encode as
+// the Unicode codepoint U+0080..U+00FF (a 2-byte UTF-8 sequence), where Go
+// emits the single byte 0xNN. Root cause: `Value::String` is UTF-8 and we
+// cannot store an isolated high byte. Pinned by `test_octal_escape_*` and
+// `test_hex_escape_high_byte_*` in `tests/go_compat.rs`; documented in
+// README.md.
+fn unescape(s: &str) -> core::result::Result<String, String> {
     let mut result = String::new();
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {
@@ -1031,7 +1037,6 @@ fn unescape(s: &str) -> Result<String> {
                 Some('\\') => result.push('\\'),
                 Some('"') => result.push('"'),
                 Some('\'') => result.push('\''),
-                Some('0') => result.push('\0'),
                 Some('a') => result.push('\x07'),
                 Some('b') => result.push('\x08'),
                 Some('f') => result.push('\x0C'),
@@ -1060,6 +1065,17 @@ fn unescape(s: &str) -> Result<String> {
                         result.push(c);
                     }
                 }
+                // Octal: \NNN — exactly three octal digits, value ≤ 255.
+                // Bare \0 is rejected to match Go (it parses `\0` as the
+                // first digit of an octal escape and demands two more).
+                Some(d1 @ '0'..='7') => {
+                    let byte = decode_octal_escape(d1, chars.next(), chars.next())?;
+                    // For values 128..=255 we encode as Unicode codepoint
+                    // U+0080..U+00FF (a 2-byte UTF-8 sequence) rather than Go's
+                    // single byte — we cannot emit a raw high byte into a UTF-8
+                    // `String`. See the fn doc comment for the pinning tests.
+                    result.push(char::from(byte));
+                }
                 Some(c) => {
                     result.push('\\');
                     result.push(c);
@@ -1071,6 +1087,34 @@ fn unescape(s: &str) -> Result<String> {
         }
     }
     Ok(result)
+}
+
+// Decode a `\NNN` octal escape: exactly three octal digits (0-7), value ≤ 255.
+//
+// Shared by the string-literal (`unescape`) and char-literal (`lex_char_literal`)
+// paths so the two cannot drift apart — both reject `\0`, `\12`, `\8`, and
+// `\777` to match Go, which parses `\N` as the first digit of a mandatory
+// three-digit octal escape. `d1` is the already-consumed leading digit; `d2`
+// and `d3` are the next two characters from the caller's cursor. Returns the
+// message (without position) so the caller can attach line/col via `error`.
+fn decode_octal_escape(
+    d1: char,
+    d2: Option<char>,
+    d3: Option<char>,
+) -> core::result::Result<u8, String> {
+    let (c2, c3) = match (d2, d3) {
+        (Some(c2 @ '0'..='7'), Some(c3 @ '0'..='7')) => (c2, c3),
+        _ => {
+            return Err(format!(
+                "invalid octal escape (need three octal digits after \\{d1})"
+            ));
+        }
+    };
+    // Each digit is validated above; to_digit cannot fail.
+    #[allow(clippy::unwrap_used, reason = "validated octal digit")]
+    let n: u32 =
+        d1.to_digit(8).unwrap() * 64 + c2.to_digit(8).unwrap() * 8 + c3.to_digit(8).unwrap();
+    u8::try_from(n).map_err(|_| format!("octal escape value out of range: \\{d1}{c2}{c3}"))
 }
 
 #[cfg(test)]

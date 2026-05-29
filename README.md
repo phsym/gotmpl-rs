@@ -300,9 +300,13 @@ User-defined functions that panic will propagate instead of being caught.
 Rust has no runtime reflection, so:
 
 - **No struct field access**: use `Value::Map` instead
-- **No method calls**: register functions via `.func()`
+- **No method calls**: `.Foo` is always a field lookup against a `Value::Map`,
+  never a method invocation. Register the callable via `.func()`, or store
+  it as `Value::Function` and dispatch with the `call` builtin.
 - **No pointer/interface indirection**: `Value` is always concrete
 - **No complex numbers, channels, or `iter.Seq`**
+- **No typed-nil**: `Option::<T>::None` collapses to untyped `Value::Nil`.
+  Go's `(*Foo)(nil) != nil` distinction does not exist here.
 - **NaN comparisons** return an error instead of Go's silently wrong results
 
 API shape is also a bit different:
@@ -316,9 +320,43 @@ API shape is also a bit different:
 - **`parse_files`** requires the files to be valid UTF-8. Go's `os.ReadFile` +
   `string(b)` is a zero-copy reinterpret and accepts any bytes; we use
   `std::fs::read_to_string`, which validates.
+- **`parse_glob`** is gated behind the `glob` cargo feature (on by default,
+  pulls in the [`glob`](https://crates.io/crates/glob) crate). It accepts a
+  strict superset of Go's `filepath.Match`: `*`, `?`, `[abc]` /  `[!abc]`
+  classes, and `**` for recursive descent (Go does not support `**`).
+  Disabling the feature drops the dependency and removes the API. Match
+  ordering follows the `glob` crate (sorted within each directory, depth-first
+  across directories) and may differ from Go's `filepath.Glob` when the
+  pattern crosses multiple directories — relevant if templates redefine each
+  other (last-wins). Matching is case-sensitive and `*` matches leading-dot
+  files (the `glob::glob` default — `MatchOptions::new()`, `case_sensitive =
+  true`, `require_literal_leading_dot = false`), so `*.tmpl` matches
+  `.hidden.tmpl`. Both match Go's `filepath.Match` / `filepath.Glob`, which
+  also match dotfiles (unlike shell globbing).
+- **Empty / identical custom delimiters**: `delims("", "}}")` and
+  `delims("{{", "")` produce a parse error rather than substituting the
+  defaults (Go silently substitutes); `delims("##", "##")` is accepted (Go
+  forbids identical left/right). These are pinned by tests so changes to
+  validation are intentional.
 
-A few formatting and slicing edge cases diverge too:
+Error reporting differs in a couple of places:
 
+- **Runtime errors carry no source position.** `MissingKey`,
+  `UndefinedFunction`, and other exec-time errors print just the message;
+  Go prefixes them with `template: NAME:LINE:COL:`. Tracked as a known gap.
+- **The parser stops at the first error.** Go's parser collects multiple
+  parse errors per pass; we surface exactly one.
+
+A few data and formatting edge cases diverge too:
+
+- **`u64` / `usize` above `i64::MAX` wrap to negative.** `Value::Int` is `i64`;
+  `u64::MAX` round-trips through `ToValue` as `Value::Int(-1)` and renders as
+  `-1`. Pinned so a future Value-model widening trips the test. Values up to
+  and including `u32::MAX` are unaffected.
+- **`\NNN` octal escapes with value ≥ 0x80** encode as the Unicode codepoint
+  U+0080..U+00FF (a 2-byte UTF-8 sequence) where Go emits the single byte
+  0xNN. Same root cause as the `slice` divergence below: `Value::String` is
+  UTF-8, Go strings are byte-slices.
 - **`%#v`** falls back to `%v`. Go's Go-syntax output (`[]interface {}{1, 2, 3}`,
   `map[string]interface {}{"a":1}`) needs concrete-type info we don't carry.
 - **`%#U`** quotes some non-ASCII codepoints that Go skips. Our gate is
