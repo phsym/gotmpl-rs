@@ -82,6 +82,7 @@ mod go_crosscheck {
             Value::Nil => r#"{"type":"nil"}"#.to_string(),
             Value::Bool(b) => format!(r#"{{"type":"bool","value":{b}}}"#),
             Value::Int(n) => format!(r#"{{"type":"int","value":{n}}}"#),
+            Value::Uint(n) => format!(r#"{{"type":"uint","value":{n}}}"#),
             Value::Float(f) => {
                 if f.is_infinite() || f.is_nan() {
                     return Err("Value::Float is NaN or infinite (not representable in JSON)");
@@ -1747,6 +1748,63 @@ fn test_range_int() {
 #[test]
 fn test_range_int_zero() {
     ok("{{range 0}}x{{else}}empty{{end}}", &Value::Nil, "empty");
+}
+
+// Go restricts range-over-integer to a single loop variable: a second var
+// errors at exec ("can't use N to iterate over more than one variable"),
+// unlike a slice/map where two vars give index/key + value.
+#[test]
+fn test_range_int_two_vars_errors() {
+    fail("{{range $i, $v := 3}}{{$i}}{{end}}", &Value::Nil);
+}
+
+#[test]
+fn test_range_int_two_vars_errors_even_when_zero() {
+    // The variable-count check fires before the empty check, so it errors even
+    // when the integer is 0 (Go reports the error, never runs the else body).
+    fail("{{range $i, $v := 0}}x{{else}}e{{end}}", &Value::Nil);
+}
+
+#[test]
+fn test_range_int_two_vars_errors_when_negative() {
+    fail("{{range $i, $v := -1}}x{{end}}", &Value::Nil);
+}
+
+#[test]
+fn test_range_int_assign_two_vars_errors() {
+    // The assignment form (`=`) is restricted just like the declaration form.
+    fail(
+        "{{$i := 0}}{{$v := 0}}{{range $i, $v = 3}}{{$i}}{{end}}",
+        &Value::Nil,
+    );
+}
+
+#[test]
+fn test_range_uint_two_vars_errors() {
+    // Same single-variable restriction applies to the unsigned integer kinds.
+    let data = tmap! { "U" => 3u64 };
+    fail("{{range $i, $v := .U}}{{$i}}{{end}}", &data);
+}
+
+#[test]
+fn test_range_uint_single_var_ok() {
+    // One variable over a uint still works — counter 0..n, like the int case.
+    let data = tmap! { "U" => 3u64 };
+    ok("{{range $i := .U}}{{$i}} {{end}}", &data, "0 1 2 ");
+}
+
+// Go caps range declarations at two; a third is a *parse* error ("too many
+// declarations in range") for every operand kind. Without the cap our
+// range_loop! would silently drop the third variable for a slice/map.
+#[test]
+fn test_range_three_vars_over_slice_errors() {
+    let data = tmap! { "L" => vec![1i64, 2, 3] };
+    fail("{{range $i, $v, $w := .L}}x{{end}}", &data);
+}
+
+#[test]
+fn test_range_three_vars_over_int_errors() {
+    fail("{{range $i, $v, $w := 3}}x{{end}}", &Value::Nil);
 }
 
 // Additional Go test coverage: nil pipeline
@@ -3737,17 +3795,21 @@ fn test_multi_var_decl_outside_range_errors() {
     fail("{{$a, $b := 5}}", &Value::Nil);
 }
 
-// Integer literals above i64 range are rejected by the lexer. Go rejects
-// the same literals too (at exec time with "overflows int"), so no parity
-// regression here.
+// A hex literal between i64::MAX and u64::MAX parses (Go-parity — see the uint
+// literal tests, which pin the exec-time "overflows int" error). A literal
+// beyond u64::MAX is rejected at parse, since it has no integer representation.
 #[test]
-fn test_hex_literal_above_i64_max_rejected() {
-    let err = match Template::new("t").parse("{{0xFFFFFFFFFFFFFFFF}}") {
-        Ok(_) => panic!("literal above i64::MAX should have failed to parse"),
+fn test_hex_literal_within_u64_parses_above_u64_rejected() {
+    // 0xFFFFFFFFFFFFFFFF (u64::MAX) parses; it errors only when *used* (exec).
+    assert!(Template::new("t").parse("{{0xFFFFFFFFFFFFFFFF}}").is_ok());
+
+    // 17 F's overflows u64 → parse error.
+    let err = match Template::new("t").parse("{{0xFFFFFFFFFFFFFFFFF}}") {
+        Ok(_) => panic!("literal above u64::MAX should have failed to parse"),
         Err(e) => e,
     };
     assert!(
-        err.to_string().contains("overflows"),
+        err.to_string().contains("overflow"),
         "expected overflow error, got: {err}"
     );
 }
@@ -4915,12 +4977,10 @@ fn test_char_octal_escape_out_of_range_errors() {
 
 // uint family (Phase 5.1).
 //
-// Our `Value` has only `Value::Int(i64)`; every integer goes through the
-// `ToValue for u8/u16/u32/u64/usize` blanket impl which casts to `i64`. For
-// values that fit in i64 (everything up to and including u32::MAX), this is
-// equivalent to Go. For u64 values above i64::MAX it wraps to a negative
-// number — pinned as a divergence in `rust_api.rs`. These tests cover the
-// in-range cases that should match Go exactly.
+// Every unsigned Rust type (`u8`/`u16`/`u32`/`u64`/`usize`) maps to
+// `Value::Uint`, mirroring Go's unsigned reflect kinds. These tests cover the
+// in-range rendering, comparison, and indexing cases; the out-of-range,
+// cross-sign, and literal cases live in the section further below.
 
 #[test]
 fn test_uint_u8_renders() {
@@ -4949,8 +5009,8 @@ fn test_uint_u32_via_printf_d() {
 
 #[test]
 fn test_uint_eq_with_int_in_range() {
-    // u32 and i64 with the same numeric value compare equal because both
-    // resolve to the same Value::Int internally.
+    // A uint (u32) and a non-negative int with the same magnitude compare
+    // equal via Go's sign-aware int↔uint comparison.
     let data = tmap! { "U" => 17u32, "I" => 17i64 };
     ok("{{if eq .U .I}}same{{else}}diff{{end}}", &data, "same");
 }
@@ -5008,11 +5068,7 @@ fn test_parenthesized_command_as_index_argument() {
     let data = tmap! {
         "M" => tmap! { "X" => "value-x" }
     };
-    ok(
-        r#"{{index .M (printf "%s" "X")}}"#,
-        &data,
-        "value-x",
-    );
+    ok(r#"{{index .M (printf "%s" "X")}}"#, &data, "value-x");
 }
 
 // I/O edges (Phase 7).
@@ -5130,4 +5186,150 @@ fn test_range_over_string_errors() {
 fn test_range_over_bool_errors() {
     let data = tmap! { "B" => true };
     fail("{{range .B}}x{{end}}", &data);
+}
+
+// uint family — out-of-range values, cross-sign comparison, and literals.
+//
+// Complements the in-range render/eq/index tests above. Every unsigned Rust
+// type maps to `Value::Uint`, mirroring Go's unsigned reflect kinds, so values
+// above i64::MAX no longer wrap and int↔uint comparison is sign-aware. These
+// cross-check against a Go `uint` (the helper decodes the "uint" tag).
+
+#[test]
+fn test_uint_u64_in_range_renders() {
+    let data = tmap! { "U" => 9_000_000_000u64 };
+    ok("{{.U}}", &data, "9000000000");
+}
+
+#[test]
+fn test_uint_u64_max_renders_unsigned() {
+    // The whole point of the fix: u64::MAX renders as its true value, not -1.
+    let data = tmap! { "U" => u64::MAX };
+    ok("{{.U}}", &data, "18446744073709551615");
+}
+
+#[test]
+fn test_uint_eq_with_int_literal() {
+    // Go's eq compares int and uint sign-aware: uint(200) == 200 (int) is true.
+    let data = tmap! { "U" => 200u8 };
+    ok("{{if eq .U 200}}y{{else}}n{{end}}", &data, "y");
+    ok("{{if eq .U 201}}y{{else}}n{{end}}", &data, "n");
+}
+
+#[test]
+fn test_uint_ne_negative_int() {
+    // A negative int is never equal to any uint.
+    let data = tmap! { "U" => 5u64, "N" => -5i64 };
+    ok("{{if eq .U .N}}y{{else}}n{{end}}", &data, "n");
+}
+
+#[test]
+fn test_uint_lt_negative_int_is_greater() {
+    // A negative int orders below any uint, so the uint is the greater value.
+    let data = tmap! { "U" => 5u64, "N" => -1i64 };
+    ok("{{if lt .N .U}}y{{else}}n{{end}}", &data, "y");
+    ok("{{if gt .N .U}}y{{else}}n{{end}}", &data, "n");
+}
+
+#[test]
+fn test_uint_ordering_against_int_literal() {
+    let data = tmap! { "U" => 10u32 };
+    ok("{{if lt .U 20}}y{{else}}n{{end}}", &data, "y");
+    ok("{{if gt .U 5}}y{{else}}n{{end}}", &data, "y");
+    ok("{{if le .U 10}}y{{else}}n{{end}}", &data, "y");
+    ok("{{if ge .U 10}}y{{else}}n{{end}}", &data, "y");
+}
+
+#[test]
+fn test_uint_uint_vs_uint_comparison() {
+    let data = tmap! { "A" => 3u64, "B" => 7u64 };
+    ok("{{if lt .A .B}}y{{else}}n{{end}}", &data, "y");
+    ok("{{if eq .A .A}}y{{else}}n{{end}}", &data, "y");
+}
+
+#[test]
+fn test_uint_printf_decimal() {
+    let data = tmap! { "U" => u64::MAX };
+    ok(r#"{{printf "%d" .U}}"#, &data, "18446744073709551615");
+}
+
+#[test]
+fn test_uint_printf_hex() {
+    let data = tmap! { "U" => u64::MAX };
+    ok(r#"{{printf "%x" .U}}"#, &data, "ffffffffffffffff");
+    ok(r#"{{printf "%X" .U}}"#, &data, "FFFFFFFFFFFFFFFF");
+}
+
+#[test]
+fn test_uint_printf_octal_binary() {
+    let data = tmap! { "U" => 255u16 };
+    ok(r#"{{printf "%o" .U}}"#, &data, "377");
+    ok(r#"{{printf "%b" .U}}"#, &data, "11111111");
+}
+
+#[test]
+fn test_uint_printf_sign_flags() {
+    // Go applies the + / space flags to unsigned values (never a minus).
+    let data = tmap! { "U" => 5u8 };
+    ok(r#"{{printf "%+d" .U}}"#, &data, "+5");
+    ok(r#"{{printf "% d" .U}}"#, &data, " 5");
+}
+
+#[test]
+fn test_printf_sign_flag_zero_pad() {
+    // The synthesized sign (space or +) occupies the sign slot, so zero
+    // padding fills after it: Go's `% 08d` of 5 is " 0000005" (not "000000 5").
+    let data = tmap! { "I" => 5i64, "U" => 5u8, "N" => -5i64 };
+    ok(r#"{{printf "% 08d" .I}}"#, &data, " 0000005");
+    ok(r#"{{printf "% 08d" .U}}"#, &data, " 0000005");
+    ok(r#"{{printf "%+08d" .U}}"#, &data, "+0000005");
+    ok(r#"{{printf "%08d" .N}}"#, &data, "-0000005");
+}
+
+#[test]
+fn test_uint_print_spacing() {
+    // Two non-strings get a space between them under `print`.
+    let data = tmap! { "A" => 1u8, "B" => 2u8 };
+    ok("{{print .A .B}}", &data, "1 2");
+}
+
+#[test]
+fn test_uint_range_over_value() {
+    // Go 1.22+ ranges over an integer value, including unsigned kinds.
+    let data = tmap! { "U" => 3u64 };
+    ok("{{range $.U}}x{{end}}", &data, "xxx");
+}
+
+// uint literals that overflow i64 (Phase 2.x / 5.1)
+//
+// Go parses an integer constant above i64::MAX (so it is *not* a parse error,
+// unlike our former behavior), but narrows untyped constants to `int` when
+// used — so a uint-only literal errors at EXEC with "N overflows int" in every
+// context. We match that: parse succeeds, exec errors. (Typed uint *values*
+// from data render fine; this only concerns literal constants.)
+
+#[test]
+fn test_uint_literal_decimal_overflowing_i64_errors_at_exec() {
+    fail("{{18446744073709551615}}", &Value::Nil);
+}
+
+#[test]
+fn test_uint_literal_hex_overflowing_i64_errors_at_exec() {
+    fail("{{0xFFFFFFFFFFFFFFFF}}", &Value::Nil);
+}
+
+#[test]
+fn test_uint_literal_as_printf_arg_errors_at_exec() {
+    fail(r#"{{printf "%x" 18446744073709551615}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_uint_literal_in_dead_branch_is_fine() {
+    // The literal is parsed but never evaluated, so no "overflows int" error
+    // fires — matching Go, which only narrows the constant when it is used.
+    ok(
+        "{{if false}}{{18446744073709551615}}{{end}}",
+        &Value::Nil,
+        "",
+    );
 }

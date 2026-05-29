@@ -31,8 +31,7 @@ struct TempDir(std::path::PathBuf);
 #[cfg(feature = "std")]
 impl TempDir {
     fn new(label: &str) -> Self {
-        let dir = std::env::temp_dir()
-            .join(format!("gotmpl_test_{label}_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gotmpl_test_{label}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -245,16 +244,18 @@ fn test_clone_unparsed_template() {
 fn test_to_value_integers() {
     use gotmpl::ToValue;
 
+    // Signed integers → Value::Int.
     assert_eq!(42i8.to_value(), Value::Int(42));
     assert_eq!(42i16.to_value(), Value::Int(42));
     assert_eq!(42i32.to_value(), Value::Int(42));
     assert_eq!(42i64.to_value(), Value::Int(42));
-    assert_eq!(42u8.to_value(), Value::Int(42));
-    assert_eq!(42u16.to_value(), Value::Int(42));
-    assert_eq!(42u32.to_value(), Value::Int(42));
-    assert_eq!(42u64.to_value(), Value::Int(42));
-    assert_eq!(42usize.to_value(), Value::Int(42));
     assert_eq!(42isize.to_value(), Value::Int(42));
+    // Unsigned integers → Value::Uint (mirrors Go's unsigned reflect kinds).
+    assert_eq!(42u8.to_value(), Value::Uint(42));
+    assert_eq!(42u16.to_value(), Value::Uint(42));
+    assert_eq!(42u32.to_value(), Value::Uint(42));
+    assert_eq!(42u64.to_value(), Value::Uint(42));
+    assert_eq!(42usize.to_value(), Value::Uint(42));
 }
 
 #[test]
@@ -606,7 +607,10 @@ fn test_missingkey_error_three_level_miss_stops_at_first_miss() {
         .unwrap_err();
     match err {
         gotmpl::TemplateError::MissingKey { key } => {
-            assert_eq!(key, "Y", "should error on first missing key, not later ones");
+            assert_eq!(
+                key, "Y",
+                "should error on first missing key, not later ones"
+            );
         }
         other => panic!("expected MissingKey, got {other:?}"),
     }
@@ -956,9 +960,7 @@ fn test_method_substitute_via_call_on_function_field() {
     // store a `Value::Function` in the Map and invoke it with `call`. The
     // function's `Err(...)` becomes an execution error, mirroring the
     // method-error semantics described in the TODO.
-    let f: gotmpl::ValueFunc = Arc::new(|_args| {
-        Err(gotmpl::TemplateError::Exec("boom".into()))
-    });
+    let f: gotmpl::ValueFunc = Arc::new(|_args| Err(gotmpl::TemplateError::Exec("boom".into())));
     let data = tmap! { "Method" => Value::Function(f) };
     let err = Template::new("t")
         .parse("{{call .Method}}")
@@ -976,8 +978,7 @@ fn test_method_substitute_chained_call_propagates_error() {
     // stage must not run, and the original error must surface unchanged —
     // closing the gap that Go's chained `t.Method1.Method2.Method3` covers
     // via reflection (we route it through `call` instead).
-    let ok_fn: gotmpl::ValueFunc =
-        Arc::new(|_args| Ok(Value::String("hello".into())));
+    let ok_fn: gotmpl::ValueFunc = Arc::new(|_args| Ok(Value::String("hello".into())));
     let bad_fn: gotmpl::ValueFunc =
         Arc::new(|_args| Err(gotmpl::TemplateError::Exec("middle failed".into())));
     let data = tmap! {
@@ -1640,16 +1641,8 @@ fn test_parse_glob_double_star_recurses() {
     // at multiple depths are all collected.
     let dir = TempDir::new("parse_glob_recursive");
     std::fs::create_dir_all(dir.path().join("a/b/c")).unwrap();
-    std::fs::write(
-        dir.path().join("top.tmpl"),
-        r#"{{define "top"}}T{{end}}"#,
-    )
-    .unwrap();
-    std::fs::write(
-        dir.path().join("a/mid.tmpl"),
-        r#"{{define "mid"}}M{{end}}"#,
-    )
-    .unwrap();
+    std::fs::write(dir.path().join("top.tmpl"), r#"{{define "top"}}T{{end}}"#).unwrap();
+    std::fs::write(dir.path().join("a/mid.tmpl"), r#"{{define "mid"}}M{{end}}"#).unwrap();
     std::fs::write(
         dir.path().join("a/b/c/deep.tmpl"),
         r#"{{define "deep"}}D{{end}}"#,
@@ -1741,22 +1734,17 @@ fn test_runtime_error_inside_range_lacks_position_info() {
     assert_eq!(err.to_string(), "map has no entry for key: BadField");
 }
 
-// uint family — divergence pin (Phase 5.1).
+// uint family — large unsigned values (Phase 5.1).
 //
-// `ToValue for u64` casts straight to i64. For values above i64::MAX this
-// wraps to a negative number — Go would render the unsigned value verbatim.
-// Pinned here so a future fix (extending `Value::Int` to a wider variant or
-// adding `Value::Uint`) trips this test and forces an explicit decision.
+// `ToValue` maps every unsigned type to `Value::Uint(u64)`, so values above
+// i64::MAX keep their true magnitude instead of wrapping to a negative i64.
+// (These tests previously pinned the old wrapping divergence; the fix flipped
+// them to assert the Go-matching behavior.)
 
 #[test]
-fn test_uint_u64_max_pinned_divergence() {
+fn test_uint_u64_max_renders_unsigned() {
     use gotmpl::ToValue;
-    let v = u64::MAX.to_value();
-    assert_eq!(
-        v,
-        Value::Int(-1),
-        "u64::MAX currently coerces to Value::Int(-1); update Value model to fix",
-    );
+    assert_eq!(u64::MAX.to_value(), Value::Uint(u64::MAX));
 
     let data = tmap! { "U" => u64::MAX };
     let out = Template::new("t")
@@ -1764,17 +1752,13 @@ fn test_uint_u64_max_pinned_divergence() {
         .unwrap()
         .execute_to_string(&data)
         .unwrap();
-    assert_eq!(out, "-1", "rendering wraps; Go would render 18446744073709551615");
+    assert_eq!(out, "18446744073709551615");
 }
 
 #[test]
-fn test_uint_usize_max_pinned_divergence() {
-    // Same shape as u64 on 64-bit targets. On 32-bit targets usize == u32 and
-    // would not wrap — gate the assertion to 64-bit pointer width to keep the
-    // test deterministic.
-    if usize::BITS != 64 {
-        return;
-    }
+fn test_uint_usize_max_to_value() {
+    // usize maps through the unsigned family. On 64-bit targets usize::MAX is
+    // u64::MAX; on 32-bit targets it is u32::MAX — both are exact as Uint.
     use gotmpl::ToValue;
-    assert_eq!(usize::MAX.to_value(), Value::Int(-1));
+    assert_eq!(usize::MAX.to_value(), Value::Uint(usize::MAX as u64));
 }

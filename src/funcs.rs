@@ -378,6 +378,11 @@ fn compare_eq(left: &Value, right: &Value) -> Result<bool> {
         (Value::Nil, _) | (_, Value::Nil) => Ok(false),
         (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
         (Value::Int(a), Value::Int(b)) => Ok(a == b),
+        (Value::Uint(a), Value::Uint(b)) => Ok(a == b),
+        // Go's `eq` compares int and uint regardless of sign: a negative int is
+        // never equal to any uint; otherwise compare magnitudes as u64.
+        (Value::Int(a), Value::Uint(b)) => Ok(*a >= 0 && *a as u64 == *b),
+        (Value::Uint(a), Value::Int(b)) => Ok(*b >= 0 && *a == *b as u64),
         (Value::Float(a), Value::Float(b)) => Ok(a == b),
         (Value::String(a), Value::String(b)) => Ok(a == b),
         (Value::List(_), Value::List(_))
@@ -402,6 +407,21 @@ fn cmp_builtin(name: &str, args: &[Value], pred: fn(Ordering) -> bool) -> Result
 fn compare_order(left: &Value, right: &Value) -> Result<Ordering> {
     match (left, right) {
         (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
+        (Value::Uint(a), Value::Uint(b)) => Ok(a.cmp(b)),
+        // Go's ordering builtins compare int and uint regardless of sign: a
+        // negative int orders below any uint; otherwise compare as u64. These
+        // arms must precede the `type_name` mismatch guard below, or the
+        // distinct "int"/"uint" names would short-circuit to an error.
+        (Value::Int(a), Value::Uint(b)) => Ok(if *a < 0 {
+            Ordering::Less
+        } else {
+            (*a as u64).cmp(b)
+        }),
+        (Value::Uint(a), Value::Int(b)) => Ok(if *b < 0 {
+            Ordering::Greater
+        } else {
+            a.cmp(&(*b as u64))
+        }),
         (Value::Float(a), Value::Float(b)) => a
             .partial_cmp(b)
             .ok_or_else(|| TemplateError::Exec("invalid type for comparison".into())),
@@ -418,6 +438,12 @@ fn compare_order(left: &Value, right: &Value) -> Result<Ordering> {
 fn parse_slice_index(arg: &Value) -> Result<i64> {
     match arg {
         Value::Int(n) => Ok(*n),
+        // A uint index is valid as long as it fits in i64 (slice bounds are
+        // i64-resolved); a value above i64::MAX can never be a valid offset.
+        Value::Uint(n) if *n <= i64::MAX as u64 => Ok(*n as i64),
+        Value::Uint(n) => Err(TemplateError::Exec(format!(
+            "slice: index out of range: {n}"
+        ))),
         _ => Err(TemplateError::Exec(format!(
             "slice: index must be integer, got {}",
             arg.type_name()

@@ -63,6 +63,7 @@ pub type ValueFunc = Arc<dyn Fn(&[Value]) -> Result<Value> + Send + Sync>;
 /// | `Nil` | `false` |
 /// | `Bool(false)` | `false` |
 /// | `Int(0)` | `false` |
+/// | `Uint(0)` | `false` |
 /// | `Float(0.0)` | `false` |
 /// | `String("")` | `false` |
 /// | Empty `List` or `Map` | `false` |
@@ -82,6 +83,14 @@ pub enum Value {
     Bool(bool),
     /// A 64-bit signed integer.
     Int(i64),
+    /// A 64-bit unsigned integer.
+    ///
+    /// Produced by [`ToValue`] for every unsigned Rust integer type
+    /// (`u8`/`u16`/`u32`/`u64`/`usize`), mirroring Go's distinct unsigned
+    /// reflect kinds. Kept separate from [`Value::Int`] so values above
+    /// `i64::MAX` (e.g. `u64::MAX`) render and compare as their true unsigned
+    /// value instead of wrapping to a negative `i64`.
+    Uint(u64),
     /// A 64-bit floating-point number.
     Float(f64),
     /// A UTF-8 string.
@@ -109,6 +118,7 @@ impl Clone for Value {
             Value::Nil => Value::Nil,
             Value::Bool(b) => Value::Bool(*b),
             Value::Int(n) => Value::Int(*n),
+            Value::Uint(n) => Value::Uint(*n),
             Value::Float(f) => Value::Float(*f),
             Value::String(s) => Value::String(Arc::clone(s)),
             Value::List(v) => Value::List(Arc::clone(v)),
@@ -124,6 +134,7 @@ impl fmt::Debug for Value {
             Value::Nil => write!(f, "Nil"),
             Value::Bool(b) => write!(f, "Bool({b:?})"),
             Value::Int(n) => write!(f, "Int({n:?})"),
+            Value::Uint(n) => write!(f, "Uint({n:?})"),
             Value::Float(v) => write!(f, "Float({v:?})"),
             Value::String(s) => write!(f, "String({s:?})"),
             Value::List(v) => write!(f, "List({v:?})"),
@@ -142,6 +153,7 @@ impl Value {
             Value::Nil => false,
             Value::Bool(b) => *b,
             Value::Int(n) => *n != 0,
+            Value::Uint(n) => *n != 0,
             Value::Float(f) => *f != 0.0,
             Value::String(s) => !s.is_empty(),
             Value::List(v) => !v.is_empty(),
@@ -195,7 +207,20 @@ impl Value {
     /// Returns an error on out-of-bounds list access, indexing with an
     /// incompatible key type, or indexing a non-indexable value.
     pub fn index(&self, idx: &Value) -> Result<Value> {
-        fn check_bounds(i: i64, len: usize) -> Result<usize> {
+        // Resolve an integer index (signed or unsigned) to a usize offset,
+        // bounds-checking against `len`. A `Value::Uint` above `i64::MAX`
+        // wraps to a negative `i64` here and fails the lower-bound check —
+        // correct, since it can never be a valid offset.
+        fn check_bounds(idx: &Value, len: usize) -> Result<usize> {
+            let i = match idx {
+                Value::Int(i) => *i,
+                Value::Uint(i) => *i as i64,
+                #[allow(
+                    clippy::unreachable,
+                    reason = "callers guard with a Value::Int | Value::Uint pattern"
+                )]
+                _ => unreachable!(),
+            };
             if i < 0 || (i as usize) >= len {
                 Err(crate::error::TemplateError::IndexOutOfRange { index: i })
             } else {
@@ -210,7 +235,9 @@ impl Value {
             ))
         }
         match (self, idx) {
-            (Value::List(v), Value::Int(i)) => Ok(v[check_bounds(*i, v.len())?].clone()),
+            (Value::List(v), Value::Int(_) | Value::Uint(_)) => {
+                Ok(v[check_bounds(idx, v.len())?].clone())
+            }
             (Value::List(_), _) => Err(bad_index("list", idx)),
             (Value::Map(m), Value::String(k)) => {
                 Ok(m.get(k.as_ref()).cloned().unwrap_or(Value::Nil))
@@ -219,9 +246,9 @@ impl Value {
             // Go indexes strings as `[]byte` — mid-codepoint offsets are
             // valid since Go has no UTF-8 invariant. We surface the byte as
             // a `Value::Int` to keep that semantic without breaking ours.
-            (Value::String(s), Value::Int(i)) => {
+            (Value::String(s), Value::Int(_) | Value::Uint(_)) => {
                 let bytes = s.as_bytes();
-                Ok(Value::Int(bytes[check_bounds(*i, bytes.len())?] as i64))
+                Ok(Value::Int(bytes[check_bounds(idx, bytes.len())?] as i64))
             }
             (Value::String(_), _) => Err(bad_index("string", idx)),
             (Value::Nil, _) => Err(crate::error::TemplateError::Exec(
@@ -240,6 +267,7 @@ impl Value {
             Value::Nil => "nil",
             Value::Bool(_) => "bool",
             Value::Int(_) => "int",
+            Value::Uint(_) => "uint",
             Value::Float(_) => "float64",
             Value::String(_) => "string",
             Value::List(_) => "list",
@@ -332,20 +360,33 @@ impl Value {
         }
     }
 
-    /// Extracts an `i64` if this is a [`Value::Int`], or truncates a [`Value::Float`].
+    /// Extracts an `i64`: returned directly for a [`Value::Int`], reinterpreted
+    /// from a [`Value::Uint`] (`u64 as i64`, which wraps to a negative value
+    /// above `i64::MAX`), or truncated from a [`Value::Float`].
+    ///
+    /// The `Uint` path is lossy as a *signed value* above `i64::MAX` — only the
+    /// bit pattern survives (`n as i64 as u64 == n`), not the magnitude. Anything
+    /// that must see a uint's true magnitude matches [`Value::Uint`] directly
+    /// instead: the `%d` / `%x` / `%X` / `%o` / `%b` / `%U` printf verbs and the
+    /// index/slice paths all do. The sole remaining uint consumer here is `%c`,
+    /// where a value outside the rune range is invalid regardless of sign, so the
+    /// wrap is harmless (it maps to U+FFFD either way).
     pub fn as_int(&self) -> Option<i64> {
         match self {
             Value::Int(n) => Some(*n),
+            Value::Uint(n) => Some(*n as i64),
             Value::Float(f) => Some(*f as i64),
             _ => None,
         }
     }
 
-    /// Extracts an `f64` if this is a [`Value::Float`], or widens a [`Value::Int`].
+    /// Extracts an `f64` if this is a [`Value::Float`], or widens a
+    /// [`Value::Int`] / [`Value::Uint`].
     pub fn as_float(&self) -> Option<f64> {
         match self {
             Value::Float(f) => Some(*f),
             Value::Int(n) => Some(*n as f64),
+            Value::Uint(n) => Some(*n as f64),
             _ => None,
         }
     }
@@ -375,6 +416,7 @@ impl fmt::Display for Value {
             Value::Nil => write!(f, "<nil>"),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Int(n) => write!(f, "{n}"),
+            Value::Uint(n) => write!(f, "{n}"),
             Value::Float(v) => write!(f, "{v}"),
             Value::String(s) => write!(f, "{s}"),
             Value::List(v) => {
@@ -415,6 +457,7 @@ impl PartialEq for Value {
             (Value::Nil, Value::Nil) => true,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Uint(a), Value::Uint(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
             (Value::List(a), Value::List(b)) => a == b,
@@ -436,6 +479,7 @@ impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => a.partial_cmp(b),
+            (Value::Uint(a), Value::Uint(b)) => a.partial_cmp(b),
             (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
             _ => None,
@@ -488,7 +532,22 @@ macro_rules! impl_to_value_int {
     };
 }
 
-impl_to_value_int!(i8, i16, i32, i64, u8, u16, u32, u64, isize, usize);
+macro_rules! impl_to_value_uint {
+    ($($t:ty),*) => {
+        $(impl ToValue for $t {
+            fn to_value(&self) -> Value {
+                Value::Uint(*self as u64)
+            }
+        })*
+    };
+}
+
+// Signed integers map to `Value::Int`; unsigned integers map to `Value::Uint`,
+// mirroring Go's distinct signed/unsigned reflect kinds. Keeping the unsigned
+// family in `Value::Uint` is what lets `u64::MAX` render and compare as its
+// true value instead of wrapping to `Value::Int(-1)`.
+impl_to_value_int!(i8, i16, i32, i64, isize);
+impl_to_value_uint!(u8, u16, u32, u64, usize);
 
 impl ToValue for f32 {
     fn to_value(&self) -> Value {

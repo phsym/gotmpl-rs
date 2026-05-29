@@ -21,7 +21,12 @@ fn parse_number(s: &str) -> Option<Number> {
     if s.contains('.') || s.contains('e') || s.contains('E') {
         s.parse::<f64>().ok().map(Number::Float)
     } else {
-        s.parse::<i64>().ok().map(Number::Int)
+        // Fall back to u64 for a non-negative literal that overflows i64
+        // (Go treats it as an unsigned constant), mirroring the lexer.
+        s.parse::<i64>()
+            .ok()
+            .map(Number::Int)
+            .or_else(|| s.parse::<u64>().ok().map(Number::Uint))
     }
 }
 
@@ -455,6 +460,13 @@ impl<'a> Parser<'a> {
                 "cannot assign {} variables outside a range pipeline",
                 decl.len()
             )));
+        }
+        // Go caps range declarations at two (key, value); a third is a parse
+        // error ("too many declarations in range"), not a silently-dropped
+        // variable. `range_loop!` only binds decl[0]/decl[1], so without this
+        // a `{{range $i, $v, $w := …}}` would otherwise drop `$w` unnoticed.
+        if allow_multi_decl && decl.len() > 2 {
+            return Err(self.error("too many declarations in range".to_string()));
         }
 
         let mut commands = Vec::new();

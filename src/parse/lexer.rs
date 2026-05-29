@@ -23,8 +23,36 @@ use crate::error::{Result, TemplateError};
 fn int_parse_msg(kind: &str, err: &core::num::ParseIntError) -> String {
     use core::num::IntErrorKind::*;
     match err.kind() {
-        PosOverflow | NegOverflow => format!("{} integer literal overflows i64", kind),
+        // A non-negative magnitude is retried as `u64` before erroring, so an
+        // overflow here means the literal exceeds even `u64` (or is a negative
+        // value below `i64::MIN`).
+        PosOverflow | NegOverflow => format!("{} integer literal overflows u64", kind),
         _ => format!("invalid {} number", kind),
+    }
+}
+
+/// Parse the (unsigned) `digits` of an integer literal in `radix` into a
+/// [`Number`], applying `negative`.
+///
+/// Mirrors Go: a non-negative literal that overflows `i64` is retried as `u64`
+/// and becomes [`Number::Uint`]. A negative literal cannot be unsigned, so it
+/// keeps the `i64` overflow error.
+fn radix_number(
+    digits: &str,
+    radix: u32,
+    negative: bool,
+) -> core::result::Result<Number, core::num::ParseIntError> {
+    match i64::from_str_radix(digits, radix) {
+        Ok(n) => Ok(Number::Int(if negative { -n } else { n })),
+        Err(e) => {
+            if !negative
+                && matches!(e.kind(), core::num::IntErrorKind::PosOverflow)
+                && let Ok(u) = u64::from_str_radix(digits, radix)
+            {
+                return Ok(Number::Uint(u));
+            }
+            Err(e)
+        }
     }
 }
 
@@ -742,11 +770,8 @@ impl<'a> Lexer<'a> {
                         } else {
                             (false, clean.as_ref())
                         };
-                        match i64::from_str_radix(digits, 8) {
-                            Ok(n) => {
-                                let val = if negative { -n } else { n };
-                                self.emit_num(TokenKind::Number, Number::Int(val));
-                            }
+                        match radix_number(digits, 8, negative) {
+                            Ok(num) => self.emit_num(TokenKind::Number, num),
                             Err(e) => return Err(self.error(int_parse_msg("octal", &e))),
                         }
                         return Ok(());
@@ -794,11 +819,8 @@ impl<'a> Lexer<'a> {
                 .trim_start_matches("0x")
                 .trim_start_matches("0X")
         };
-        match i64::from_str_radix(hex_str, 16) {
-            Ok(n) => {
-                let val = if negative { -n } else { n };
-                self.emit_num(TokenKind::Number, Number::Int(val));
-            }
+        match radix_number(hex_str, 16, negative) {
+            Ok(num) => self.emit_num(TokenKind::Number, num),
             Err(e) => return Err(self.error(int_parse_msg("hex", &e))),
         }
         Ok(())
@@ -870,11 +892,8 @@ impl<'a> Lexer<'a> {
             8 => "octal",
             _ => "integer",
         };
-        match i64::from_str_radix(digits, base) {
-            Ok(n) => {
-                let val = if negative { -n } else { n };
-                self.emit_num(TokenKind::Number, Number::Int(val));
-            }
+        match radix_number(digits, base, negative) {
+            Ok(num) => self.emit_num(TokenKind::Number, num),
             Err(e) => return Err(self.error(int_parse_msg(kind, &e))),
         }
         Ok(())
@@ -923,9 +942,13 @@ impl<'a> Lexer<'a> {
                 .map(Number::Float)
                 .map_err(|_| self.error("invalid number"))?
         } else {
-            clean
-                .parse::<i64>()
-                .map(Number::Int)
+            // Strip the sign so a non-negative overflow can fall back to u64.
+            let negative = clean.starts_with('-');
+            let digits = clean
+                .strip_prefix('-')
+                .or_else(|| clean.strip_prefix('+'))
+                .unwrap_or(clean.as_ref());
+            radix_number(digits, 10, negative)
                 .map_err(|e| self.error(int_parse_msg("decimal", &e)))?
         };
         // Emit with underscore-stripped val so existing consumers (error
@@ -1280,6 +1303,41 @@ mod tests {
         let tokens = lex("{{0xFF}}");
         assert_eq!(tokens[1].kind, TokenKind::Number);
         assert_eq!(tokens[1].num, Some(Number::Int(255)));
+    }
+
+    #[test]
+    fn test_decimal_u64_overflow_falls_back_to_uint() {
+        // 18446744073709551615 = u64::MAX — overflows i64, fits in u64.
+        let tokens = lex("{{18446744073709551615}}");
+        assert_eq!(tokens[1].kind, TokenKind::Number);
+        assert_eq!(tokens[1].num, Some(Number::Uint(u64::MAX)));
+
+        // i64::MAX + 1 — the first value that needs the uint fallback.
+        let tokens = lex("{{9223372036854775808}}");
+        assert_eq!(tokens[1].num, Some(Number::Uint(9_223_372_036_854_775_808)));
+    }
+
+    #[test]
+    fn test_hex_u64_overflow_falls_back_to_uint() {
+        let tokens = lex("{{0xFFFFFFFFFFFFFFFF}}");
+        assert_eq!(tokens[1].kind, TokenKind::Number);
+        assert_eq!(tokens[1].num, Some(Number::Uint(u64::MAX)));
+    }
+
+    #[test]
+    fn test_in_range_i64_stays_int() {
+        // i64::MAX itself stays Int (only overflow triggers the uint fallback).
+        let tokens = lex("{{9223372036854775807}}");
+        assert_eq!(tokens[1].num, Some(Number::Int(i64::MAX)));
+    }
+
+    #[test]
+    fn test_literal_overflowing_u64_errors() {
+        // One digit past u64::MAX overflows even the uint fallback.
+        let err = Lexer::new("{{18446744073709551616}}", "{{", "}}")
+            .tokenize()
+            .expect_err("expected overflow error");
+        assert!(format!("{err}").contains("overflow"), "got: {err}");
     }
 
     #[test]

@@ -656,13 +656,15 @@ impl Template {
             // Reject non-UTF-8 paths explicitly. `to_string_lossy` would
             // silently substitute U+FFFD and then `parse_files` would fail at
             // open-time with a misleading ENOENT — surface the real cause.
-            let s = path.to_str().ok_or_else(|| error::TemplateError::ReadFile {
-                path: path.to_string_lossy().into_owned(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "path is not valid UTF-8",
-                ),
-            })?;
+            let s = path
+                .to_str()
+                .ok_or_else(|| error::TemplateError::ReadFile {
+                    path: path.to_string_lossy().into_owned(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "path is not valid UTF-8",
+                    ),
+                })?;
             matched.push(s.to_owned());
         }
         if matched.is_empty() {

@@ -118,9 +118,11 @@ impl FmtSpec {
                 out.push(' ');
             }
         } else if self.zero && is_numeric {
-            // Zero-pad after a leading '+' or '-' sign so `-042` stays sign-first.
+            // Zero-pad after a leading sign so `-042` / `+042` / ` 042` stay
+            // sign-first. The space flag synthesizes a leading ' ' that, like
+            // '+'/'-', occupies the sign slot (Go's `% 08d` of 5 is " 0000005").
             let sign_off = match out.as_bytes().get(start) {
-                Some(&b'-') | Some(&b'+') => 1,
+                Some(&b'-') | Some(&b'+') | Some(&b' ') => 1,
                 _ => 0,
             };
             insert_repeated(out, start + sign_off, '0', pad_count);
@@ -137,6 +139,19 @@ impl FmtSpec {
             } else if self.space {
                 out.push(' ');
             }
+        }
+        let _ = write!(out, "{}", n);
+    }
+
+    /// Write an unsigned integer (a [`Value::Uint`]) with sign flags applied.
+    ///
+    /// Unsigned values are always non-negative, so a `-` is never emitted; Go
+    /// still honors the `+` / space flags, prepending the requested sign.
+    fn write_unsigned(&self, out: &mut String, n: u64) {
+        if self.plus {
+            out.push('+');
+        } else if self.space {
+            out.push(' ');
         }
         let _ = write!(out, "{}", n);
     }
@@ -269,6 +284,11 @@ fn take_int_arg(args: &[Value], arg_idx: &mut usize) -> core::result::Result<i64
         Some(&Value::Int(n)) => {
             *arg_idx += 1;
             Ok(n)
+        }
+        // Go's `intFromArg` also accepts the unsigned kinds for `*` / `.*`.
+        Some(&Value::Uint(n)) => {
+            *arg_idx += 1;
+            Ok(n as i64)
         }
         Some(_) => {
             *arg_idx += 1;
@@ -429,12 +449,20 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
                 }
                 _ => write_bad_verb(out, verb, arg),
             },
-            'd' => match arg.as_int() {
-                Some(n) => {
-                    spec.write_signed(out, n);
+            'd' => match arg {
+                // Match Uint before the as_int() path: a u64 above i64::MAX
+                // must print its true magnitude, not the wrapped signed value.
+                Value::Uint(u) => {
+                    spec.write_unsigned(out, *u);
                     spec.pad_in_place(out, start, true);
                 }
-                None => write_bad_verb(out, verb, arg),
+                _ => match arg.as_int() {
+                    Some(n) => {
+                        spec.write_signed(out, n);
+                        spec.pad_in_place(out, start, true);
+                    }
+                    None => write_bad_verb(out, verb, arg),
+                },
             },
             'f' => match arg.as_float() {
                 Some(f) => {
@@ -483,30 +511,38 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
                 let _ = write!(out, "{}", arg);
                 spec.pad_in_place(out, start, false);
             }
-            'U' => match arg {
-                Value::Int(n) => {
-                    // Go casts the int to uint64 and prints as hex with min 4 digits,
-                    // so negative ints wrap (`-1` → `U+FFFFFFFFFFFFFFFF`) and values
-                    // outside the Unicode range still format as bare hex.
-                    let u = *n as u64;
-                    let _ = write!(out, "U+{:04X}", u);
-                    if spec.hash {
-                        // Only quote when the value is a valid, non-control rune.
-                        // Surrogates, > U+10FFFF, and control chars get no quote —
-                        // matching Go's `strconv.IsPrint` gate (close enough for
-                        // ASCII; full Unicode-graphic parity would need a table).
-                        if let Some(c) = u32::try_from(u)
-                            .ok()
-                            .and_then(char::from_u32)
-                            .filter(|c| !c.is_control())
-                        {
-                            let _ = write!(out, " '{}'", c);
+            'U' => {
+                // Go casts the int to uint64 and prints as hex with min 4 digits,
+                // so negative ints wrap (`-1` → `U+FFFFFFFFFFFFFFFF`) and values
+                // outside the Unicode range still format as bare hex. A Uint is
+                // used as-is. (`as_int() as u64` would round-trip but also accept
+                // floats, which Go rejects — so match the integer kinds directly.)
+                let code = match arg {
+                    Value::Int(n) => Some(*n as u64),
+                    Value::Uint(n) => Some(*n),
+                    _ => None,
+                };
+                match code {
+                    Some(u) => {
+                        let _ = write!(out, "U+{:04X}", u);
+                        if spec.hash {
+                            // Only quote when the value is a valid, non-control rune.
+                            // Surrogates, > U+10FFFF, and control chars get no quote —
+                            // matching Go's `strconv.IsPrint` gate (close enough for
+                            // ASCII; full Unicode-graphic parity would need a table).
+                            if let Some(c) = u32::try_from(u)
+                                .ok()
+                                .and_then(char::from_u32)
+                                .filter(|c| !c.is_control())
+                            {
+                                let _ = write!(out, " '{}'", c);
+                            }
                         }
+                        spec.pad_in_place(out, start, false);
                     }
-                    spec.pad_in_place(out, start, false);
+                    None => write_bad_verb(out, verb, arg),
                 }
-                _ => write_bad_verb(out, verb, arg),
-            },
+            }
             'q' => match arg {
                 Value::String(s) => {
                     if !(spec.hash && try_backquote_into(out, s)) {
@@ -514,9 +550,17 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
                     }
                     spec.pad_in_place(out, start, false);
                 }
-                Value::Int(n) => {
-                    // Go's %q on an int emits a single-quoted rune literal.
-                    if let Some(c) = u32::try_from(*n).ok().and_then(char::from_u32) {
+                // Go's %q on an integer emits a single-quoted rune literal,
+                // signed and unsigned alike. Either fits a rune only if it
+                // round-trips through u32.
+                Value::Int(_) | Value::Uint(_) => {
+                    let rune = match arg {
+                        Value::Int(n) => u32::try_from(*n).ok(),
+                        Value::Uint(n) => u32::try_from(*n).ok(),
+                        _ => None,
+                    }
+                    .and_then(char::from_u32);
+                    if let Some(c) = rune {
                         let _ = write!(out, "'{}'", c.escape_default());
                         spec.pad_in_place(out, start, false);
                     } else {
@@ -535,6 +579,12 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
             'x' | 'X' | 'o' | 'b' => match arg {
                 Value::String(s) if verb == 'x' || verb == 'X' => {
                     format_string_hex_into(out, s, verb == 'X', &spec);
+                    spec.pad_in_place(out, start, false);
+                }
+                // Unsigned magnitude: route around as_int() (which would wrap a
+                // u64 above i64::MAX to a negative i64 and emit a spurious `-`).
+                Value::Uint(u) => {
+                    format_uint_base_into(out, *u, verb, &spec);
                     spec.pad_in_place(out, start, false);
                 }
                 _ => match arg.as_int() {
@@ -845,8 +895,6 @@ fn write_g_with_precision(out: &mut String, f: f64, prec: usize, upper: bool) {
 /// and `%#08o` of 255 yields `00000377` (Go's formatter omits the bare-`0`
 /// octal prefix when the padded digits already start with `0`).
 fn format_int_base_into(out: &mut String, n: i64, base: char, spec: &FmtSpec) {
-    let abs = n.unsigned_abs();
-
     let sign = if n < 0 {
         Some('-')
     } else if spec.plus {
@@ -856,13 +904,42 @@ fn format_int_base_into(out: &mut String, n: i64, base: char, spec: &FmtSpec) {
     } else {
         None
     };
+    format_magnitude_base_into(out, n.unsigned_abs(), sign, base, spec);
+}
 
+/// Write an unsigned integer (a [`Value::Uint`]) in a non-decimal base into
+/// `out`.
+///
+/// Identical to [`format_int_base_into`] except the value has no inherent
+/// sign: only the `+` / space flags can introduce a leading sign character,
+/// never `-`. Go applies the `+` / space flags to unsigned values too.
+fn format_uint_base_into(out: &mut String, u: u64, base: char, spec: &FmtSpec) {
+    let sign = if spec.plus {
+        Some('+')
+    } else if spec.space {
+        Some(' ')
+    } else {
+        None
+    };
+    format_magnitude_base_into(out, u, sign, base, spec);
+}
+
+/// Shared core for the signed and unsigned base formatters: writes `mag`'s
+/// digits in `base` with `sign` prepended, applying Go's zero-pad / precision /
+/// `#`-prefix rules described on [`format_int_base_into`].
+fn format_magnitude_base_into(
+    out: &mut String,
+    mag: u64,
+    sign: Option<char>,
+    base: char,
+    spec: &FmtSpec,
+) {
     let mut digits = String::new();
     let _ = match base {
-        'x' => write!(digits, "{:x}", abs),
-        'X' => write!(digits, "{:X}", abs),
-        'o' => write!(digits, "{:o}", abs),
-        'b' => write!(digits, "{:b}", abs),
+        'x' => write!(digits, "{:x}", mag),
+        'X' => write!(digits, "{:X}", mag),
+        'o' => write!(digits, "{:o}", mag),
+        'b' => write!(digits, "{:b}", mag),
         #[allow(
             clippy::unreachable,
             reason = "private helper; callers only pass 'x', 'X', 'o', 'b'"
@@ -1437,6 +1514,21 @@ mod tests {
         assert_eq!(format_int_base(8, "o", &spec), "010");
         assert_eq!(format_int_base(10, "b", &spec), "0b1010");
         assert_eq!(format_int_base(-255, "x", &spec), "-0xff");
+    }
+
+    // Sign-flag + zero-pad: the synthesized sign (`+` or space) must sit
+    // *before* the zero padding, matching Go (`fmt.Sprintf("% 08d", 5)` is
+    // " 0000005", not "000000 5"). Covers the signed and unsigned `%d` paths.
+    #[test]
+    fn sprintf_sign_flag_zero_pad() {
+        assert_eq!(sf("% 08d", &[Value::Int(5)]), " 0000005");
+        assert_eq!(sf("% 08d", &[Value::Uint(5)]), " 0000005");
+        assert_eq!(sf("%+08d", &[Value::Int(5)]), "+0000005");
+        assert_eq!(sf("%+08d", &[Value::Uint(5)]), "+0000005");
+        assert_eq!(sf("%08d", &[Value::Int(-5)]), "-0000005");
+        // Non-zero-pad space/plus still right-align with the sign attached.
+        assert_eq!(sf("% 8d", &[Value::Int(5)]), "       5");
+        assert_eq!(sf("%+8d", &[Value::Uint(5)]), "      +5");
     }
 
     // html_escape

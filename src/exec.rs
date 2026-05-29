@@ -277,6 +277,22 @@ macro_rules! range_loop {
     };
 }
 
+/// Go restricts `range` over an integer (Go 1.22+) to a single loop variable:
+/// `{{range $i, $v := 3}}` errors at exec with "can't use N to iterate over
+/// more than one variable" — for any value, and *before* the empty check.
+/// Slices, maps, and channels are unaffected; only the integer kinds are
+/// guarded. `val`'s `Display` reproduces Go's `N` (`Int`/`Uint` both print the
+/// bare magnitude).
+fn ensure_single_range_var(branch: &BranchNode, val: &Value) -> ExecResult<()> {
+    if branch.pipe.decl.len() > 1 {
+        return Err(TemplateError::Exec(format!(
+            "can't use {val} to iterate over more than one variable"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 impl<'a> Executor<'a> {
     /// Create a new executor with the given function map and template definitions.
     ///
@@ -484,6 +500,7 @@ impl<'a> Executor<'a> {
             }
             Value::Int(n) => {
                 // Go 1.22+: range over integer
+                ensure_single_range_var(branch, &val)?;
                 let count = *n;
                 if count <= 0 {
                     if let Some(ref else_body) = branch.else_body {
@@ -495,6 +512,23 @@ impl<'a> Executor<'a> {
                         w,
                         branch,
                         (0..count).map(|i| (Value::Int(i), Value::Int(i)))
+                    );
+                }
+            }
+            Value::Uint(n) => {
+                // Go 1.22+: range over an unsigned integer yields uint counters.
+                ensure_single_range_var(branch, &val)?;
+                let count = *n;
+                if count == 0 {
+                    if let Some(ref else_body) = branch.else_body {
+                        self.walk(w, else_body, dot)?;
+                    }
+                } else {
+                    range_loop!(
+                        self,
+                        w,
+                        branch,
+                        (0..count).map(|i| (Value::Uint(i), Value::Uint(i)))
                     );
                 }
             }
@@ -785,6 +819,12 @@ impl<'a> Executor<'a> {
 
             Expr::Number(_, n) => match *n {
                 Number::Int(i) => Ok(Value::Int(i)),
+                // A uint literal is an untyped constant that overflowed i64.
+                // Go narrows untyped numeric constants to `int` when they are
+                // used (its `idealConstant`), so such a literal errors at exec
+                // with "N overflows int" in every context. We match that — uint
+                // *values* (from data) are unaffected; only literals error.
+                Number::Uint(u) => Err(TemplateError::Exec(format!("{u} overflows int")).into()),
                 Number::Float(f) => Ok(Value::Float(f)),
             },
 

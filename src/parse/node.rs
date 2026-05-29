@@ -184,6 +184,12 @@ pub struct CommandNode {
 pub enum Number {
     /// An integer literal (decimal, hex, octal, binary, or char code point).
     Int(i64),
+    /// An unsigned integer literal that overflows `i64` but fits in `u64`
+    /// (e.g. `18446744073709551615`, `0xFFFFFFFFFFFFFFFF`).
+    ///
+    /// Go treats such constants as unsigned; the lexer falls back to this
+    /// variant only when `i64` parsing overflows on a non-negative literal.
+    Uint(u64),
     /// A floating-point literal (decimal float or hex float).
     Float(f64),
 }

@@ -143,12 +143,16 @@ Format strings follow Go's [`fmt`](https://pkg.go.dev/fmt) syntax:
 | `%t`       | bool              | `true` / `false`                                |
 | `%%`       | —                 | Literal `%`                                     |
 
+The integer verbs (`%d`, `%b`, `%o`, `%x`/`%X`, `%c`, `%U`, and `%q` for runes) accept
+both signed (`int`) and unsigned (`uint`) values; `uint` values above `i64::MAX` print
+their true magnitude.
+
 Flags: `-` (left-align), `+` (always sign numerics), ` ` (leading space for non-negative
 numerics), `#` (alternate form: `0b`/`0o`/`0x`/`0X` prefix, or quoted rune for `%U`),
 `0` (zero-pad numerics).
 
 Width and `.precision` accept either a literal number or `*` / `.*` to read the value
-from the next argument (which must be an `int` — floats and other types yield
+from the next argument (which must be an integer — floats and other types yield
 `%!(BADWIDTH)` / `%!(BADPREC)`).
 
 Argument indexing with `%[N]verb` selects the N-th (1-based) argument and resets the
@@ -260,6 +264,7 @@ Template data uses the `Value` enum:
 | `Nil`                                 | n/a           | `nil`            |
 | `Bool(bool)`                          | `bool`        | `bool`           |
 | `Int(i64)`                            | `i64`         | `int`            |
+| `Uint(u64)`                           | `u64`         | `uint`           |
 | `Float(f64)`                          | `f64`         | `float64`        |
 | `String(Arc<str>)`                    | `String`      | `string`         |
 | `List(Arc<[Value]>)`                  | `Vec<Value>`  | `[]any`          |
@@ -349,10 +354,6 @@ Error reporting differs in a couple of places:
 
 A few data and formatting edge cases diverge too:
 
-- **`u64` / `usize` above `i64::MAX` wrap to negative.** `Value::Int` is `i64`;
-  `u64::MAX` round-trips through `ToValue` as `Value::Int(-1)` and renders as
-  `-1`. Pinned so a future Value-model widening trips the test. Values up to
-  and including `u32::MAX` are unaffected.
 - **`\NNN` octal escapes with value ≥ 0x80** encode as the Unicode codepoint
   U+0080..U+00FF (a 2-byte UTF-8 sequence) where Go emits the single byte
   0xNN. Same root cause as the `slice` divergence below: `Value::String` is
