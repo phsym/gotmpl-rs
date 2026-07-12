@@ -39,6 +39,61 @@ let result = execute("Hello, {{.Name}}!", &tmap! { "Name" => "World" }).unwrap()
 assert_eq!(result, "Hello, World!");
 ```
 
+## HTML auto-escaping (`html` feature)
+
+With the `html` feature, `gotmpl::html::Template` is a drop-in analog of
+`Template` that context-aware auto-escapes its output, exactly like Go's
+[`html/template`](https://pkg.go.dev/html/template). It is a *distinct type* on
+purpose: escaping can't be forgotten, and passing a non-escaping `Template`
+where escaped output is required won't compile.
+
+```rust,ignore
+use gotmpl::html::Template;
+use gotmpl::tmap;
+
+let data = tmap! {
+    "Comment" => "<script>alert('xss')</script>",
+    "Link"    => "javascript:alert(1)",
+};
+let out = Template::new("page")
+    .parse(r#"<p>{{.Comment}}</p><a href="{{.Link}}">x</a>"#)
+    .unwrap()
+    .execute_to_string(&data)
+    .unwrap();
+assert_eq!(
+    out,
+    r#"<p>&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;</p><a href="#ZgotmplZ">x</a>"#,
+);
+```
+
+Each interpolation is escaped for its surrounding context — HTML text, tag and
+attribute names, quoted/unquoted attribute values, RCDATA (`<textarea>`,
+`<title>`), URLs, `srcset`, JavaScript (value/string/regexp/template-literal),
+and CSS. An unsafe URL scheme becomes `#ZgotmplZ`, and other rejected values
+become `ZgotmplZ`, matching Go.
+
+Trusted content that should bypass escaping is wrapped in one of the
+content types — `html::HTML`, `HTMLAttr`, `JS`, `JSStr`, `CSS`, `URL`, `Srcset`
+(analogs of Go's `template.HTML` etc.), which produce a `Value::Safe`:
+
+```rust,ignore
+use gotmpl::html::{Template, HTML};
+use gotmpl::tmap;
+
+let data = tmap! { "Body" => HTML::from("<b>trusted</b>") };
+let out = Template::new("t")
+    .parse("{{.Body}}")
+    .unwrap()
+    .execute_to_string(&data)
+    .unwrap();
+assert_eq!(out, "<b>trusted</b>"); // emitted verbatim in HTML text context
+```
+
+Escaping runs once, lazily, on the first `execute*` call (so `{{template "x"}}`
+can reference templates added beforehand); after that the template can no longer
+be parsed into. The feature is `no_std`-compatible. See `examples/html.rs`
+(`cargo run --example html --features html`).
+
 ## Template syntax
 
 Actions are delimited by `{{` and `}}` (configurable via `.delims()`).

@@ -322,16 +322,17 @@ pub fn builtins() -> BTreeMap<String, ValueFunc> {
 /// true, args are always space-separated and a trailing newline is appended;
 /// otherwise spaces follow Go's [`go::needs_space`] rule.
 fn join_print(args: &[Value], as_println: bool) -> Arc<str> {
+    if !as_println {
+        return Arc::from(go::sprint(args));
+    }
     let mut result = String::with_capacity(args.len() * 8);
     for (i, arg) in args.iter().enumerate() {
-        if i > 0 && (as_println || go::needs_space(&args[i - 1], arg)) {
+        if i > 0 {
             result.push(' ');
         }
         write!(result, "{}", arg).ok();
     }
-    if as_println {
-        result.push('\n');
-    }
+    result.push('\n');
     Arc::from(result)
 }
 
@@ -345,6 +346,8 @@ fn stringify_for_escaper(v: &Value) -> Cow<'_, str> {
     match v {
         Value::Nil => Cow::Borrowed("<no value>"),
         Value::String(s) => Cow::Borrowed(s.as_ref()),
+        #[cfg(feature = "html")]
+        Value::Safe { s, .. } => Cow::Borrowed(s.as_ref()),
         _ => Cow::Owned(format!("{}", v)),
     }
 }
@@ -391,6 +394,14 @@ fn compare_eq(left: &Value, right: &Value) -> Result<bool> {
             "non-comparable type {}",
             left.type_name()
         ))),
+        // Trusted content (`Value::Safe`) compares by its underlying string,
+        // ignoring the content kind — matching Go's `eq`, which compares
+        // template.HTML/JS/... as their string basicKind.
+        #[cfg(feature = "html")]
+        (Value::Safe { s: a, .. }, Value::Safe { s: b, .. }) => Ok(a == b),
+        #[cfg(feature = "html")]
+        (Value::Safe { s: a, .. }, Value::String(b))
+        | (Value::String(b), Value::Safe { s: a, .. }) => Ok(a == b),
         _ => Err(TemplateError::Exec(format!(
             "incompatible types for comparison: {} and {}",
             left.type_name(),
@@ -426,6 +437,13 @@ fn compare_order(left: &Value, right: &Value) -> Result<Ordering> {
             .partial_cmp(b)
             .ok_or_else(|| TemplateError::Exec("invalid type for comparison".into())),
         (Value::String(a), Value::String(b)) => Ok(a.cmp(b)),
+        // Trusted content orders by its underlying string (see `compare_eq`).
+        #[cfg(feature = "html")]
+        (Value::Safe { s: a, .. }, Value::Safe { s: b, .. }) => Ok(a.cmp(b)),
+        #[cfg(feature = "html")]
+        (Value::Safe { s: a, .. }, Value::String(b)) => Ok(a.cmp(b)),
+        #[cfg(feature = "html")]
+        (Value::String(a), Value::Safe { s: b, .. }) => Ok(a.cmp(b)),
         _ if left.type_name() != right.type_name() => Err(TemplateError::Exec(format!(
             "incompatible types for comparison: {} and {}",
             left.type_name(),

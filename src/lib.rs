@@ -34,9 +34,20 @@ pub(crate) mod go;
 pub mod parse;
 pub(crate) mod value;
 
+/// Go `html/template`-style context-aware auto-escaping.
+///
+/// Provides [`html::Template`], a drop-in analog of [`Template`] whose output is
+/// contextually auto-escaped for HTML text, attributes, URLs, JavaScript, and
+/// CSS. Available only with the `html` feature.
+#[cfg(feature = "html")]
+#[cfg_attr(docsrs, doc(cfg(feature = "html")))]
+pub mod html;
+
 // Public re-exports
 // All user-facing types are available at the crate root.
 
+#[cfg(feature = "html")]
+pub use error::EscapeErrorCode;
 pub use error::{Result, TemplateError};
 use funcs::builtins;
 
@@ -64,6 +75,8 @@ fn col_for_offset(src: &str, offset: usize) -> usize {
     src[line_start..end].chars().count() + 1
 }
 pub use go::{html_escape, js_escape, url_encode};
+#[cfg(feature = "html")]
+pub use value::SafeKind;
 pub use value::{ToValue, Value, ValueFunc};
 
 use alloc::collections::BTreeMap;
@@ -133,18 +146,18 @@ pub struct Template {
 /// Adapts a [`std::io::Write`] to [`core::fmt::Write`]. Any [`io::Error`](std::io::Error)
 /// gets stashed, since [`fmt::Error`](core::fmt::Error) has no payload to carry it.
 #[cfg(feature = "std")]
-struct IoAdapter<'a, W> {
+pub(crate) struct IoAdapter<'a, W> {
     inner: &'a mut W,
     error: Option<std::io::Error>,
 }
 
 #[cfg(feature = "std")]
 impl<'a, W> IoAdapter<'a, W> {
-    fn new(inner: &'a mut W) -> Self {
+    pub(crate) fn new(inner: &'a mut W) -> Self {
         IoAdapter { inner, error: None }
     }
 
-    fn err_mapper(self) -> impl FnOnce(TemplateError) -> TemplateError {
+    pub(crate) fn err_mapper(self) -> impl FnOnce(TemplateError) -> TemplateError {
         move |e| match e {
             error::TemplateError::Write => error::TemplateError::Io(
                 self.error
@@ -709,6 +722,20 @@ impl Template {
         self
     }
 
+    /// Build an [`Executor`] over the given func and template maps, applying
+    /// this template's execution options. Single place all execute paths route
+    /// through so a new option cannot be forgotten on one of them.
+    fn make_executor<'a>(
+        &self,
+        funcs: &'a BTreeMap<String, ValueFunc>,
+        templates: &'a BTreeMap<String, Arc<ListNode>>,
+    ) -> Executor<'a> {
+        let mut executor = Executor::new(funcs, templates);
+        executor.set_missing_key(self.missing_key);
+        executor.set_max_range_iters(self.max_range_iters);
+        executor
+    }
+
     /// Execute the template, writing output to the given [`fmt::Write`](core::fmt::Write) destination.
     ///
     /// The `data` argument becomes the initial dot (`.`) value inside the template.
@@ -728,9 +755,7 @@ impl Template {
             error::TemplateError::Exec(format!("template {:?} has not been parsed", self.name))
         })?;
 
-        let mut executor = Executor::new(&self.funcs, &self.defines);
-        executor.set_missing_key(self.missing_key);
-        executor.set_max_range_iters(self.max_range_iters);
+        let mut executor = self.make_executor(&self.funcs, &self.defines);
         executor.execute(writer, tree, data)
     }
 
@@ -756,9 +781,7 @@ impl Template {
             .get(name)
             .ok_or_else(|| error::TemplateError::UndefinedTemplate(name.to_string()))?;
 
-        let mut executor = Executor::new(&self.funcs, &self.defines);
-        executor.set_missing_key(self.missing_key);
-        executor.set_max_range_iters(self.max_range_iters);
+        let mut executor = self.make_executor(&self.funcs, &self.defines);
         executor.execute(writer, tree.as_ref(), data)
     }
 
@@ -907,6 +930,43 @@ impl Template {
         names.sort_unstable();
         let quoted: Vec<String> = names.iter().map(|n| format!("{n:?}")).collect();
         format!("; defined templates are: {}", quoted.join(", "))
+    }
+}
+
+/// Internal hooks used by the `html` module's escaping layer: they expose the
+/// parsed trees and an execution entry point over caller-supplied (escaped)
+/// trees, mirroring [`execute_fmt`](Self::execute_fmt) but with the tree set
+/// provided by the html layer instead of taken from `self`.
+#[cfg(feature = "html")]
+impl Template {
+    /// The parsed root tree (`None` until [`parse`](Self::parse) succeeds).
+    pub(crate) fn root_tree(&self) -> Option<&ListNode> {
+        self.tree.as_ref()
+    }
+
+    /// The map of named template definitions (`{{define}}`/`{{block}}`).
+    pub(crate) fn define_map(&self) -> &BTreeMap<String, Arc<ListNode>> {
+        &self.defines
+    }
+
+    /// The shared function map (builtins plus any user-registered functions).
+    pub(crate) fn func_map(&self) -> &Arc<BTreeMap<String, ValueFunc>> {
+        &self.funcs
+    }
+
+    /// Execute a caller-supplied (escaped) tree set with this template's
+    /// options and function map. Mirrors [`execute_fmt`](Self::execute_fmt)
+    /// but takes the entry tree, template map, and funcs from the html layer.
+    pub(crate) fn execute_tree_fmt<W: core::fmt::Write>(
+        &self,
+        writer: &mut W,
+        entry: &ListNode,
+        templates: &BTreeMap<String, Arc<ListNode>>,
+        funcs: &BTreeMap<String, ValueFunc>,
+        data: &Value,
+    ) -> Result<()> {
+        let mut executor = self.make_executor(funcs, templates);
+        executor.execute(writer, entry, data)
     }
 }
 

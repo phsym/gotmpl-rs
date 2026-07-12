@@ -25,6 +25,10 @@ std = []
 # Enables `Template::parse_glob` (loads templates by glob pattern). Implies
 # `std`; disabling `std` therefore also drops `glob`.
 glob = ["std", "dep:glob"]
+# Enables Go `html/template`-style context-aware auto-escaping via
+# `gotmpl::html::Template`. Pure `alloc` (no_std-compatible); adds a gated
+# `Value::Safe` variant carrying trusted content that bypasses escaping.
+html = []
 # When enabled, the test suite additionally shells out to a Go helper and
 # asserts output parity with Go's `text/template`. Intended for tests only;
 # requires a `go` toolchain on PATH.
@@ -34,6 +38,11 @@ go-crosscheck = []
 thiserror = "2"
 smol_str = { version = "0.3", default-features = false }
 glob = { version = "0.3", optional = true }
+
+# The html example only builds with the `html` feature enabled.
+[[example]]
+name = "html"
+required-features = ["html"]
 
 [profile.bench]
 opt-level = 3

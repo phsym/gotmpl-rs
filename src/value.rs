@@ -110,6 +110,43 @@ pub enum Value {
     ///
     /// See [`ValueFunc`] for the expected signature.
     Function(ValueFunc),
+
+    /// Trusted content that bypasses context-aware escaping in its matching
+    /// context. Produced by the [`html`](crate::html) module's safe-content
+    /// wrappers ([`HTML`](crate::html::HTML), etc.). Available only with the
+    /// `html` feature; the default build's `Value` has no such variant, so this
+    /// addition is not a breaking change for `text/template` users.
+    #[cfg(feature = "html")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "html")))]
+    Safe {
+        /// Which content type this string is trusted as.
+        kind: SafeKind,
+        /// The trusted string, emitted verbatim in its matching context.
+        s: Arc<str>,
+    },
+}
+
+/// The content type of a [`Value::Safe`] — the seven trusted-content kinds of
+/// Go's `html/template` (`template.HTML`, `template.JS`, …). Available only with
+/// the `html` feature.
+#[cfg(feature = "html")]
+#[cfg_attr(docsrs, doc(cfg(feature = "html")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafeKind {
+    /// Known-safe HTML markup ([`html::HTML`](crate::html::HTML)).
+    Html,
+    /// A known-safe HTML attribute fragment ([`html::HTMLAttr`](crate::html::HTMLAttr)).
+    HtmlAttr,
+    /// Known-safe JavaScript source ([`html::JS`](crate::html::JS)).
+    Js,
+    /// A known-safe JavaScript string-literal body ([`html::JSStr`](crate::html::JSStr)).
+    JsStr,
+    /// Known-safe CSS source ([`html::CSS`](crate::html::CSS)).
+    Css,
+    /// A known-safe URL ([`html::URL`](crate::html::URL)).
+    Url,
+    /// A known-safe `srcset` value ([`html::Srcset`](crate::html::Srcset)).
+    Srcset,
 }
 
 impl Clone for Value {
@@ -124,6 +161,11 @@ impl Clone for Value {
             Value::List(v) => Value::List(Arc::clone(v)),
             Value::Map(m) => Value::Map(Arc::clone(m)),
             Value::Function(f) => Value::Function(Arc::clone(f)),
+            #[cfg(feature = "html")]
+            Value::Safe { kind, s } => Value::Safe {
+                kind: *kind,
+                s: Arc::clone(s),
+            },
         }
     }
 }
@@ -140,6 +182,8 @@ impl fmt::Debug for Value {
             Value::List(v) => write!(f, "List({v:?})"),
             Value::Map(m) => write!(f, "Map({m:?})"),
             Value::Function(_) => write!(f, "Function(...)"),
+            #[cfg(feature = "html")]
+            Value::Safe { kind, s } => write!(f, "Safe({kind:?}, {s:?})"),
         }
     }
 }
@@ -159,6 +203,8 @@ impl Value {
             Value::List(v) => !v.is_empty(),
             Value::Map(m) => !m.is_empty(),
             Value::Function(_) => true,
+            #[cfg(feature = "html")]
+            Value::Safe { s, .. } => !s.is_empty(),
         }
     }
 
@@ -273,6 +319,10 @@ impl Value {
             Value::List(_) => "list",
             Value::Map(_) => "map",
             Value::Function(_) => "func",
+            // Safe content compares and formats as its underlying string, so it
+            // reports "string" (matching Go's basicKind for template.HTML etc.).
+            #[cfg(feature = "html")]
+            Value::Safe { .. } => "string",
         }
     }
 
@@ -440,6 +490,9 @@ impl fmt::Display for Value {
                 write!(f, "]")
             }
             Value::Function(_) => write!(f, "<func>"),
+            // Trusted content renders verbatim, exactly like its string.
+            #[cfg(feature = "html")]
+            Value::Safe { s, .. } => write!(f, "{s}"),
         }
     }
 }
@@ -462,6 +515,8 @@ impl PartialEq for Value {
             (Value::String(a), Value::String(b)) => a == b,
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Map(a), Value::Map(b)) => a == b,
+            #[cfg(feature = "html")]
+            (Value::Safe { kind: k1, s: a }, Value::Safe { kind: k2, s: b }) => k1 == k2 && a == b,
             _ => false,
         }
     }
@@ -482,6 +537,8 @@ impl PartialOrd for Value {
             (Value::Uint(a), Value::Uint(b)) => a.partial_cmp(b),
             (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
+            #[cfg(feature = "html")]
+            (Value::Safe { s: a, .. }, Value::Safe { s: b, .. }) => a.partial_cmp(b),
             _ => None,
         }
     }

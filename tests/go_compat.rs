@@ -116,6 +116,12 @@ mod go_crosscheck {
                      Template::new(...).func(...).parse(...).execute_to_string(...) \
                      directly in a #[test] fn instead of ok()/fail()");
             }
+            // The `text/template` cross-check has no notion of trusted content;
+            // html-escaping parity is covered by tests/html_compat.rs instead.
+            #[cfg(feature = "html")]
+            Value::Safe { .. } => {
+                return Err("Value::Safe is not used in the text/template cross-check");
+            }
         })
     }
 

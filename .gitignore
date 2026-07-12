@@ -1,2 +1,4 @@
 target/
 Cargo.lock
+# Go module cache created by the `go-crosscheck` test helpers.
+pkg/

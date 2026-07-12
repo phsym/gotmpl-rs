@@ -19,6 +19,77 @@ fn fmt_src_err(name: &Option<String>, line: usize, col: usize, message: &str) ->
     }
 }
 
+/// Formatter for context-aware escaping errors, mirroring Go's
+/// `html/template` `Error.Error()`. Go emits one of three shapes depending on
+/// how much position it captured:
+/// - `html/template:<name>:<line>:<col>: <description>` for errors that carry a
+///   parse node (a `{{...}}` action, branch, or `{{template}}` call), via Go's
+///   `Tree.ErrorContext`;
+/// - `html/template:<name>:<line>: <description>` when only a line is known;
+/// - `html/template:<name>: <description>` when no position is known — which is
+///   what Go itself produces for errors raised inside the text/tag transition
+///   machine (e.g. `ErrBadHTML`, `ErrEndContext`), since those carry no node.
+///
+/// Documented divergence: this port reproduces the line but **not** the column.
+/// The escaping pass works over parsed trees with the source text no longer in
+/// hand, and reconstructing Go's byte column would require both retaining the
+/// source and matching Go's exact node-position convention. A `line == 0`
+/// therefore renders as the position-less form, faithfully matching Go for the
+/// transition-machine errors; the node-carrying errors match Go up to the
+/// missing `:<col>`.
+#[cfg(feature = "html")]
+fn fmt_escape_err(name: &Option<String>, line: usize, description: &str) -> String {
+    match (name, line) {
+        (Some(n), l) if l != 0 => format!("html/template:{n}:{l}: {description}"),
+        (Some(n), _) => format!("html/template:{n}: {description}"),
+        (None, l) if l != 0 => format!("html/template::{l}: {description}"),
+        (None, _) => format!("html/template: {description}"),
+    }
+}
+
+/// The code for a context-aware escaping error, mirroring the `ErrorCode`
+/// values of Go's `html/template` package (its `error.go`). Available only with
+/// the `html` feature.
+#[cfg(feature = "html")]
+#[cfg_attr(docsrs, doc(cfg(feature = "html")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EscapeErrorCode {
+    /// A `{{.}}` appears in an ambiguous context within a URL, e.g.
+    /// `<a href="{{if .C}}/foo?a={{else}}/bar/{{end}}{{.X}}">`.
+    AmbigContext,
+    /// The template produced malformed HTML: a banned rune in a tag or
+    /// attribute name, or an unquoted attribute value that cannot be escaped.
+    BadHtml,
+    /// `{{if}}`, `{{range}}`, or `{{with}}` branches end in different contexts.
+    BranchEnd,
+    /// The template ended in a non-text context (e.g. an unclosed tag, quote,
+    /// or `<script>` element).
+    EndContext,
+    /// A `{{template}}` action referenced a template that is not defined.
+    NoSuchTemplate,
+    /// The output context of a (recursively called) template could not be
+    /// computed.
+    OutputContext,
+    /// A JavaScript regexp character set `/foo[a-z/` was left unclosed.
+    PartialCharset,
+    /// A `{{.}}` interrupted an unfinished escape sequence, e.g. `\{{.X}}`.
+    PartialEscape,
+    /// A `{{range}}` body re-enters ending in a different context than it began.
+    ///
+    /// Retained for parity with Go's `ErrRangeLoopReentry` code, but — like Go
+    /// — never emitted: this failure surfaces as [`BranchEnd`](Self::BranchEnd)
+    /// with an `"on range loop re-entry: …"` description prefix.
+    RangeLoopReentry,
+    /// A `/` in JavaScript could be a division operator or a regexp start and
+    /// the context is ambiguous.
+    SlashAmbig,
+    /// A predefined escaper (`html`/`urlquery`) was used where it is disallowed.
+    PredefinedEscaper,
+    /// Deprecated in Go and never emitted: an action inside a JS template
+    /// literal (now escaped like any other JS context). Present for parity.
+    JsTemplate,
+}
+
 /// The error type returned by all template operations.
 ///
 /// Variants group by phase: lexing ([`Lex`](Self::Lex)), parsing
@@ -200,6 +271,30 @@ pub enum TemplateError {
     /// A formatting/write error occurred while writing template output.
     #[error("write error")]
     Write,
+
+    /// A context-aware escaping error from the `html` feature's escaping pass.
+    ///
+    /// Raised while escaping a [`html::Template`](crate::html::Template) (lazily,
+    /// on first execute) when the template cannot be safely contextualized —
+    /// see [`EscapeErrorCode`] for the specific reason. Mirrors the errors from
+    /// Go's `html/template`. The rendered message reproduces Go's line but not
+    /// its byte column; a `line` of `0` renders without any position, matching
+    /// Go's own output for transition-machine errors.
+    #[cfg(feature = "html")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "html")))]
+    #[error("{}", fmt_escape_err(name, *line, description))]
+    Escape {
+        /// The specific escaping-failure code.
+        code: EscapeErrorCode,
+        /// Name of the template being escaped, if known.
+        name: Option<String>,
+        /// 1-based line number in the template source (`0` when unknown, which
+        /// — matching Go — renders without any position). The byte column Go
+        /// also reports for node-carrying errors is not tracked.
+        line: usize,
+        /// Human-readable description of the escaping error.
+        description: String,
+    },
 }
 
 impl From<core::fmt::Error> for TemplateError {

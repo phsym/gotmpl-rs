@@ -31,7 +31,30 @@ use crate::value::Value;
 /// Returns `true` when Go's `fmt.Sprint` would insert a space between two
 /// adjacent arguments (i.e. neither is a string).
 pub(crate) fn needs_space(prev: &Value, next: &Value) -> bool {
-    !matches!(prev, Value::String(_)) && !matches!(next, Value::String(_))
+    // Trusted content (`Value::Safe`) is string-kind, so — like a plain string —
+    // it does not get a surrounding space in `print`.
+    fn is_stringish(v: &Value) -> bool {
+        match v {
+            Value::String(_) => true,
+            #[cfg(feature = "html")]
+            Value::Safe { .. } => true,
+            _ => false,
+        }
+    }
+    !is_stringish(prev) && !is_stringish(next)
+}
+
+/// `fmt.Sprint`: render every argument, inserting a space between two adjacent
+/// args exactly when [`needs_space`] says so.
+pub(crate) fn sprint(args: &[Value]) -> String {
+    let mut out = String::new();
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 && needs_space(&args[i - 1], arg) {
+            out.push(' ');
+        }
+        let _ = write!(out, "{arg}");
+    }
+    out
 }
 
 // sprintf
@@ -439,6 +462,17 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
         match verb {
             's' => match arg {
                 Value::String(_) => {
+                    match spec.precision {
+                        Some(prec) => write_display_truncated(out, arg, prec),
+                        None => {
+                            let _ = write!(out, "{}", arg);
+                        }
+                    }
+                    spec.pad_in_place(out, start, false);
+                }
+                // Trusted content prints as its underlying string.
+                #[cfg(feature = "html")]
+                Value::Safe { .. } => {
                     match spec.precision {
                         Some(prec) => write_display_truncated(out, arg, prec),
                         None => {

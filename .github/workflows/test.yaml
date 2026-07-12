@@ -18,7 +18,14 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest] #, windows-latest, macos-latest]
-        features: ["", "std", "std,go-crosscheck", "go-crosscheck"]
+        features:
+          - ""
+          - "std"
+          - "std,go-crosscheck"
+          - "go-crosscheck"
+          - "html"
+          - "std,html"
+          - "std,html,go-crosscheck"
 
     runs-on: ${{ matrix.os }}
 
