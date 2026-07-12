@@ -57,7 +57,10 @@ fn sample_user() -> User {
 fn field_access_and_nested_struct() {
     let data = to_value(&sample_user()).unwrap();
     assert_eq!(
-        render("{{.Name}} lives in {{.Address.City}} ({{.Address.Zip}})", &data),
+        render(
+            "{{.Name}} lives in {{.Address.City}} ({{.Address.Zip}})",
+            &data
+        ),
         "Alice lives in Paris (75001)"
     );
 }
@@ -76,10 +79,7 @@ fn method_form_matches_function_form() {
 fn if_truthiness_bool_and_option() {
     let data = to_value(&sample_user()).unwrap();
     // active == true, nickname == None (nil, falsy).
-    assert_eq!(
-        render("{{if .Active}}on{{else}}off{{end}}", &data),
-        "on"
-    );
+    assert_eq!(render("{{if .Active}}on{{else}}off{{end}}", &data), "on");
     assert_eq!(
         render("{{if .Nickname}}{{.Nickname}}{{else}}(none){{end}}", &data),
         "(none)"

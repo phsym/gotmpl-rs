@@ -79,12 +79,12 @@ fn col_for_offset(src: &str, offset: usize) -> usize {
     src[line_start..end].chars().count() + 1
 }
 pub use go::{html_escape, js_escape, url_encode};
-#[cfg(feature = "html")]
-pub use value::SafeKind;
-pub use value::{ToValue, Value, ValueFunc};
 #[cfg(feature = "serde")]
 #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 pub use ser::{ToSerdeValue, to_value};
+#[cfg(feature = "html")]
+pub use value::SafeKind;
+pub use value::{ToValue, Value, ValueFunc};
 
 use alloc::collections::BTreeMap;
 use alloc::format;

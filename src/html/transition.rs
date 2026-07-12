@@ -41,9 +41,9 @@ use super::context::{
     attr_type,
 };
 use super::lex::{
-    contains_any as contains_any_bytes, decode_css, decode_last_rune,
-    index_any as index_any_bytes, index_byte, index_js_line_terminator, index_sub, is_css_nmchar,
-    is_js_ident_part, trim_left as trim_left_bytes, trim_right as trim_right_bytes,
+    contains_any as contains_any_bytes, decode_css, decode_last_rune, index_any as index_any_bytes,
+    index_byte, index_js_line_terminator, index_sub, is_css_nmchar, is_js_ident_part,
+    trim_left as trim_left_bytes, trim_right as trim_right_bytes,
 };
 
 const COMMENT_START: &[u8] = b"<!--";

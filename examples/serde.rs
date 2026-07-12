@@ -26,7 +26,9 @@ fn main() {
     };
 
     let tmpl = Template::new("")
-        .parse("{{.Name}} ({{.Age}}){{if .Active}} active{{end}}\nRoles:{{range .Roles}} {{.}}{{end}}")
+        .parse(
+            "{{.Name}} ({{.Age}}){{if .Active}} active{{end}}\nRoles:{{range .Roles}} {{.}}{{end}}",
+        )
         .unwrap();
 
     // Free-function form.

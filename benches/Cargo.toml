@@ -5,11 +5,15 @@ edition = "2024"
 publish = false
 
 [dependencies]
-gotmpl = { path = ".." }
+gotmpl = { path = "..", features = ["html"] }
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
 name = "template"
+harness = false
+
+[[bench]]
+name = "html"
 harness = false

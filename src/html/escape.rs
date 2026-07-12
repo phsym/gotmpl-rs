@@ -215,13 +215,14 @@ impl Escaper {
         c
     }
 
-    /// A measure-mode `escapeList` over a borrowed list: computes the output
-    /// context without mutating (walks a throwaway clone).
-    fn measure_list(&mut self, c: Context, list: &ListNode) -> Context {
-        let mut tmp = list.clone();
+    /// A measure-mode `escapeList`: computes the output context without editing
+    /// the tree. Tree edits happen only under [`Mode::Commit`] (see
+    /// [`Self::escape_action`]), so Measure mode leaves `list` untouched. No
+    /// defensive clone is needed, and we walk the real node list in place.
+    fn measure_list(&mut self, c: Context, list: &mut ListNode) -> Context {
         let saved = self.mode;
         self.mode = Mode::Measure;
-        let out = self.escape_list(c, &mut tmp);
+        let out = self.escape_list(c, list);
         self.mode = saved;
         out
     }
@@ -390,7 +391,7 @@ impl Escaper {
             // The "true" branch of a range can run more than once: escaping the
             // body once must produce the same context as escaping it twice.
             self.range_stack.push(RangeCtx::default());
-            let c1 = self.measure_list(c0.clone(), &branch.body);
+            let c1 = self.measure_list(c0.clone(), &mut branch.body);
             let joined = if c1.state == State::Error {
                 None
             } else {
@@ -1171,11 +1172,7 @@ fn classify_tag_error(s: &[u8]) -> EscErr {
                 b'\'' | b'"' | b'<' => {
                     return EscErr::at0(
                         EscapeErrorCode::BadHtml,
-                        format!(
-                            "{} in attribute name: {}",
-                            go_quote(&s[j..=j]),
-                            go_quote(s)
-                        ),
+                        format!("{} in attribute name: {}", go_quote(&s[j..=j]), go_quote(s)),
                     );
                 }
                 _ => j += 1,

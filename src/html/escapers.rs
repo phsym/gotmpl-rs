@@ -6,6 +6,7 @@
 //! [`super::primitives`]. The registered names and the [`merge`] entry point are
 //! consumed by the escaping pass in `escape.rs`.
 
+use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -15,8 +16,8 @@ use crate::value::{Value, ValueFunc};
 
 use super::primitives::{
     ContentType, FILTER_FAILSAFE, HtmlTable, JsTable, css_escaper, css_value_filter,
-    html_name_filter, html_replacer, is_safe_url, js_replace, js_val_escaper,
-    srcset_filter, stringify, strip_tags, url_processor,
+    html_name_filter, html_replacer, is_safe_url, js_replace, js_val_escaper, srcset_filter,
+    stringify, strip_tags, url_processor,
 };
 
 /// A bare escaper function, before it is boxed into a [`ValueFunc`].
@@ -51,6 +52,43 @@ fn str_value(s: &str) -> Value {
     Value::String(Arc::from(s))
 }
 
+/// If `args` is a single string-like value, clone its `Arc` (a refcount bump,
+/// no allocation). Used to short-circuit escapers whose transform was a no-op:
+/// the escaped output is byte-identical to the input, so the input `Arc` can be
+/// handed straight back instead of allocating a fresh copy.
+#[inline]
+fn reuse_input(args: &[Value]) -> Option<Value> {
+    if let [single] = args {
+        match single {
+            Value::String(s) => return Some(Value::String(Arc::clone(s))),
+            Value::Safe { s, .. } => return Some(Value::String(Arc::clone(s))),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Turn an escaper's `Cow` result into a [`Value::String`] with as little work
+/// as possible:
+///
+/// * `Borrowed` means the transform changed nothing. When the input was a lone
+///   string it is returned by `Arc::clone` (zero allocation); otherwise the
+///   borrowed slice is copied once.
+/// * `Owned` means the transform built a new string, copied once into the `Arc`.
+///   (`Arc<str>` needs its refcount header inline, so it can't adopt the
+///   `String`'s buffer; consuming it would copy the same bytes anyway.)
+///
+/// Only sound for transforms whose `Cow::Borrowed` always aliases the *input*.
+/// `html_name_filter` and `css_value_filter` can borrow a static failsafe
+/// instead, so they must not use this helper.
+#[inline]
+fn finish(args: &[Value], result: Cow<'_, str>) -> Value {
+    match result {
+        Cow::Borrowed(b) => reuse_input(args).unwrap_or_else(|| str_value(b)),
+        Cow::Owned(s) => str_value(&s),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // html.go escapers.
 // ---------------------------------------------------------------------------
@@ -60,9 +98,9 @@ fn str_value(s: &str) -> Value {
 fn html_escaper(args: &[Value]) -> Result<Value> {
     let (s, t) = stringify(args);
     if t == ContentType::Html {
-        return Ok(str_value(s.as_ref()));
+        return Ok(reuse_input(args).unwrap_or_else(|| str_value(s.as_ref())));
     }
-    Ok(str_value(html_replacer(&s, HtmlTable::Html, true).as_ref()))
+    Ok(finish(args, html_replacer(&s, HtmlTable::Html, true)))
 }
 
 /// `attrEscaper`: escape for inclusion in quoted attribute values (HTML-typed
@@ -71,11 +109,17 @@ fn attr_escaper(args: &[Value]) -> Result<Value> {
     let (s, t) = stringify(args);
     if t == ContentType::Html {
         let stripped = strip_tags(&s);
-        return Ok(str_value(
-            html_replacer(&stripped, HtmlTable::HtmlNorm, true).as_ref(),
-        ));
+        // A borrowed `normalized` aliases `stripped`, which aliases the input
+        // only when `stripped` is itself borrowed, so reuse (via `finish`) is
+        // sound exactly when the strip stage was a no-op. If `strip_tags`
+        // allocated, the input can't be reused, so we copy the result.
+        let normalized = html_replacer(&stripped, HtmlTable::HtmlNorm, true);
+        if matches!(stripped, Cow::Borrowed(_)) {
+            return Ok(finish(args, normalized));
+        }
+        return Ok(str_value(&normalized));
     }
-    Ok(str_value(html_replacer(&s, HtmlTable::Html, true).as_ref()))
+    Ok(finish(args, html_replacer(&s, HtmlTable::Html, true)))
 }
 
 /// `rcdataEscaper`: escape for inclusion in an RCDATA element body (HTML-typed
@@ -87,7 +131,7 @@ fn rcdata_escaper(args: &[Value]) -> Result<Value> {
     } else {
         HtmlTable::Html
     };
-    Ok(str_value(html_replacer(&s, table, true).as_ref()))
+    Ok(finish(args, html_replacer(&s, table, true)))
 }
 
 /// `htmlNospaceEscaper`: escape for inclusion in unquoted attribute values.
@@ -97,14 +141,16 @@ fn nospace_escaper(args: &[Value]) -> Result<Value> {
         return Ok(str_value(FILTER_FAILSAFE));
     }
     if t == ContentType::Html {
+        // Same reuse reasoning as `attr_escaper`: reuse the input only when the
+        // strip stage was a no-op, otherwise copy the normalized result.
         let stripped = strip_tags(&s);
-        return Ok(str_value(
-            html_replacer(&stripped, HtmlTable::NospaceNorm, false).as_ref(),
-        ));
+        let normalized = html_replacer(&stripped, HtmlTable::NospaceNorm, false);
+        if matches!(stripped, Cow::Borrowed(_)) {
+            return Ok(finish(args, normalized));
+        }
+        return Ok(str_value(&normalized));
     }
-    Ok(str_value(
-        html_replacer(&s, HtmlTable::Nospace, false).as_ref(),
-    ))
+    Ok(finish(args, html_replacer(&s, HtmlTable::Nospace, false)))
 }
 
 /// `commentEscaper`: drop content interpolated into comments.
@@ -115,6 +161,8 @@ fn comment_escaper(_args: &[Value]) -> Result<Value> {
 /// `htmlNameFilter`: accept only valid HTML attribute/tag name parts.
 fn html_name_filter_escaper(args: &[Value]) -> Result<Value> {
     let (s, t) = stringify(args);
+    // `html_name_filter` can return `Cow::Borrowed(FILTER_FAILSAFE)`, a static
+    // replacement rather than the input, so `finish`'s reuse would be unsound here.
     Ok(str_value(html_name_filter(&s, t).as_ref()))
 }
 
@@ -125,12 +173,14 @@ fn html_name_filter_escaper(args: &[Value]) -> Result<Value> {
 /// `cssEscaper`: escape HTML and CSS specials with `\<hex>+` escapes.
 fn css_escaper_fn(args: &[Value]) -> Result<Value> {
     let (s, _) = stringify(args);
-    Ok(str_value(css_escaper(&s).as_ref()))
+    Ok(finish(args, css_escaper(&s)))
 }
 
 /// `cssValueFilter`: allow innocuous CSS values, defang unsafe ones.
 fn css_value_filter_fn(args: &[Value]) -> Result<Value> {
     let (s, t) = stringify(args);
+    // `css_value_filter` can return `Cow::Borrowed(FILTER_FAILSAFE)`, a static
+    // replacement rather than the input, so `finish`'s reuse would be unsound here.
     Ok(str_value(css_value_filter(&s, t).as_ref()))
 }
 
@@ -152,13 +202,13 @@ fn js_str_escaper(args: &[Value]) -> Result<Value> {
     } else {
         JsTable::Str
     };
-    Ok(str_value(js_replace(&s, table).as_ref()))
+    Ok(finish(args, js_replace(&s, table)))
 }
 
 /// `jsTmplLitEscaper`: escape for inclusion in a JS template literal.
 fn js_tmpl_lit_escaper(args: &[Value]) -> Result<Value> {
     let (s, _) = stringify(args);
-    Ok(str_value(js_replace(&s, JsTable::BqStr).as_ref()))
+    Ok(finish(args, js_replace(&s, JsTable::BqStr)))
 }
 
 /// `jsRegexpEscaper`: escape for literal inclusion in a JS regexp (empty input
@@ -169,7 +219,7 @@ fn js_regexp_escaper(args: &[Value]) -> Result<Value> {
     if out.is_empty() {
         return Ok(str_value("(?:)"));
     }
-    Ok(str_value(out.as_ref()))
+    Ok(finish(args, out))
 }
 
 // ---------------------------------------------------------------------------
@@ -179,31 +229,29 @@ fn js_regexp_escaper(args: &[Value]) -> Result<Value> {
 /// `urlEscaper`: produce output embeddable in a URL query.
 fn url_escaper(args: &[Value]) -> Result<Value> {
     let (s, t) = stringify(args);
-    Ok(str_value(url_processor(false, &s, t).as_ref()))
+    Ok(finish(args, url_processor(false, &s, t)))
 }
 
 /// `urlNormalizer`: normalize URL content for a quote/paren-delimited context.
 fn url_normalizer(args: &[Value]) -> Result<Value> {
     let (s, t) = stringify(args);
-    Ok(str_value(url_processor(true, &s, t).as_ref()))
+    Ok(finish(args, url_processor(true, &s, t)))
 }
 
 /// `urlFilter`: defang URLs whose scheme is not http/https/mailto.
 fn url_filter(args: &[Value]) -> Result<Value> {
     let (s, t) = stringify(args);
-    if t == ContentType::Url {
-        return Ok(str_value(s.as_ref()));
-    }
-    if !is_safe_url(&s) {
+    if t != ContentType::Url && !is_safe_url(&s) {
         return Ok(str_value("#ZgotmplZ"));
     }
-    Ok(str_value(s.as_ref()))
+    // Safe (or URL-typed) content passes through untouched.
+    Ok(reuse_input(args).unwrap_or_else(|| str_value(s.as_ref())))
 }
 
 /// `srcsetFilterAndEscaper`: filter and normalize a `srcset` value.
 fn srcset_escaper(args: &[Value]) -> Result<Value> {
     let (s, t) = stringify(args);
-    Ok(str_value(srcset_filter(&s, t).as_ref()))
+    Ok(finish(args, srcset_filter(&s, t)))
 }
 
 // ---------------------------------------------------------------------------

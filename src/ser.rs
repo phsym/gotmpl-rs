@@ -173,7 +173,10 @@ impl ser::Serializer for ValueSerializer {
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Value> {
         // Matches serde_json: a byte slice becomes a list of numbers.
-        Ok(v.iter().map(|b| Value::Uint(u64::from(*b))).collect::<Vec<_>>().into())
+        Ok(v.iter()
+            .map(|b| Value::Uint(u64::from(*b)))
+            .collect::<Vec<_>>()
+            .into())
     }
 
     fn serialize_none(self) -> Result<Value> {
@@ -229,11 +232,7 @@ impl ser::Serializer for ValueSerializer {
         self.serialize_seq(Some(len))
     }
 
-    fn serialize_tuple_struct(
-        self,
-        _name: &'static str,
-        len: usize,
-    ) -> Result<SerializeVec> {
+    fn serialize_tuple_struct(self, _name: &'static str, len: usize) -> Result<SerializeVec> {
         self.serialize_seq(Some(len))
     }
 
@@ -257,11 +256,7 @@ impl ser::Serializer for ValueSerializer {
         })
     }
 
-    fn serialize_struct(
-        self,
-        _name: &'static str,
-        _len: usize,
-    ) -> Result<SerializeMap> {
+    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<SerializeMap> {
         Ok(SerializeMap {
             map: BTreeMap::new(),
             next_key: None,
@@ -551,7 +546,10 @@ mod tests {
     /// Build a `Value::Map` from `(key, value)` pairs for terse assertions.
     fn map<const N: usize>(entries: [(&str, Value); N]) -> Value {
         Value::Map(Arc::new(
-            entries.into_iter().map(|(k, v)| (Arc::from(k), v)).collect(),
+            entries
+                .into_iter()
+                .map(|(k, v)| (Arc::from(k), v))
+                .collect(),
         ))
     }
 
@@ -589,7 +587,9 @@ mod tests {
             name: "Alice".into(),
             age: 30,
             tags: vec!["a".into(), "b".into()],
-            address: Address { city: "Paris".into() },
+            address: Address {
+                city: "Paris".into(),
+            },
             nickname: None,
         })
         .unwrap();
@@ -601,9 +601,7 @@ mod tests {
                 ("Age", Value::Uint(30)),
                 (
                     "Tags",
-                    Value::List(
-                        vec![Value::String("a".into()), Value::String("b".into())].into()
-                    )
+                    Value::List(vec![Value::String("a".into()), Value::String("b".into())].into())
                 ),
                 ("Address", map([("City", Value::String("Paris".into()))])),
                 ("Nickname", Value::Nil),
@@ -655,7 +653,10 @@ mod tests {
         // serde_bytes not pulled in; drive serialize_bytes via a manual impl.
         struct Bytes;
         impl Serialize for Bytes {
-            fn serialize<S: serde::Serializer>(&self, s: S) -> core::result::Result<S::Ok, S::Error> {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                s: S,
+            ) -> core::result::Result<S::Ok, S::Error> {
                 s.serialize_bytes(&[1u8, 2, 255])
             }
         }
@@ -698,11 +699,11 @@ mod tests {
             name: "Bob".to_string(),
             age: 42,
         };
-        let tmpl = Template::new("").parse("Hello {{.Name}}, age {{.Age}}").unwrap();
-
-        let via_fn = tmpl
-            .execute_to_string(&to_value(&user).unwrap())
+        let tmpl = Template::new("")
+            .parse("Hello {{.Name}}, age {{.Age}}")
             .unwrap();
+
+        let via_fn = tmpl.execute_to_string(&to_value(&user).unwrap()).unwrap();
         let via_method = tmpl
             .execute_to_string(&user.to_serde_value().unwrap())
             .unwrap();
