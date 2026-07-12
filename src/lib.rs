@@ -34,6 +34,10 @@ pub(crate) mod go;
 pub mod parse;
 pub(crate) mod value;
 
+#[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+pub mod ser;
+
 /// Go `html/template`-style context-aware auto-escaping.
 ///
 /// Provides [`html::Template`], a drop-in analog of [`Template`] whose output is
@@ -78,6 +82,9 @@ pub use go::{html_escape, js_escape, url_encode};
 #[cfg(feature = "html")]
 pub use value::SafeKind;
 pub use value::{ToValue, Value, ValueFunc};
+#[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+pub use ser::{ToSerdeValue, to_value};
 
 use alloc::collections::BTreeMap;
 use alloc::format;

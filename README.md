@@ -94,6 +94,41 @@ can reference templates added beforehand); after that the template can no longer
 be parsed into. The feature is `no_std`-compatible. See `examples/html.rs`
 (`cargo run --example html --features html`).
 
+## Serde integration (`serde` feature)
+
+With the `serde` feature, any [`serde::Serialize`](https://docs.rs/serde) type
+becomes template data with no hand-written conversion. `gotmpl::to_value`
+(mirroring `serde_json::to_value`) turns it into a `Value`, and the
+`ToSerdeValue` extension trait adds an equivalent `.to_serde_value()` method:
+
+```rust,ignore
+use gotmpl::{Template, ToSerdeValue, to_value};
+use serde::Serialize;
+
+// Go templates access exported PascalCase fields (`{{.Name}}`), but serde
+// derives field names verbatim, so add `rename_all` to line the keys up.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct User { name: String, age: u8, roles: Vec<String> }
+
+let user = User { name: "Alice".into(), age: 30, roles: vec!["admin".into()] };
+
+let tmpl = Template::new("t")
+    .parse("{{.Name}} ({{.Age}}){{range .Roles}} {{.}}{{end}}")
+    .unwrap();
+
+let data = to_value(&user).unwrap();        // or: user.to_serde_value().unwrap()
+assert_eq!(tmpl.execute_to_string(&data).unwrap(), "Alice (30) admin");
+```
+
+Both entry points return `Result<Value>` (serde serialization can fail on a
+non-string map key or an out-of-range 128-bit integer) and, like `ToValue`,
+materialize the whole value eagerly. Structs and maps become `Value::Map`, so
+field access uses **map** semantics: a missing field yields `<no value>` by
+default. The feature is `no_std`-compatible. See `examples/serde.rs`
+(`cargo run --example serde --features serde`) and the `ser` module docs for the
+rest of the mapping (map-key stringification and ordering-vs-Go).
+
 ## Template syntax
 
 Actions are delimited by `{{` and `}}` (configurable via `.delims()`).
@@ -340,6 +375,10 @@ let data = tmap! {
     },
 };
 ```
+
+Custom types reach the engine two ways: implement `ToValue` by hand, or enable
+the [`serde` feature](#serde-integration-serde-feature), derive
+`serde::Serialize`, and convert via `gotmpl::to_value` / `.to_serde_value()`.
 
 ## `no_std` support
 

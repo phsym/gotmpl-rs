@@ -303,6 +303,19 @@ impl From<core::fmt::Error> for TemplateError {
     }
 }
 
+/// Lets [`TemplateError`] serve as the error type of the `serde` feature's
+/// [`Value`](crate::Value) serializer. Serialization failures (unrepresentable
+/// map keys, out-of-range 128-bit integers) surface as [`Exec`](Self::Exec).
+/// Reusing the catch-all variant avoids an enum addition that would break
+/// downstream exhaustive matches.
+#[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+impl serde::ser::Error for TemplateError {
+    fn custom<T: core::fmt::Display>(msg: T) -> Self {
+        TemplateError::Exec(alloc::string::ToString::to_string(&msg))
+    }
+}
+
 /// Alias for `Result<T, TemplateError>`, the return type of every fallible
 /// operation in this crate.
 pub type Result<T> = core::result::Result<T, TemplateError>;
