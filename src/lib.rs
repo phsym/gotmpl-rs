@@ -671,7 +671,7 @@ impl Template {
         for entry in paths {
             let path = entry.map_err(|e| error::TemplateError::ReadFile {
                 path: e.path().display().to_string(),
-                source: e.into_error(),
+                source: e.into(),
             })?;
             // Reject non-UTF-8 paths explicitly. `to_string_lossy` would
             // silently substitute U+FFFD and then `parse_files` would fail at

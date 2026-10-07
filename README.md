@@ -62,7 +62,7 @@ let out = Template::new("page")
     .unwrap();
 assert_eq!(
     out,
-    r#"<p>&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;</p><a href="#ZgotmplZ">x</a>"#,
+    r##"<p>&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;</p><a href="#ZgotmplZ">x</a>"##,
 );
 ```
 
