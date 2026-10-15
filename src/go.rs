@@ -610,7 +610,7 @@ fn sprintf_into(out: &mut String, fmt_str: &str, args: &[Value]) -> Result<()> {
                 }
                 _ => write_bad_verb(out, verb, arg),
             },
-            'x' | 'X' | 'o' | 'b' => match arg {
+            'x' | 'X' | 'o' | 'O' | 'b' => match arg {
                 Value::String(s) if verb == 'x' || verb == 'X' => {
                     format_string_hex_into(out, s, verb == 'X', &spec);
                     spec.pad_in_place(out, start, false);
@@ -880,7 +880,7 @@ fn decimal_exp(f: f64) -> i32 {
 /// Write a float into `out` using Go's `%g` default precision (shortest
 /// representation). Uses `%e` notation when the exponent is < −4 or ≥ 6,
 /// matching Go's `strconv.FormatFloat(f, 'g', -1, 64)`.
-fn write_g_default(out: &mut String, f: f64, upper: bool) {
+pub(crate) fn write_g_default(out: &mut String, f: f64, upper: bool) {
     if f == 0.0 {
         out.push_str(if f.is_sign_negative() { "-0" } else { "0" });
         return;
@@ -972,11 +972,11 @@ fn format_magnitude_base_into(
     let _ = match base {
         'x' => write!(digits, "{:x}", mag),
         'X' => write!(digits, "{:X}", mag),
-        'o' => write!(digits, "{:o}", mag),
+        'o' | 'O' => write!(digits, "{:o}", mag),
         'b' => write!(digits, "{:b}", mag),
         #[allow(
             clippy::unreachable,
-            reason = "private helper; callers only pass 'x', 'X', 'o', 'b'"
+            reason = "private helper; callers only pass 'x', 'X', 'o', 'O', 'b'"
         )]
         _ => unreachable!(),
     };
@@ -1005,7 +1005,14 @@ fn format_magnitude_base_into(
     if let Some(s) = sign {
         out.push(s);
     }
-    if spec.hash {
+    // %O always carries Go's `0o` prefix; `#` additionally adds the octal
+    // leading `0` (Go prints `%#O` of 8 as `0o010`).
+    if base == 'O' {
+        out.push_str("0o");
+        if spec.hash && !digits.starts_with('0') {
+            out.push('0');
+        }
+    } else if spec.hash {
         match base {
             'x' => out.push_str("0x"),
             'X' => out.push_str("0X"),
@@ -1019,7 +1026,7 @@ fn format_magnitude_base_into(
             }
             #[allow(
                 clippy::unreachable,
-                reason = "private helper; callers only pass 'x', 'X', 'o', 'b'"
+                reason = "private helper; callers only pass 'x', 'X', 'o', 'O', 'b'"
             )]
             _ => unreachable!(),
         }

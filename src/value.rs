@@ -467,7 +467,12 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Int(n) => write!(f, "{n}"),
             Value::Uint(n) => write!(f, "{n}"),
-            Value::Float(v) => write!(f, "{v}"),
+            // Go's %v for a float64 is %g with the shortest precision.
+            Value::Float(v) => {
+                let mut s = String::new();
+                crate::go::write_g_default(&mut s, *v, false);
+                f.write_str(&s)
+            }
             Value::String(s) => write!(f, "{s}"),
             Value::List(v) => {
                 write!(f, "[")?;

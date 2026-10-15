@@ -5339,3 +5339,34 @@ fn test_uint_literal_in_dead_branch_is_fine() {
         "",
     );
 }
+
+// Parity regressions (Go cross-checked).
+
+#[test]
+fn test_float_v_uses_go_exponent_rules() {
+    // %v of a float64 is %g with the shortest precision (exponent threshold 6).
+    ok(
+        "{{1e21}} {{1e20}} {{1e6}} {{123456.0}} {{1e-7}} {{0.0001}} {{-2e25}}",
+        &Value::Nil,
+        "1e+21 1e+20 1e+06 123456 1e-07 0.0001 -2e+25",
+    );
+    ok(
+        r#"{{printf "%v %v" 1e21 123456.0}}"#,
+        &Value::Nil,
+        "1e+21 123456",
+    );
+    ok(
+        "{{.}}",
+        &Value::List(vec![Value::Float(1e-9), Value::Float(2.5)].into()),
+        "[1e-09 2.5]",
+    );
+}
+
+#[test]
+fn test_printf_capital_o_has_0o_prefix() {
+    ok(
+        r#"{{printf "%O %O %#O %6O" 8 -8 8 8}}"#,
+        &Value::Nil,
+        "0o10 -0o10 0o010   0o10",
+    );
+}
