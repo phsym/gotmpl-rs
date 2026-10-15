@@ -5339,3 +5339,24 @@ fn test_uint_literal_in_dead_branch_is_fine() {
         "",
     );
 }
+
+// Parity regressions (Go cross-checked).
+
+#[test]
+fn test_unbalanced_end_and_else_fail() {
+    fail("{{end}}", &Value::Nil);
+    fail("a{{else}}b", &Value::Nil);
+    fail("{{if .}}x", &Value::Nil);
+    fail("{{range .}}x{{else}}y", &Value::Nil);
+    fail("{{if .}}a{{else}}b{{else}}c{{end}}", &Value::Nil);
+    fail(r#"{{define "t"}}x"#, &Value::Nil);
+    fail(r#"{{define "t"}}a{{else}}b{{end}}"#, &Value::Nil);
+}
+
+#[test]
+fn test_leading_zero_integer_with_8_or_9_fails() {
+    fail("{{08}}", &Value::Nil);
+    fail("{{09}}", &Value::Nil);
+    ok("{{09.5}}", &Value::Nil, "9.5");
+    ok("{{017}}", &Value::Nil, "15");
+}

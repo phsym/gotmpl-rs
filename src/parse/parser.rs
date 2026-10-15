@@ -35,6 +35,27 @@ fn parse_number(s: &str) -> Option<Number> {
 /// blowing the thread stack.
 const MAX_PARSE_DEPTH: usize = 100;
 
+/// What terminated a [`Parser::parse_list`] call. Go's parser checks this at
+/// every call site: a stray `{{end}}`/`{{else}}` at the top level, a missing
+/// `{{end}}`, or an `{{else}}` where none is allowed are all errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListEnd {
+    Eof,
+    End,
+    Else,
+}
+
+impl ListEnd {
+    /// The terminator as Go prints it in error messages.
+    fn describe(self) -> &'static str {
+        match self {
+            ListEnd::Eof => "EOF",
+            ListEnd::End => "{{end}}",
+            ListEnd::Else => "{{else}}",
+        }
+    }
+}
+
 /// Recursive-descent parser for Go template source.
 ///
 /// Created from a source string via [`new`](Self::new), then invoked via
@@ -56,6 +77,8 @@ pub struct Parser<'a> {
     source: &'a str,
     depth: usize,
     parse_name: Option<&'a str>,
+    /// Terminator of the most recent `parse_list` and the index of its token.
+    list_end: (ListEnd, usize),
 }
 
 impl<'a> Parser<'a> {
@@ -91,6 +114,7 @@ impl<'a> Parser<'a> {
             source,
             depth: 0,
             parse_name,
+            list_end: (ListEnd::Eof, 0),
         })
     }
 
@@ -128,7 +152,10 @@ impl<'a> Parser<'a> {
     pub fn parse(mut self) -> Result<(ListNode, Vec<DefineNode>)> {
         let mut defines = Vec::new();
         let list = self.parse_list(&mut defines)?;
-        Ok((list, defines))
+        match self.list_end.0 {
+            ListEnd::Eof => Ok((list, defines)),
+            end => Err(self.list_end_error(format!("unexpected {}", end.describe()))),
+        }
     }
 
     // Token navigation
@@ -186,6 +213,24 @@ impl<'a> Parser<'a> {
     /// Build a `TemplateError::Parse` anchored at an arbitrary token's location.
     /// Used for errors surfaced after a token has already been consumed, where
     /// `self.peek()` no longer points at the offending token.
+    /// An error located at the token that terminated the last list.
+    fn list_end_error(&self, msg: impl Into<String>) -> TemplateError {
+        let tok = &self.tokens[self.list_end.1.min(self.tokens.len() - 1)];
+        self.token_error(tok, msg)
+    }
+
+    /// Requires the last list to have been closed by `{{end}}`; `context`
+    /// names the clause for Go's error message (e.g. "define clause").
+    fn expect_list_end(&self, context: &str) -> Result<()> {
+        match self.list_end.0 {
+            ListEnd::End => Ok(()),
+            ListEnd::Eof => Err(self.list_end_error("unexpected EOF")),
+            ListEnd::Else => {
+                Err(self.list_end_error(format!("unexpected {{{{else}}}} in {context}")))
+            }
+        }
+    }
+
     fn token_error(&self, tok: &Token<'a>, msg: impl Into<String>) -> TemplateError {
         let (line, col) = tok.line_col(self.source);
         TemplateError::Parse {
@@ -204,7 +249,10 @@ impl<'a> Parser<'a> {
 
         loop {
             match self.peek().kind {
-                TokenKind::Eof => break,
+                TokenKind::Eof => {
+                    self.list_end = (ListEnd::Eof, self.pos);
+                    break;
+                }
                 TokenKind::Text => {
                     let tok = self.next().clone();
                     nodes.push(Node::Text(TextNode {
@@ -217,11 +265,14 @@ impl<'a> Parser<'a> {
 
                     match self.peek().kind {
                         TokenKind::End => {
+                            let at = self.pos;
                             self.next();
                             self.expect_close_delim()?;
+                            self.list_end = (ListEnd::End, at);
                             break;
                         }
                         TokenKind::Else => {
+                            self.list_end = (ListEnd::Else, self.pos);
                             break;
                         }
                         TokenKind::If => {
@@ -291,6 +342,9 @@ impl<'a> Parser<'a> {
         self.expect_close_delim()?;
 
         let body = self.parse_list(defines)?;
+        if self.list_end.0 == ListEnd::Eof {
+            return Err(self.list_end_error("unexpected EOF"));
+        }
 
         let else_body = if self.pos < self.tokens.len() && self.peek().kind == TokenKind::Else {
             self.next();
@@ -312,6 +366,13 @@ impl<'a> Parser<'a> {
             } else {
                 self.expect_close_delim()?;
                 let else_list = self.parse_list(defines)?;
+                match self.list_end.0 {
+                    ListEnd::End => {}
+                    ListEnd::Eof => return Err(self.list_end_error("unexpected EOF")),
+                    ListEnd::Else => {
+                        return Err(self.list_end_error("expected end; found {{else}}"));
+                    }
+                }
                 Some(else_list)
             }
         } else {
@@ -349,6 +410,7 @@ impl<'a> Parser<'a> {
         self.expect_close_delim()?;
 
         let body = self.parse_list(defines)?;
+        self.expect_list_end("define clause")?;
 
         Ok(DefineNode {
             pos,
@@ -402,6 +464,7 @@ impl<'a> Parser<'a> {
 
         self.expect_close_delim()?;
         let body = self.parse_list(defines)?;
+        self.expect_list_end("block clause")?;
 
         let name = SmolStr::from(name_tok.val.as_ref());
         let define = DefineNode {
@@ -680,6 +743,50 @@ mod tests {
 
     fn parse(input: &str) -> (ListNode, Vec<DefineNode>) {
         Parser::new(input, "{{", "}}").unwrap().parse().unwrap()
+    }
+
+    fn parse_err(input: &str) -> String {
+        match Parser::new(input, "{{", "}}").and_then(Parser::parse) {
+            Ok(_) => panic!("expected a parse error for {input:?}"),
+            Err(TemplateError::Parse { message, .. } | TemplateError::Lex { message, .. }) => {
+                message
+            }
+            Err(other) => panic!("unexpected error kind: {other:?}"),
+        }
+    }
+
+    // Go's parser rejects terminators that do not close anything, and
+    // blocks that are never closed.
+    #[test]
+    fn test_unbalanced_terminators_are_errors() {
+        assert_eq!(parse_err("{{end}}"), "unexpected {{end}}");
+        assert_eq!(parse_err("a{{else}}b"), "unexpected {{else}}");
+        assert_eq!(parse_err("{{if .}}x"), "unexpected EOF");
+        assert_eq!(parse_err("{{range .}}x{{else}}y"), "unexpected EOF");
+        assert_eq!(
+            parse_err("{{if .}}a{{else}}b{{else}}c{{end}}"),
+            "expected end; found {{else}}"
+        );
+        assert_eq!(parse_err(r#"{{define "t"}}x"#), "unexpected EOF");
+        assert_eq!(
+            parse_err(r#"{{define "t"}}a{{else}}b{{end}}"#),
+            "unexpected {{else}} in define clause"
+        );
+        assert_eq!(
+            parse_err(r#"{{block "b" .}}a{{else}}b{{end}}"#),
+            "unexpected {{else}} in block clause"
+        );
+        assert_eq!(parse_err(r#"{{block "b" .}}x"#), "unexpected EOF");
+        // Balanced templates still parse.
+        parse("{{if .}}a{{else if .}}b{{else}}c{{end}}{{range .}}{{end}}");
+    }
+
+    #[test]
+    fn test_leading_zero_with_8_or_9_is_integer_overflow() {
+        assert_eq!(parse_err("{{08}}"), r#"integer overflow: "08""#);
+        assert_eq!(parse_err("{{-019}}"), r#"integer overflow: "-019""#);
+        // Floats and valid octal are fine.
+        parse("{{09.5}} {{08e1}} {{017}}");
     }
 
     #[test]

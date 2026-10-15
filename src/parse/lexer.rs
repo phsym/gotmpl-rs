@@ -745,7 +745,25 @@ impl<'a> Lexer<'a> {
                             look += 1;
                         } else if b == b'_' {
                             look += 1;
-                        } else if matches!(b, b'.' | b'e' | b'E' | b'8' | b'9') {
+                        } else if matches!(b, b'8' | b'9') {
+                            // Go parses a leading-zero integer as octal, so 8/9
+                            // make it invalid unless the literal is a float
+                            // ("09.5", "08e1"): Go reports "integer overflow".
+                            while look < bytes.len()
+                                && (bytes[look].is_ascii_digit() || bytes[look] == b'_')
+                            {
+                                look += 1;
+                            }
+                            if !matches!(bytes.get(look), Some(b'.' | b'e' | b'E')) {
+                                while self.pos < look {
+                                    self.next_char();
+                                }
+                                let text = self.current_str();
+                                return Err(self.error(format!("integer overflow: {text:?}")));
+                            }
+                            is_legacy_octal = false;
+                            break;
+                        } else if matches!(b, b'.' | b'e' | b'E') {
                             is_legacy_octal = false;
                             break;
                         } else {
